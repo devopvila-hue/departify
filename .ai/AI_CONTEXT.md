@@ -25,12 +25,15 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 `packages/platform-composition` is the official package wiring boundary. It connects Application Layer, Provisioning Engine, Organization Domain, Persistence Contracts, and Supabase Adapter for the first real provisioning flow. It must not redefine contracts or introduce APIs, auth, portal, agents, RAG, memory, plugins, or workflows.
 
+`packages/agent-runtime` is the proprietary runtime boundary for managing Departify digital employees. It owns registry operations, lifecycle states, permission primitives, internal message contracts, scheduling contracts, state validation, and runtime events. It must not execute AI models, call model providers, implement the LLM Router, implement the Executive Director, expose HTTP/Fastify APIs, use external queues, access infrastructure directly, or read environment variables.
+
 ## Important paths
 
 | Path                            | Purpose                                             |
 | ------------------------------- | --------------------------------------------------- |
 | apps/backend/                   | Independent Fastify backend runtime                 |
 | apps/portal/                    | Independent Vite portal runtime                     |
+| packages/agent-runtime/         | Provider-independent digital employee runtime       |
 | packages/application/           | Pure application orchestration layer                |
 | packages/config/                | Only authorized runtime configuration reader        |
 | packages/organization-domain/   | Canonical provider-independent Organization domain  |

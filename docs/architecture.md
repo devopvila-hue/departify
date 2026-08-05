@@ -25,6 +25,7 @@ The backend does not contain authentication, users, organizations, persistence, 
 - `packages/memory`: organization-scoped memory boundary.
 - `packages/plugins`: organization-scoped plugin boundary.
 - `packages/platform-composition`: official composition boundary that wires application, provisioning, domain, persistence contracts, and infrastructure adapters.
+- `packages/agent-runtime`: proprietary, provider-independent runtime for digital employee registry, lifecycle, permissions, internal messaging contracts, scheduling contracts, state, and runtime events.
 - `packages/application`: application orchestration boundary for commands, queries, DTOs, mappers, handlers, application services, and application ports.
 - `packages/organization-domain`: canonical, provider-independent Organization domain model.
 - `packages/persistence-contracts`: provider-independent persistence contracts for repositories, unit of work, transactions, specifications, pagination, filters, concurrency, and errors.
@@ -45,8 +46,9 @@ The backend does not contain authentication, users, organizations, persistence, 
 - Persistence contracts define the stable interface that future storage implementations must satisfy. They do not contain adapters, schemas, migrations, drivers, or provider-specific behavior.
 - The Supabase persistence adapter implements the persistence contracts without leaking Supabase row models to domain or application code. Its UnitOfWork provides a shared context; generic database-level atomicity across multiple Data API requests is not guaranteed without a future provider-specific transaction primitive.
 - Platform composition owns wiring between existing packages. Sprint 10 uses it for the first real provisioning flow and persists organization, workspace, and provisioning records through the Supabase adapter.
+- Agent Runtime owns the lifecycle of Departify digital employees. It manages agent registration, activation, deactivation, listing, lookup, deletion, state transitions, permissions, internal message contracts, scheduling contracts, and runtime events. It does not execute models, make AI decisions, call provider SDKs, expose transport APIs, or own the Executive Director.
 - Future persistence must adapt to `packages/organization-domain`; the domain must not depend on databases, provider SDKs, Docker, Railway, Netlify, Supabase, OpenClaw, or environment variables.
-- Agent Runtime is not part of the Golden Image.
+- Agent Runtime is not part of the Golden Image and is not infrastructure.
 - LLM routing is decoupled from applications.
 - Memory, vector data, plugins, and workflows are organization-scoped concerns.
 - OpenClaw is not part of the product.

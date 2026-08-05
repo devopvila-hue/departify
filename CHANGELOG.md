@@ -12,3 +12,4 @@
 - Persistence Contracts foundation with repository contracts, unit of work, transactions, specifications, pagination, filters, optimistic locking, provider-neutral errors, and unit tests.
 - Supabase Persistence Adapter with official Supabase client configuration, repository implementations, snapshot mappers, local migration, UnitOfWork adapter, unit tests, and local integration tests.
 - Platform Composition foundation with the first real organization provisioning flow persisted through Supabase local, plus repeatable end-to-end coverage.
+- Agent Runtime foundation with provider-independent registry, lifecycle state policy, permissions, internal messaging contracts, scheduling contracts, runtime events, validation, and unit tests.
