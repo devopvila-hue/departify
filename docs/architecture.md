@@ -16,7 +16,7 @@ The backend does not contain authentication, users, organizations, persistence, 
 ## Packages
 
 - `packages/auth`: authentication and authorization boundary.
-- `packages/config`: shared configuration boundary.
+- `packages/config`: centralized typed configuration boundary. Application code must not read `process.env` directly.
 - `packages/shared`: cross-cutting shared primitives boundary.
 - `packages/logging`: logging and observability boundary.
 - `packages/departments`: department capability boundary.
@@ -28,6 +28,13 @@ The backend does not contain authentication, users, organizations, persistence, 
 ## Platform Boundaries
 
 - Backend and portal are independent.
+- Docker is the standard runtime for backend execution.
+- Railway runs the backend Docker image and uses `/health` as the deployment healthcheck.
+- Netlify is the official portal environment.
+- Supabase is the official data platform, initialized by CLI configuration only in the Golden Image.
+- The Golden Image installs platform infrastructure only.
+- The Provisioning Engine will create organizations in a later sprint.
+- Agent Runtime is not part of the Golden Image.
 - LLM routing is decoupled from applications.
 - Memory, vector data, plugins, and workflows are organization-scoped concerns.
 - OpenClaw is not part of the product.

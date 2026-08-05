@@ -6,13 +6,25 @@
   "description": "Departify V2 monorepo bootstrap.",
   "scripts": {
     "check": "pnpm -r check",
+    "config:check": "pnpm --filter @departify/config check",
+    "docker:build": "docker build -f deploy/docker/backend.Dockerfile -t departify/backend:local .",
+    "docker:up": "docker compose up --build",
     "lint": "pnpm -r lint",
+    "netlify:dev": "pnpm exec netlify dev --filter @departify/portal",
+    "netlify:link": "pnpm exec netlify link --filter @departify/portal",
+    "railway:link": "pnpm exec railway link",
+    "railway:status": "pnpm exec railway status",
+    "supabase:start": "pnpm exec supabase start",
+    "supabase:status": "pnpm exec supabase status",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "format": "prettier --check ."
   },
   "devDependencies": {
+    "@railway/cli": "5.30.4",
+    "netlify-cli": "27.1.0",
     "prettier": "^3.3.3",
+    "supabase": "2.111.0",
     "typescript": "^5.6.3"
   }
 }

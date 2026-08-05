@@ -1,12 +1,11 @@
+import type { BackendConfig } from "@departify/config";
 import type { FastifyInstance } from "fastify";
-
-import type { AppConfig } from "./config.js";
 
 const shutdownSignals = ["SIGINT", "SIGTERM"] as const;
 
 export function registerGracefulShutdown(
   server: FastifyInstance,
-  config: AppConfig,
+  config: BackendConfig,
 ): void {
   for (const signal of shutdownSignals) {
     process.once(signal, () => {
@@ -17,7 +16,7 @@ export function registerGracefulShutdown(
 
 async function shutdown(
   server: FastifyInstance,
-  config: AppConfig,
+  config: BackendConfig,
   signal: (typeof shutdownSignals)[number],
 ): Promise<void> {
   server.log.info(

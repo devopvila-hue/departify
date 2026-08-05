@@ -1,8 +1,8 @@
-import { loadConfig } from "../src/server/config.js";
+import { backendConfigSchema } from "@departify/config";
 
-describe("loadConfig", () => {
+describe("backendConfigSchema", () => {
   it("loads defaults for local development", () => {
-    const config = loadConfig({});
+    const config = backendConfigSchema.parse({});
 
     expect(config).toMatchObject({
       environment: "development",
@@ -15,6 +15,6 @@ describe("loadConfig", () => {
   });
 
   it("rejects invalid ports", () => {
-    expect(() => loadConfig({ PORT: "invalid" })).toThrow(/Invalid PORT/);
+    expect(() => backendConfigSchema.parse({ PORT: "invalid" })).toThrow();
   });
 });

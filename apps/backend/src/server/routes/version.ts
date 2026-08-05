@@ -1,10 +1,9 @@
+import type { BackendConfig } from "@departify/config";
 import type { FastifyInstance } from "fastify";
-
-import type { AppConfig } from "../config.js";
 
 export async function registerVersionRoutes(
   server: FastifyInstance,
-  config: AppConfig,
+  config: BackendConfig,
 ): Promise<void> {
   server.get(
     "/version",

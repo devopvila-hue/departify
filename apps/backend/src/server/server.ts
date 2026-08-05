@@ -1,13 +1,15 @@
+import type { BackendConfig } from "@departify/config";
 import fastify, { type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 
-import type { AppConfig } from "./config.js";
 import { registerErrorHandling } from "./errors.js";
 import { registerOpenApi } from "./openapi.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerVersionRoutes } from "./routes/version.js";
 
-export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
+export async function buildServer(
+  config: BackendConfig,
+): Promise<FastifyInstance> {
   const server = fastify({
     logger: {
       level: config.logLevel,

@@ -1,0 +1,37 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: deploy/docker/backend.Dockerfile
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3210
+    ports:
+      - "3210:3210"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3210/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  portal:
+    image: node:22-alpine
+    working_dir: /workspace
+    command: sh -lc "corepack enable && pnpm install --frozen-lockfile && pnpm --filter @departify/portal dev --host 0.0.0.0"
+    env_file:
+      - .env
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/workspace
+    profiles:
+      - portal

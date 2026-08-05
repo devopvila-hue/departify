@@ -1,0 +1,14 @@
+.git
+.turbo
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.env
+.env.*
+!.env.example
+coverage
+*.log
+.DS_Store
+supabase/.temp
+supabase/.branches

@@ -1,12 +1,11 @@
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
+import type { BackendConfig } from "@departify/config";
 import type { FastifyInstance } from "fastify";
-
-import type { AppConfig } from "./config.js";
 
 export async function registerOpenApi(
   server: FastifyInstance,
-  config: AppConfig,
+  config: BackendConfig,
 ): Promise<void> {
   await server.register(swagger, {
     openapi: {

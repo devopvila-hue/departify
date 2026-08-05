@@ -1,8 +1,8 @@
-import { loadConfig } from "./server/config.js";
+import { loadBackendConfig } from "@departify/config";
 import { buildServer } from "./server/server.js";
 import { registerGracefulShutdown } from "./server/shutdown.js";
 
-const config = loadConfig();
+const config = loadBackendConfig();
 const server = await buildServer(config);
 
 registerGracefulShutdown(server, config);

@@ -1,13 +1,19 @@
+import type { BackendConfig } from "@departify/config";
 import { buildServer } from "../src/server/server.js";
-import type { AppConfig } from "../src/server/config.js";
 
-const testConfig: AppConfig = {
+const testConfig: BackendConfig = {
   environment: "test",
   host: "127.0.0.1",
   port: 0,
   logLevel: "silent",
   name: "@departify/backend",
   version: "0.0.0-test",
+  observability: {
+    serviceName: "departify-backend",
+    metricsEnabled: false,
+    tracingEnabled: false,
+  },
+  providers: {},
 };
 
 describe("backend server", () => {

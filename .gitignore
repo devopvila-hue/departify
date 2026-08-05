@@ -3,6 +3,8 @@ dist/
 build/
 .turbo/
 .next/
+.netlify/
+**/.netlify/
 .env
 .env.*
 !.env.example
