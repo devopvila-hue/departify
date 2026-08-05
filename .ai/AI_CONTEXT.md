@@ -27,12 +27,15 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 `packages/agent-runtime` is the proprietary runtime boundary for managing Departify digital employees. It owns registry operations, lifecycle states, permission primitives, internal message contracts, scheduling contracts, state validation, and runtime events. It must not execute AI models, call model providers, implement the LLM Router, implement the Executive Director, expose HTTP/Fastify APIs, use external queues, access infrastructure directly, or read environment variables.
 
+`packages/agent-domain` is the canonical domain model for a Departify digital employee. It owns the Agent aggregate, value objects, lifecycle policy, domain events, and pure invariants. It must not depend on Agent Runtime, Provisioning Engine, persistence, Supabase, APIs, transport, provider SDKs, integrations, model execution, or environment variables.
+
 ## Important paths
 
 | Path                            | Purpose                                             |
 | ------------------------------- | --------------------------------------------------- |
 | apps/backend/                   | Independent Fastify backend runtime                 |
 | apps/portal/                    | Independent Vite portal runtime                     |
+| packages/agent-domain/          | Canonical provider-independent Agent domain         |
 | packages/agent-runtime/         | Provider-independent digital employee runtime       |
 | packages/application/           | Pure application orchestration layer                |
 | packages/config/                | Only authorized runtime configuration reader        |
