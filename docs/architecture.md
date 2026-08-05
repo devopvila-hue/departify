@@ -24,6 +24,7 @@ The backend does not contain authentication, users, organizations, persistence, 
 - `packages/rag`: retrieval-augmented generation boundary.
 - `packages/memory`: organization-scoped memory boundary.
 - `packages/plugins`: organization-scoped plugin boundary.
+- `packages/organization-domain`: canonical, provider-independent Organization domain model.
 - `packages/provisioning-engine`: only authorized boundary for future organization creation.
 
 ## Platform Boundaries
@@ -35,6 +36,8 @@ The backend does not contain authentication, users, organizations, persistence, 
 - Supabase is the official data platform, initialized by CLI configuration only in the Golden Image.
 - The Golden Image installs platform infrastructure only.
 - The Provisioning Engine owns future organization provisioning contracts, pipeline phases, and provisioning state.
+- The Organization domain owns the canonical aggregate, value objects, lifecycle states, domain events, and pure invariants for representing an organization.
+- Future persistence must adapt to `packages/organization-domain`; the domain must not depend on databases, provider SDKs, Docker, Railway, Netlify, Supabase, OpenClaw, or environment variables.
 - Agent Runtime is not part of the Golden Image.
 - LLM routing is decoupled from applications.
 - Memory, vector data, plugins, and workflows are organization-scoped concerns.

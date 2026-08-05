@@ -8,6 +8,8 @@ The repository is a portable monorepo with independent portal and backend applic
 
 Sprint 5 adds the Provisioning Engine foundation as the sole architectural boundary for future organization creation. It defines contracts, pipeline phases, validation primitives, ports, and state transitions without creating organizations or executing product behavior.
 
+Sprint 6 adds the canonical Organization domain model as the source of truth for representing an organization. It defines the aggregate root, value objects, domain events, lifecycle policy, and pure invariants without persistence, provider dependencies, agents, AI, or product features.
+
 ## Goals
 
 - Keep the product architecture new and independent from legacy systems.
@@ -16,6 +18,7 @@ Sprint 5 adds the Provisioning Engine foundation as the sole architectural bound
 - Route all runtime configuration access through `packages/config`.
 - Keep the Golden Image limited to platform execution primitives.
 - Ensure all future organization creation goes through `packages/provisioning-engine`.
+- Ensure all future persistence and application behavior adapts to `packages/organization-domain`, not the opposite.
 
 ## Non-goals
 

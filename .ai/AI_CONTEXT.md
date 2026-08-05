@@ -15,6 +15,8 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 `packages/provisioning-engine` is the only authorized boundary for future organization creation. Its current state is contract and state-model foundation only; it must not create agents, execute AI, provision RAG, register plugins, or call external services.
 
+`packages/organization-domain` is the canonical domain model for an organization. It is pure TypeScript domain code and must not import provider SDKs, read environment variables, or know about persistence, Docker, Railway, Netlify, Supabase, OpenClaw, agents, AI, RAG, plugins, or workflows.
+
 ## Important paths
 
 | Path                          | Purpose                                             |
@@ -22,6 +24,7 @@ The Golden Image installs the platform. It does not create organizations, agents
 | apps/backend/                 | Independent Fastify backend runtime                 |
 | apps/portal/                  | Independent Vite portal runtime                     |
 | packages/config/              | Only authorized runtime configuration reader        |
+| packages/organization-domain/ | Canonical provider-independent Organization domain  |
 | packages/provisioning-engine/ | Organization provisioning contracts and state model |
 | deploy/docker/                | Docker image definitions                            |
 | supabase/                     | Supabase CLI local configuration                    |
