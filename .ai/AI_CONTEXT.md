@@ -13,12 +13,11 @@ TODO: describe purpose.
 
 ## Important paths
 
-| Path | Purpose |
-| --- | --- |
-| docs/ | Repository documentation |
-| docs/adr/ | Architecture decisions |
+| Path      | Purpose                  |
+| --------- | ------------------------ |
+| docs/     | Repository documentation |
+| docs/adr/ | Architecture decisions   |
 
 ## Commands
 
 TODO: document setup, test, and build commands.
-

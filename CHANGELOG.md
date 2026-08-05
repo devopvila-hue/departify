@@ -5,4 +5,3 @@
 ### Added
 
 - ROSA adoption.
-

@@ -1,6 +1,5 @@
 # Glossary
 
 | Term | Definition |
-| --- | --- |
-| TODO | TODO |
-
+| ---- | ---------- |
+| TODO | TODO       |

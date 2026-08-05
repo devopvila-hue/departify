@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+
+  --dfy-color-background: #090a0b;
+  --dfy-color-surface: #111417;
+  --dfy-color-surface-raised: #171b20;
+  --dfy-color-text: #f4f7fb;
+  --dfy-color-muted: #9aa5b1;
+  --dfy-color-border: rgba(244, 247, 251, 0.12);
+  --dfy-color-accent: #d8ff62;
+  --dfy-color-accent-contrast: #101307;
+
+  --dfy-font-sans:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --dfy-radius-sm: 6px;
+  --dfy-radius-md: 8px;
+  --dfy-radius-lg: 12px;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--dfy-color-background);
+  color: var(--dfy-color-text);
+  font-family: var(--dfy-font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.portal-foundation {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: 24px;
+}
+
+.portal-foundation__panel {
+  width: min(100%, 640px);
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-lg);
+  background: var(--dfy-color-surface);
+  padding: clamp(24px, 5vw, 48px);
+}
+
+.portal-foundation__label {
+  margin: 0 0 12px;
+  color: var(--dfy-color-accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.portal-foundation h1 {
+  margin: 0;
+  font-size: clamp(2rem, 6vw, 4rem);
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.portal-foundation p:last-child {
+  margin: 20px 0 0;
+  max-width: 54ch;
+  color: var(--dfy-color-muted);
+  font-size: 1rem;
+  line-height: 1.7;
+}

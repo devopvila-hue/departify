@@ -15,4 +15,3 @@
 - Do not expose secrets or credentials.
 - Do not perform destructive actions without explicit authorization.
 - Do not invent project facts.
-

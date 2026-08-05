@@ -7,4 +7,3 @@
 3. Run validation before handoff.
 4. Commit using Conventional Commits.
 5. Push before the sprint is considered complete.
-

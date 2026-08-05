@@ -1,0 +1,12 @@
+{
+  "name": "@departify/config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "lint": "node -e \"console.log('config: no lint target configured yet')\"",
+    "typecheck": "node -e \"console.log('config: no source to typecheck yet')\"",
+    "test": "node -e \"console.log('config: no tests yet')\""
+  }
+}

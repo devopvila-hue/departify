@@ -20,4 +20,3 @@ Use ROSA documents and ADRs as the operating layer for architecture and reposito
 
 - Repository operation starts with explicit context.
 - Future material decisions should be recorded as ADRs.
-
