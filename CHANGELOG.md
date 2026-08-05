@@ -16,3 +16,4 @@
 - Agent Domain foundation with canonical aggregate root, value objects, lifecycle policy, domain events, pure invariants, and unit tests for digital employees.
 - Executive Director foundation with intents, routing, planning, decision model, coordination contracts, internal events, validation, and unit tests.
 - LLM Router foundation with provider-neutral contracts, capabilities, abstract model catalog, routing policies, requests, responses, validation, and unit tests.
+- Memory Engine foundation with memory records, context assembly, sessions, retention policies, retrieval contracts, lifecycle rules, internal events, validation, and unit tests.

@@ -23,6 +23,7 @@ The backend does not contain authentication, users, organizations, persistence, 
 - `packages/llm-router`: only authorized AI model access boundary, with provider-neutral contracts, capability modeling, abstract model catalog, routing policies, requests, responses, and validation.
 - `packages/rag`: retrieval-augmented generation boundary.
 - `packages/memory`: organization-scoped memory boundary.
+- `packages/memory-engine`: proprietary, provider-independent memory model boundary for memory records, context assembly, sessions, retention rules, retrieval contracts, lifecycle, policies, events, and validation.
 - `packages/plugins`: organization-scoped plugin boundary.
 - `packages/platform-composition`: official composition boundary that wires application, provisioning, domain, persistence contracts, and infrastructure adapters.
 - `packages/agent-domain`: canonical, provider-independent Agent domain model for Departify digital employees.
@@ -54,5 +55,6 @@ The backend does not contain authentication, users, organizations, persistence, 
 - Future persistence must adapt to `packages/organization-domain`; the domain must not depend on databases, provider SDKs, Docker, Railway, Netlify, Supabase, OpenClaw, or environment variables.
 - Agent Runtime is not part of the Golden Image and is not infrastructure.
 - LLM Router is the only authorized package for future AI model provider access. Other packages must not import provider SDKs or perform model calls directly. Sprint 14 defines contracts and routing policy models only; it does not implement providers, product prompts, external calls, API keys, or business logic.
+- Memory Engine owns the abstract memory model for Departify. It defines working, episodic, semantic, organization, and agent memory behavior, context assembly, session modeling, retention policies, retrieval contracts, lifecycle rules, and internal events. It does not create vectors, call models, access databases, expose APIs, implement RAG, or depend on provider SDKs.
 - Memory, vector data, plugins, and workflows are organization-scoped concerns.
 - OpenClaw is not part of the product.
