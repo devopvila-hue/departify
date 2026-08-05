@@ -21,6 +21,8 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 `packages/persistence-contracts` is the official provider-independent persistence contract layer. It defines repositories, unit of work, transaction contracts, specifications, pagination, filters, optimistic locking, and persistence errors. It must not contain adapters, storage implementations, schemas, migrations, provider SDKs, or environment access.
 
+`packages/persistence-supabase` is the first concrete persistence adapter. It implements the persistence contracts with `@supabase/supabase-js`, maps domain/provisioning snapshots to Supabase record tables, and obtains config through `packages/config` types only. It must not modify domain, application, provisioning, or persistence contracts.
+
 ## Important paths
 
 | Path                            | Purpose                                             |
@@ -31,6 +33,7 @@ The Golden Image installs the platform. It does not create organizations, agents
 | packages/config/                | Only authorized runtime configuration reader        |
 | packages/organization-domain/   | Canonical provider-independent Organization domain  |
 | packages/persistence-contracts/ | Provider-independent persistence contracts          |
+| packages/persistence-supabase/  | Supabase implementation of persistence contracts    |
 | packages/provisioning-engine/   | Organization provisioning contracts and state model |
 | deploy/docker/                  | Docker image definitions                            |
 | supabase/                       | Supabase CLI local configuration                    |
@@ -47,6 +50,7 @@ pnpm install
 pnpm check
 pnpm format
 pnpm exec supabase start
+pnpm --filter @departify/persistence-supabase test:integration
 pnpm exec netlify dev --filter @departify/portal
 pnpm exec railway link
 docker compose up --build
