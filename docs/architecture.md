@@ -21,6 +21,7 @@ The backend does not contain authentication, users, organizations, persistence, 
 - `packages/logging`: logging and observability boundary.
 - `packages/departments`: department capability boundary.
 - `packages/llm-router`: only authorized AI model access boundary, with provider-neutral contracts, capability modeling, abstract model catalog, routing policies, requests, responses, and validation.
+- `packages/llm-provider-openai`: first concrete LLM Router provider adapter, implemented with the official OpenAI SDK and configured only through `packages/config`.
 - `packages/rag`: retrieval-augmented generation boundary.
 - `packages/knowledge-engine`: proprietary, provider-independent knowledge model boundary for documents, chunks, sources, collections, scopes, abstract indexing, retrieval contracts, ranking policies, lifecycle, events, and validation.
 - `packages/memory`: organization-scoped memory boundary.
@@ -56,6 +57,7 @@ The backend does not contain authentication, users, organizations, persistence, 
 - Future persistence must adapt to `packages/organization-domain`; the domain must not depend on databases, provider SDKs, Docker, Railway, Netlify, Supabase, OpenClaw, or environment variables.
 - Agent Runtime is not part of the Golden Image and is not infrastructure.
 - LLM Router is the only authorized package for future AI model provider access. Other packages must not import provider SDKs or perform model calls directly. Sprint 14 defines contracts and routing policy models only; it does not implement providers, product prompts, external calls, API keys, or business logic.
+- OpenAI Provider is the first concrete LLM Router adapter. It implements existing provider-neutral router contracts for chat, completion, structured output, tool calling, and streaming without exposing OpenAI SDK types outside `packages/llm-provider-openai`. It consumes API key, default model, timeout, and retry configuration exclusively through `packages/config`.
 - Memory Engine owns the abstract memory model for Departify. It defines working, episodic, semantic, organization, and agent memory behavior, context assembly, session modeling, retention policies, retrieval contracts, lifecycle rules, and internal events. It does not create vectors, call models, access databases, expose APIs, implement RAG, or depend on provider SDKs.
 - Knowledge Engine owns the abstract knowledge model for Departify. It defines documents, chunks, sources, collections, scopes, indexing plans, retrieval contracts, ranking policies, lifecycle rules, and internal events. RAG is a future capability of the Knowledge Engine, not the engine itself. Sprint 16 does not implement embeddings, vector storage, concrete search, APIs, provider SDKs, or external calls.
 - Memory, vector data, plugins, and workflows are organization-scoped concerns.

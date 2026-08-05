@@ -33,6 +33,8 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 `packages/llm-router` is the only authorized boundary for future AI model access. It defines provider-neutral contracts for chat, completion, embeddings, tool calling, streaming, and structured output, plus capability modeling, abstract model descriptors, routing policies, request/response validation, and model selection decisions. No other package may import provider SDKs or call models directly. Its current state must not include provider implementations, product prompts, API keys, external calls, or environment access.
 
+`packages/llm-provider-openai` is the first concrete LLM Router provider adapter. It is the only package authorized to import the official OpenAI SDK. It implements existing `packages/llm-router` contracts, maps router requests/responses to OpenAI SDK calls internally, and obtains OpenAI configuration exclusively through `packages/config`. It must not expose SDK types, modify router contracts, connect to Executive Director, Agent Runtime, Memory Engine, Knowledge Engine, plugins, RAG, n8n, HTTP APIs, or contain product prompts/business logic.
+
 `packages/memory-engine` is the provider-independent memory model boundary. It defines memory records, working/episodic/semantic/organization/agent memory kinds, context assembly, sessions, retention policies, retrieval contracts, lifecycle rules, internal events, and validation. It must not generate vectors, call models, access concrete storage, implement RAG, expose transport APIs, import provider SDKs, or read environment variables.
 
 `packages/knowledge-engine` is the provider-independent knowledge model boundary. It defines knowledge documents, chunks, sources, collections, scopes, abstract indexing plans, retrieval contracts, ranking policies, lifecycle rules, internal events, and validation. RAG is a future capability of this package, not the engine itself. It must not generate embeddings, use vector storage, implement concrete search, expose transport APIs, import provider SDKs, or read environment variables.
@@ -49,6 +51,7 @@ The Golden Image installs the platform. It does not create organizations, agents
 | packages/config/                | Only authorized runtime configuration reader        |
 | packages/executive-director/    | Provider-independent system orchestration boundary  |
 | packages/knowledge-engine/      | Provider-independent knowledge model boundary       |
+| packages/llm-provider-openai/   | OpenAI adapter for LLM Router contracts             |
 | packages/llm-router/            | Only authorized AI model routing boundary           |
 | packages/memory-engine/         | Provider-independent memory model boundary          |
 | packages/organization-domain/   | Canonical provider-independent Organization domain  |
@@ -73,6 +76,7 @@ pnpm format
 pnpm exec supabase start
 pnpm --filter @departify/persistence-supabase test:integration
 pnpm --filter @departify/platform-composition test:e2e
+pnpm --filter @departify/llm-provider-openai test:integration
 pnpm exec netlify dev --filter @departify/portal
 pnpm exec railway link
 docker compose up --build

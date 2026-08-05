@@ -21,6 +21,13 @@ export interface BackendConfig {
   };
 }
 
+export interface OpenAIProviderConfig {
+  apiKey: string;
+  defaultModel: string;
+  timeoutMs: number;
+  maxRetries: number;
+}
+
 export const backendConfigSchema = envSchema.transform((env): BackendConfig => {
   const otlpEndpoint = normalizeOptional(env.OTEL_EXPORTER_OTLP_ENDPOINT);
   const supabaseUrl = normalizeOptional(env.SUPABASE_URL);
@@ -51,6 +58,25 @@ export const backendConfigSchema = envSchema.transform((env): BackendConfig => {
 
 export function loadBackendConfig(): BackendConfig {
   return backendConfigSchema.parse(process.env);
+}
+
+export const openAIProviderConfigSchema = envSchema.transform(
+  (env): OpenAIProviderConfig => {
+    const apiKey = normalizeOptional(env.OPENAI_API_KEY);
+    if (!apiKey) {
+      throw new Error("OPENAI_API_KEY is required for the OpenAI provider.");
+    }
+    return {
+      apiKey,
+      defaultModel: env.OPENAI_MODEL,
+      timeoutMs: env.OPENAI_TIMEOUT_MS,
+      maxRetries: env.OPENAI_MAX_RETRIES,
+    };
+  },
+);
+
+export function loadOpenAIProviderConfig(): OpenAIProviderConfig {
+  return openAIProviderConfigSchema.parse(process.env);
 }
 
 function normalizeOptional(value: string | undefined): string | undefined {
