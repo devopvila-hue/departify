@@ -16,6 +16,8 @@ Sprint 8 adds the Persistence Contracts foundation. It defines repository interf
 
 Sprint 12 adds the canonical Agent domain model as the source of truth for representing a Departify digital employee. It defines the aggregate root, value objects, domain events, lifecycle policy, and pure invariants without runtime coupling, persistence, provider dependencies, AI execution, or integrations.
 
+Sprint 13 adds the Executive Director foundation as the system-level orchestration boundary. It defines intents, routing, planning, decisions, events, validation, and coordination contracts without executing infrastructure, persistence, model providers, agents, or product behavior.
+
 ## Goals
 
 - Keep the product architecture new and independent from legacy systems.
@@ -28,6 +30,7 @@ Sprint 12 adds the canonical Agent domain model as the source of truth for repre
 - Keep use-case orchestration inside `packages/application` and keep infrastructure adapters outside this package.
 - Keep all future storage implementations behind `packages/persistence-contracts`.
 - Ensure all future agent behavior adapts to `packages/agent-domain`, not the opposite.
+- Keep company-level orchestration decisions inside `packages/executive-director` while execution remains in downstream boundaries.
 
 ## Non-goals
 

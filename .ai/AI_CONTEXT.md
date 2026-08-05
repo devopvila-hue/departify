@@ -29,6 +29,8 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 `packages/agent-domain` is the canonical domain model for a Departify digital employee. It owns the Agent aggregate, value objects, lifecycle policy, domain events, and pure invariants. It must not depend on Agent Runtime, Provisioning Engine, persistence, Supabase, APIs, transport, provider SDKs, integrations, model execution, or environment variables.
 
+`packages/executive-director` is the provider-independent orchestration boundary for the digital company. It evaluates intents, routes them conceptually, creates decisions, emits internal events, and models coordination contracts toward Application Layer, Provisioning Engine, and Agent Runtime. It must not execute AI, implement the LLM Router, persist data, call providers, expose transport APIs, run agents, or access environment variables.
+
 ## Important paths
 
 | Path                            | Purpose                                             |
@@ -39,6 +41,7 @@ The Golden Image installs the platform. It does not create organizations, agents
 | packages/agent-runtime/         | Provider-independent digital employee runtime       |
 | packages/application/           | Pure application orchestration layer                |
 | packages/config/                | Only authorized runtime configuration reader        |
+| packages/executive-director/    | Provider-independent system orchestration boundary  |
 | packages/organization-domain/   | Canonical provider-independent Organization domain  |
 | packages/platform-composition/  | Official package composition and first provisioning |
 | packages/persistence-contracts/ | Provider-independent persistence contracts          |

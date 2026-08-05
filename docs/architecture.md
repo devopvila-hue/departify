@@ -27,6 +27,7 @@ The backend does not contain authentication, users, organizations, persistence, 
 - `packages/platform-composition`: official composition boundary that wires application, provisioning, domain, persistence contracts, and infrastructure adapters.
 - `packages/agent-domain`: canonical, provider-independent Agent domain model for Departify digital employees.
 - `packages/agent-runtime`: proprietary, provider-independent runtime for digital employee registry, lifecycle, permissions, internal messaging contracts, scheduling contracts, state, and runtime events.
+- `packages/executive-director`: provider-independent orchestration boundary that evaluates intents and produces coordination decisions for the digital company.
 - `packages/application`: application orchestration boundary for commands, queries, DTOs, mappers, handlers, application services, and application ports.
 - `packages/organization-domain`: canonical, provider-independent Organization domain model.
 - `packages/persistence-contracts`: provider-independent persistence contracts for repositories, unit of work, transactions, specifications, pagination, filters, concurrency, and errors.
@@ -49,6 +50,7 @@ The backend does not contain authentication, users, organizations, persistence, 
 - Platform composition owns wiring between existing packages. Sprint 10 uses it for the first real provisioning flow and persists organization, workspace, and provisioning records through the Supabase adapter.
 - Agent Domain owns the canonical aggregate, value objects, lifecycle states, domain events, and pure invariants for representing a digital employee. It does not depend on Agent Runtime, provisioning, persistence, transport, provider SDKs, model execution, or infrastructure.
 - Agent Runtime owns the lifecycle of Departify digital employees. It manages agent registration, activation, deactivation, listing, lookup, deletion, state transitions, permissions, internal message contracts, scheduling contracts, and runtime events. It does not execute models, make AI decisions, call provider SDKs, expose transport APIs, or own the Executive Director.
+- Executive Director owns system-level orchestration intent evaluation and decision creation. It coordinates conceptually through contracts toward Application Layer, Provisioning Engine, and Agent Runtime, but does not execute infrastructure, persist data, call providers, run models, or replace Agent Runtime.
 - Future persistence must adapt to `packages/organization-domain`; the domain must not depend on databases, provider SDKs, Docker, Railway, Netlify, Supabase, OpenClaw, or environment variables.
 - Agent Runtime is not part of the Golden Image and is not infrastructure.
 - LLM routing is decoupled from applications.
