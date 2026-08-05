@@ -35,6 +35,8 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 `packages/memory-engine` is the provider-independent memory model boundary. It defines memory records, working/episodic/semantic/organization/agent memory kinds, context assembly, sessions, retention policies, retrieval contracts, lifecycle rules, internal events, and validation. It must not generate vectors, call models, access concrete storage, implement RAG, expose transport APIs, import provider SDKs, or read environment variables.
 
+`packages/knowledge-engine` is the provider-independent knowledge model boundary. It defines knowledge documents, chunks, sources, collections, scopes, abstract indexing plans, retrieval contracts, ranking policies, lifecycle rules, internal events, and validation. RAG is a future capability of this package, not the engine itself. It must not generate embeddings, use vector storage, implement concrete search, expose transport APIs, import provider SDKs, or read environment variables.
+
 ## Important paths
 
 | Path                            | Purpose                                             |
@@ -46,6 +48,7 @@ The Golden Image installs the platform. It does not create organizations, agents
 | packages/application/           | Pure application orchestration layer                |
 | packages/config/                | Only authorized runtime configuration reader        |
 | packages/executive-director/    | Provider-independent system orchestration boundary  |
+| packages/knowledge-engine/      | Provider-independent knowledge model boundary       |
 | packages/llm-router/            | Only authorized AI model routing boundary           |
 | packages/memory-engine/         | Provider-independent memory model boundary          |
 | packages/organization-domain/   | Canonical provider-independent Organization domain  |
