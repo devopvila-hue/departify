@@ -7,6 +7,12 @@ Departify V2 follows a modular monorepo layout with independent application boun
 - `apps/portal`: independent portal application.
 - `apps/backend`: independent backend application.
 
+### Backend Foundation
+
+`apps/backend` owns the Fastify runtime boundary. Sprint 3 includes only technical infrastructure: configuration loading, logging, centralized error responses, request id propagation, graceful shutdown, health/version endpoints, OpenAPI registration, and tests.
+
+The backend does not contain authentication, users, organizations, persistence, Supabase, business APIs, LLM routing, memory, RAG, plugins, n8n, queues, SSE, or WebSockets.
+
 ## Packages
 
 - `packages/auth`: authentication and authorization boundary.
