@@ -1,6 +1,8 @@
 import {
   backendConfigSchema,
+  googleVertexProviderConfigSchema,
   llmRouterConfigSchema,
+  miniMaxProviderConfigSchema,
   openAIProviderConfigSchema,
   validateEnv,
 } from "../src/index.js";
@@ -30,6 +32,12 @@ describe("validateEnv", () => {
       validateEnv({ LLM_ROUTING_STRATEGY: "unknown_strategy" as never }),
     ).toThrow();
   });
+
+  it("rejects unknown default providers", () => {
+    expect(() =>
+      validateEnv({ LLM_DEFAULT_PROVIDER: "unknown" as never }),
+    ).toThrow();
+  });
 });
 
 describe("llmRouterConfigSchema", () => {
@@ -50,12 +58,20 @@ describe("llmRouterConfigSchema", () => {
     expect(config.defaultStrategy).toBe("balanced");
   });
 
-  it("accepts a custom default provider id", () => {
+  it("accepts google_vertex as default provider", () => {
     const config = llmRouterConfigSchema.parse({
-      LLM_DEFAULT_PROVIDER: "anthropic",
+      LLM_DEFAULT_PROVIDER: "google_vertex",
     });
 
-    expect(config.defaultProvider).toBe("anthropic");
+    expect(config.defaultProvider).toBe("google_vertex");
+  });
+
+  it("accepts minimax as default provider", () => {
+    const config = llmRouterConfigSchema.parse({
+      LLM_DEFAULT_PROVIDER: "minimax",
+    });
+
+    expect(config.defaultProvider).toBe("minimax");
   });
 });
 
@@ -82,6 +98,82 @@ describe("openAIProviderConfigSchema", () => {
     expect(() => openAIProviderConfigSchema.parse({})).toThrow(
       "OPENAI_API_KEY is required",
     );
+  });
+});
+
+describe("googleVertexProviderConfigSchema", () => {
+  it("creates Google Vertex provider config from typed environment variables", () => {
+    const config = googleVertexProviderConfigSchema.parse({
+      GOOGLE_VERTEX_PROJECT_ID: "my-gcp-project",
+      GOOGLE_VERTEX_LOCATION: "us-central1",
+      GOOGLE_VERTEX_MODEL: "gemini-1.5-pro",
+      GOOGLE_APPLICATION_CREDENTIALS: "/tmp/credentials.json",
+    });
+
+    expect(config).toEqual({
+      projectId: "my-gcp-project",
+      location: "us-central1",
+      defaultModel: "gemini-1.5-pro",
+      applicationCredentials: "/tmp/credentials.json",
+    });
+  });
+
+  it("omits applicationCredentials when not supplied", () => {
+    const config = googleVertexProviderConfigSchema.parse({
+      GOOGLE_VERTEX_PROJECT_ID: "my-gcp-project",
+      GOOGLE_VERTEX_LOCATION: "europe-west4",
+      GOOGLE_VERTEX_MODEL: "gemini-1.5-flash",
+    });
+
+    expect(config.applicationCredentials).toBeUndefined();
+  });
+
+  it("requires project id, location and model", () => {
+    expect(() => googleVertexProviderConfigSchema.parse({})).toThrow(
+      "GOOGLE_VERTEX_PROJECT_ID is required",
+    );
+    expect(() =>
+      googleVertexProviderConfigSchema.parse({
+        GOOGLE_VERTEX_PROJECT_ID: "p",
+      }),
+    ).toThrow("GOOGLE_VERTEX_LOCATION is required");
+    expect(() =>
+      googleVertexProviderConfigSchema.parse({
+        GOOGLE_VERTEX_PROJECT_ID: "p",
+        GOOGLE_VERTEX_LOCATION: "loc",
+      }),
+    ).toThrow("GOOGLE_VERTEX_MODEL is required");
+  });
+});
+
+describe("miniMaxProviderConfigSchema", () => {
+  it("creates MiniMax provider config from typed environment variables", () => {
+    const config = miniMaxProviderConfigSchema.parse({
+      MINIMAX_API_KEY: "minimax-key",
+      MINIMAX_BASE_URL: "https://api.minimax.example.com/v1",
+      MINIMAX_MODEL: "minimax-1",
+    });
+
+    expect(config).toEqual({
+      apiKey: "minimax-key",
+      baseUrl: "https://api.minimax.example.com/v1",
+      defaultModel: "minimax-1",
+    });
+  });
+
+  it("requires api key, base url and model", () => {
+    expect(() => miniMaxProviderConfigSchema.parse({})).toThrow(
+      "MINIMAX_API_KEY is required",
+    );
+    expect(() =>
+      miniMaxProviderConfigSchema.parse({ MINIMAX_API_KEY: "k" }),
+    ).toThrow("MINIMAX_BASE_URL is required");
+    expect(() =>
+      miniMaxProviderConfigSchema.parse({
+        MINIMAX_API_KEY: "k",
+        MINIMAX_BASE_URL: "https://x",
+      }),
+    ).toThrow("MINIMAX_MODEL is required");
   });
 });
 

@@ -35,13 +35,24 @@ export const envSchema = z.object({
   OPENAI_MODEL: z.string().min(1).default("gpt-4o-mini"),
   OPENAI_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   OPENAI_MAX_RETRIES: z.coerce.number().int().min(0).default(2),
-  LLM_DEFAULT_PROVIDER: z.string().min(2).default("openai"),
+
+  GOOGLE_VERTEX_PROJECT_ID: z.string().optional().or(z.literal("")),
+  GOOGLE_VERTEX_LOCATION: z.string().optional().or(z.literal("")),
+  GOOGLE_VERTEX_MODEL: z.string().optional().or(z.literal("")),
+  GOOGLE_APPLICATION_CREDENTIALS: z.string().optional().or(z.literal("")),
+
+  MINIMAX_API_KEY: optionalSecret,
+  MINIMAX_BASE_URL: optionalUrl,
+  MINIMAX_MODEL: z.string().optional().or(z.literal("")),
+
+  LLM_DEFAULT_PROVIDER: z
+    .enum(["openai", "google_vertex", "minimax"])
+    .default("openai"),
   LLM_ROUTING_STRATEGY: z
     .enum(["capability_first", "balanced"])
     .default("capability_first"),
   ANTHROPIC_API_KEY: optionalSecret,
   GEMINI_API_KEY: optionalSecret,
-  MINIMAX_API_KEY: optionalSecret,
   OLLAMA_HOST: optionalUrl,
 
   JWT_SECRET: optionalSecret,

@@ -28,10 +28,25 @@ export interface OpenAIProviderConfig {
   maxRetries: number;
 }
 
+export interface GoogleVertexProviderConfig {
+  projectId: string;
+  location: string;
+  defaultModel: string;
+  applicationCredentials?: string;
+}
+
+export interface MiniMaxProviderConfig {
+  apiKey: string;
+  baseUrl: string;
+  defaultModel: string;
+}
+
+export type LlmDefaultProvider = "openai" | "google_vertex" | "minimax";
+
 export type LlmRoutingStrategy = "capability_first" | "balanced";
 
 export interface LlmRouterConfig {
-  defaultProvider: string;
+  defaultProvider: LlmDefaultProvider;
   defaultStrategy: LlmRoutingStrategy;
 }
 
@@ -84,6 +99,64 @@ export const openAIProviderConfigSchema = envSchema.transform(
 
 export function loadOpenAIProviderConfig(): OpenAIProviderConfig {
   return openAIProviderConfigSchema.parse(process.env);
+}
+
+export const googleVertexProviderConfigSchema = envSchema.transform(
+  (env): GoogleVertexProviderConfig => {
+    const projectId = normalizeOptional(env.GOOGLE_VERTEX_PROJECT_ID);
+    const location = normalizeOptional(env.GOOGLE_VERTEX_LOCATION);
+    const defaultModel = normalizeOptional(env.GOOGLE_VERTEX_MODEL);
+    const applicationCredentials = normalizeOptional(
+      env.GOOGLE_APPLICATION_CREDENTIALS,
+    );
+    if (!projectId) {
+      throw new Error(
+        "GOOGLE_VERTEX_PROJECT_ID is required for the Google Vertex provider.",
+      );
+    }
+    if (!location) {
+      throw new Error(
+        "GOOGLE_VERTEX_LOCATION is required for the Google Vertex provider.",
+      );
+    }
+    if (!defaultModel) {
+      throw new Error(
+        "GOOGLE_VERTEX_MODEL is required for the Google Vertex provider.",
+      );
+    }
+    return {
+      projectId,
+      location,
+      defaultModel,
+      ...(applicationCredentials ? { applicationCredentials } : {}),
+    };
+  },
+);
+
+export function loadGoogleVertexProviderConfig(): GoogleVertexProviderConfig {
+  return googleVertexProviderConfigSchema.parse(process.env);
+}
+
+export const miniMaxProviderConfigSchema = envSchema.transform(
+  (env): MiniMaxProviderConfig => {
+    const apiKey = normalizeOptional(env.MINIMAX_API_KEY);
+    const baseUrl = normalizeOptional(env.MINIMAX_BASE_URL);
+    const defaultModel = normalizeOptional(env.MINIMAX_MODEL);
+    if (!apiKey) {
+      throw new Error("MINIMAX_API_KEY is required for the MiniMax provider.");
+    }
+    if (!baseUrl) {
+      throw new Error("MINIMAX_BASE_URL is required for the MiniMax provider.");
+    }
+    if (!defaultModel) {
+      throw new Error("MINIMAX_MODEL is required for the MiniMax provider.");
+    }
+    return { apiKey, baseUrl, defaultModel };
+  },
+);
+
+export function loadMiniMaxProviderConfig(): MiniMaxProviderConfig {
+  return miniMaxProviderConfigSchema.parse(process.env);
 }
 
 export const llmRouterConfigSchema = envSchema.transform(
