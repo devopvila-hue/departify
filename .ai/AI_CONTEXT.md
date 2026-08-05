@@ -19,23 +19,26 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 `packages/application` is the official application orchestration layer. It defines commands, queries, handlers, DTOs, mappers, validation, application services, and ports. It coordinates `packages/organization-domain` and `packages/provisioning-engine` through contracts only and must not contain domain rules, infrastructure, persistence, transport code, provider SDKs, or environment access.
 
+`packages/persistence-contracts` is the official provider-independent persistence contract layer. It defines repositories, unit of work, transaction contracts, specifications, pagination, filters, optimistic locking, and persistence errors. It must not contain adapters, storage implementations, schemas, migrations, provider SDKs, or environment access.
+
 ## Important paths
 
-| Path                          | Purpose                                             |
-| ----------------------------- | --------------------------------------------------- |
-| apps/backend/                 | Independent Fastify backend runtime                 |
-| apps/portal/                  | Independent Vite portal runtime                     |
-| packages/application/         | Pure application orchestration layer                |
-| packages/config/              | Only authorized runtime configuration reader        |
-| packages/organization-domain/ | Canonical provider-independent Organization domain  |
-| packages/provisioning-engine/ | Organization provisioning contracts and state model |
-| deploy/docker/                | Docker image definitions                            |
-| supabase/                     | Supabase CLI local configuration                    |
-| docs/                         | Repository documentation                            |
-| docs/adr/                     | Architecture decisions                              |
-| railway.json                  | Railway Docker deployment config                    |
-| compose.yaml                  | Local Docker composition                            |
-| .env.example                  | Golden Image variable contract                      |
+| Path                            | Purpose                                             |
+| ------------------------------- | --------------------------------------------------- |
+| apps/backend/                   | Independent Fastify backend runtime                 |
+| apps/portal/                    | Independent Vite portal runtime                     |
+| packages/application/           | Pure application orchestration layer                |
+| packages/config/                | Only authorized runtime configuration reader        |
+| packages/organization-domain/   | Canonical provider-independent Organization domain  |
+| packages/persistence-contracts/ | Provider-independent persistence contracts          |
+| packages/provisioning-engine/   | Organization provisioning contracts and state model |
+| deploy/docker/                  | Docker image definitions                            |
+| supabase/                       | Supabase CLI local configuration                    |
+| docs/                           | Repository documentation                            |
+| docs/adr/                       | Architecture decisions                              |
+| railway.json                    | Railway Docker deployment config                    |
+| compose.yaml                    | Local Docker composition                            |
+| .env.example                    | Golden Image variable contract                      |
 
 ## Commands
 

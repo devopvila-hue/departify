@@ -12,6 +12,8 @@ Sprint 6 adds the canonical Organization domain model as the source of truth for
 
 Sprint 7 adds the Application Layer foundation. It defines commands, queries, handlers, DTOs, mappers, application services, validation, and application ports that coordinate the Organization Domain and Provisioning Engine without infrastructure or business rules.
 
+Sprint 8 adds the Persistence Contracts foundation. It defines repository interfaces, unit of work, transaction contracts, specifications, pagination, filters, optimistic locking, and provider-neutral errors without adapters, drivers, schemas, migrations, or storage implementations.
+
 ## Goals
 
 - Keep the product architecture new and independent from legacy systems.
@@ -22,6 +24,7 @@ Sprint 7 adds the Application Layer foundation. It defines commands, queries, ha
 - Ensure all future organization creation goes through `packages/provisioning-engine`.
 - Ensure all future persistence and application behavior adapts to `packages/organization-domain`, not the opposite.
 - Keep use-case orchestration inside `packages/application` and keep infrastructure adapters outside this package.
+- Keep all future storage implementations behind `packages/persistence-contracts`.
 
 ## Non-goals
 
