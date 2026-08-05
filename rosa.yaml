@@ -1,0 +1,10 @@
+rosa:
+  version: "1.0.2"
+  official_repository: "https://github.com/devopvila-hue/rosa"
+  adopted_on: "2026-08-05"
+  project_type: "monorepo"
+  status: "adopted"
+  compatibility:
+    minimum_version: "1.0.0"
+    target_version: "1.0.2"
+  exceptions: []
