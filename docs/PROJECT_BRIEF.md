@@ -10,6 +10,8 @@ Sprint 5 adds the Provisioning Engine foundation as the sole architectural bound
 
 Sprint 6 adds the canonical Organization domain model as the source of truth for representing an organization. It defines the aggregate root, value objects, domain events, lifecycle policy, and pure invariants without persistence, provider dependencies, agents, AI, or product features.
 
+Sprint 7 adds the Application Layer foundation. It defines commands, queries, handlers, DTOs, mappers, application services, validation, and application ports that coordinate the Organization Domain and Provisioning Engine without infrastructure or business rules.
+
 ## Goals
 
 - Keep the product architecture new and independent from legacy systems.
@@ -19,6 +21,7 @@ Sprint 6 adds the canonical Organization domain model as the source of truth for
 - Keep the Golden Image limited to platform execution primitives.
 - Ensure all future organization creation goes through `packages/provisioning-engine`.
 - Ensure all future persistence and application behavior adapts to `packages/organization-domain`, not the opposite.
+- Keep use-case orchestration inside `packages/application` and keep infrastructure adapters outside this package.
 
 ## Non-goals
 

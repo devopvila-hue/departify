@@ -17,12 +17,15 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 `packages/organization-domain` is the canonical domain model for an organization. It is pure TypeScript domain code and must not import provider SDKs, read environment variables, or know about persistence, Docker, Railway, Netlify, Supabase, OpenClaw, agents, AI, RAG, plugins, or workflows.
 
+`packages/application` is the official application orchestration layer. It defines commands, queries, handlers, DTOs, mappers, validation, application services, and ports. It coordinates `packages/organization-domain` and `packages/provisioning-engine` through contracts only and must not contain domain rules, infrastructure, persistence, transport code, provider SDKs, or environment access.
+
 ## Important paths
 
 | Path                          | Purpose                                             |
 | ----------------------------- | --------------------------------------------------- |
 | apps/backend/                 | Independent Fastify backend runtime                 |
 | apps/portal/                  | Independent Vite portal runtime                     |
+| packages/application/         | Pure application orchestration layer                |
 | packages/config/              | Only authorized runtime configuration reader        |
 | packages/organization-domain/ | Canonical provider-independent Organization domain  |
 | packages/provisioning-engine/ | Organization provisioning contracts and state model |
