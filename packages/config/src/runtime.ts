@@ -28,6 +28,13 @@ export interface OpenAIProviderConfig {
   maxRetries: number;
 }
 
+export type LlmRoutingStrategy = "capability_first" | "balanced";
+
+export interface LlmRouterConfig {
+  defaultProvider: string;
+  defaultStrategy: LlmRoutingStrategy;
+}
+
 export const backendConfigSchema = envSchema.transform((env): BackendConfig => {
   const otlpEndpoint = normalizeOptional(env.OTEL_EXPORTER_OTLP_ENDPOINT);
   const supabaseUrl = normalizeOptional(env.SUPABASE_URL);
@@ -77,6 +84,17 @@ export const openAIProviderConfigSchema = envSchema.transform(
 
 export function loadOpenAIProviderConfig(): OpenAIProviderConfig {
   return openAIProviderConfigSchema.parse(process.env);
+}
+
+export const llmRouterConfigSchema = envSchema.transform(
+  (env): LlmRouterConfig => ({
+    defaultProvider: env.LLM_DEFAULT_PROVIDER,
+    defaultStrategy: env.LLM_ROUTING_STRATEGY,
+  }),
+);
+
+export function loadLlmRouterConfig(): LlmRouterConfig {
+  return llmRouterConfigSchema.parse(process.env);
 }
 
 function normalizeOptional(value: string | undefined): string | undefined {

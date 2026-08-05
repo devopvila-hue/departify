@@ -1,5 +1,6 @@
 import {
   backendConfigSchema,
+  llmRouterConfigSchema,
   openAIProviderConfigSchema,
   validateEnv,
 } from "../src/index.js";
@@ -16,10 +17,45 @@ describe("validateEnv", () => {
     expect(env.OPENAI_MODEL).toBe("gpt-4o-mini");
     expect(env.OPENAI_TIMEOUT_MS).toBe(30_000);
     expect(env.OPENAI_MAX_RETRIES).toBe(2);
+    expect(env.LLM_DEFAULT_PROVIDER).toBe("openai");
+    expect(env.LLM_ROUTING_STRATEGY).toBe("capability_first");
   });
 
   it("rejects invalid provider URLs", () => {
     expect(() => validateEnv({ SUPABASE_URL: "not-a-url" })).toThrow();
+  });
+
+  it("rejects unknown routing strategies", () => {
+    expect(() =>
+      validateEnv({ LLM_ROUTING_STRATEGY: "unknown_strategy" as never }),
+    ).toThrow();
+  });
+});
+
+describe("llmRouterConfigSchema", () => {
+  it("returns the default LLM Router config when no overrides are provided", () => {
+    const config = llmRouterConfigSchema.parse({});
+
+    expect(config).toEqual({
+      defaultProvider: "openai",
+      defaultStrategy: "capability_first",
+    });
+  });
+
+  it("accepts the balanced routing strategy", () => {
+    const config = llmRouterConfigSchema.parse({
+      LLM_ROUTING_STRATEGY: "balanced",
+    });
+
+    expect(config.defaultStrategy).toBe("balanced");
+  });
+
+  it("accepts a custom default provider id", () => {
+    const config = llmRouterConfigSchema.parse({
+      LLM_DEFAULT_PROVIDER: "anthropic",
+    });
+
+    expect(config.defaultProvider).toBe("anthropic");
   });
 });
 

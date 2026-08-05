@@ -28,6 +28,10 @@ export {
   validateRoutingPolicy,
 } from "./policies/routing-policy.js";
 export {
+  ProviderSelector,
+  selectModelForRequest,
+} from "./policies/select-provider/provider-selector.js";
+export {
   type BaseLlmRequest,
   type ChatRequest,
   type CompletionRequest,
@@ -57,3 +61,35 @@ export {
   validateLlmResponse,
   validateStreamChunk,
 } from "./validation/response-validation.js";
+export { type LlmRouterConfig } from "./composition/config-types.js";
+export {
+  LlmRouter,
+  type LlmRouterComposition,
+  type LlmRouterOptions,
+  type RouterDescriptor,
+  buildComposition,
+} from "./composition/llm-router-facade.js";
+export {
+  bootstrapLlmRouter,
+  type LlmRouterBootstrapInput,
+  type LlmRouterBootstrapResult,
+} from "./composition/llm-router-bootstrap.js";
+export {
+  type RouterErrorMetric,
+  type RouterLatencyMetric,
+  type RouterLogContext,
+  type RouterLogLevel,
+  type RouterLogger,
+  type RouterMetrics,
+  type RouterObservability,
+  type RouterOperation,
+  type RouterRequestTrace,
+  type RouterSuccessMetric,
+  type RouterTokenMetric,
+  InMemoryRouterMetrics,
+  createConsoleObservability,
+  createInMemoryObservability,
+  createNoopObservability,
+  reportRouterTrace,
+} from "./observability/router-observability.js";
+export { ProviderRegistry } from "./providers/provider-registry.js";
