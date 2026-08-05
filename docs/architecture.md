@@ -24,6 +24,7 @@ The backend does not contain authentication, users, organizations, persistence, 
 - `packages/rag`: retrieval-augmented generation boundary.
 - `packages/memory`: organization-scoped memory boundary.
 - `packages/plugins`: organization-scoped plugin boundary.
+- `packages/provisioning-engine`: only authorized boundary for future organization creation.
 
 ## Platform Boundaries
 
@@ -33,7 +34,7 @@ The backend does not contain authentication, users, organizations, persistence, 
 - Netlify is the official portal environment.
 - Supabase is the official data platform, initialized by CLI configuration only in the Golden Image.
 - The Golden Image installs platform infrastructure only.
-- The Provisioning Engine will create organizations in a later sprint.
+- The Provisioning Engine owns future organization provisioning contracts, pipeline phases, and provisioning state.
 - Agent Runtime is not part of the Golden Image.
 - LLM routing is decoupled from applications.
 - Memory, vector data, plugins, and workflows are organization-scoped concerns.

@@ -13,20 +13,23 @@ Departify V2 is a new ROSA-governed SaaS AI-first platform. The current reposito
 
 The Golden Image installs the platform. It does not create organizations, agents, memory, RAG, plugins, workflows, or business APIs.
 
+`packages/provisioning-engine` is the only authorized boundary for future organization creation. Its current state is contract and state-model foundation only; it must not create agents, execute AI, provision RAG, register plugins, or call external services.
+
 ## Important paths
 
-| Path             | Purpose                                      |
-| ---------------- | -------------------------------------------- |
-| apps/backend/    | Independent Fastify backend runtime          |
-| apps/portal/     | Independent Vite portal runtime              |
-| packages/config/ | Only authorized runtime configuration reader |
-| deploy/docker/   | Docker image definitions                     |
-| supabase/        | Supabase CLI local configuration             |
-| docs/            | Repository documentation                     |
-| docs/adr/        | Architecture decisions                       |
-| railway.json     | Railway Docker deployment config             |
-| compose.yaml     | Local Docker composition                     |
-| .env.example     | Golden Image variable contract               |
+| Path                          | Purpose                                             |
+| ----------------------------- | --------------------------------------------------- |
+| apps/backend/                 | Independent Fastify backend runtime                 |
+| apps/portal/                  | Independent Vite portal runtime                     |
+| packages/config/              | Only authorized runtime configuration reader        |
+| packages/provisioning-engine/ | Organization provisioning contracts and state model |
+| deploy/docker/                | Docker image definitions                            |
+| supabase/                     | Supabase CLI local configuration                    |
+| docs/                         | Repository documentation                            |
+| docs/adr/                     | Architecture decisions                              |
+| railway.json                  | Railway Docker deployment config                    |
+| compose.yaml                  | Local Docker composition                            |
+| .env.example                  | Golden Image variable contract                      |
 
 ## Commands
 
