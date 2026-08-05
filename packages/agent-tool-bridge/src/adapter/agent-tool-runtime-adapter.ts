@@ -35,7 +35,7 @@ const DEFAULT_SCOPE_BY_ACTION: Readonly<Record<string, ToolScope[]>> = {
   read: ["read.public"],
   write: ["write.public"],
   execute: ["read.public", "execute.network"],
-  manage: ["read.public", "write.private", "execute.network"],
+  manage: ["read.public", "read.private", "write.private", "execute.network"],
 };
 
 export class DefaultAgentPermissionScopeResolver implements AgentPermissionToScopeResolver {

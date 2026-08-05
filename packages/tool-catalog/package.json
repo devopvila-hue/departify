@@ -1,0 +1,37 @@
+{
+  "name": "@departify/tool-catalog",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@departify/agent-runtime": "workspace:*",
+    "@departify/agent-tool-bridge": "workspace:*",
+    "@departify/knowledge-engine": "workspace:*",
+    "@departify/llm-router": "workspace:*",
+    "@departify/memory-engine": "workspace:*",
+    "@departify/organization-domain": "workspace:*",
+    "@departify/tool-runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.2",
+    "eslint": "^9.17.0",
+    "globals": "^15.14.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^3.0.0"
+  }
+}
