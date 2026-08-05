@@ -23,6 +23,8 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 `packages/persistence-supabase` is the first concrete persistence adapter. It implements the persistence contracts with `@supabase/supabase-js`, maps domain/provisioning snapshots to Supabase record tables, and obtains config through `packages/config` types only. It must not modify domain, application, provisioning, or persistence contracts.
 
+`packages/platform-composition` is the official package wiring boundary. It connects Application Layer, Provisioning Engine, Organization Domain, Persistence Contracts, and Supabase Adapter for the first real provisioning flow. It must not redefine contracts or introduce APIs, auth, portal, agents, RAG, memory, plugins, or workflows.
+
 ## Important paths
 
 | Path                            | Purpose                                             |
@@ -32,6 +34,7 @@ The Golden Image installs the platform. It does not create organizations, agents
 | packages/application/           | Pure application orchestration layer                |
 | packages/config/                | Only authorized runtime configuration reader        |
 | packages/organization-domain/   | Canonical provider-independent Organization domain  |
+| packages/platform-composition/  | Official package composition and first provisioning |
 | packages/persistence-contracts/ | Provider-independent persistence contracts          |
 | packages/persistence-supabase/  | Supabase implementation of persistence contracts    |
 | packages/provisioning-engine/   | Organization provisioning contracts and state model |
@@ -51,6 +54,7 @@ pnpm check
 pnpm format
 pnpm exec supabase start
 pnpm --filter @departify/persistence-supabase test:integration
+pnpm --filter @departify/platform-composition test:e2e
 pnpm exec netlify dev --filter @departify/portal
 pnpm exec railway link
 docker compose up --build
