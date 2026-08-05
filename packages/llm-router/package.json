@@ -3,10 +3,25 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
   "scripts": {
-    "check": "pnpm lint && pnpm typecheck && pnpm test",
-    "lint": "node -e \"console.log('llm-router: no lint target configured yet')\"",
-    "typecheck": "node -e \"console.log('llm-router: no source to typecheck yet')\"",
-    "test": "node -e \"console.log('llm-router: no tests yet')\""
+    "build": "tsc -p tsconfig.build.json",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "eslint": "^9.17.0",
+    "globals": "^15.14.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0",
+    "vitest": "^3.0.0"
   }
 }

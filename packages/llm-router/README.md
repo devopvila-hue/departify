@@ -1,5 +1,5 @@
 # LLM Router
 
-Decoupled LLM routing package boundary.
+Provider-independent AI model routing boundary for Departify.
 
-No provider, model, prompt, routing, policy, or inference logic is implemented in Sprint 1.
+This package defines common contracts, capabilities, abstract models, requests, responses, routing policies, and validation. It does not import provider SDKs, read environment variables, call external services, or contain product prompts.

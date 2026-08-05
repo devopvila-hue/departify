@@ -15,3 +15,4 @@
 - Agent Runtime foundation with provider-independent registry, lifecycle state policy, permissions, internal messaging contracts, scheduling contracts, runtime events, validation, and unit tests.
 - Agent Domain foundation with canonical aggregate root, value objects, lifecycle policy, domain events, pure invariants, and unit tests for digital employees.
 - Executive Director foundation with intents, routing, planning, decision model, coordination contracts, internal events, validation, and unit tests.
+- LLM Router foundation with provider-neutral contracts, capabilities, abstract model catalog, routing policies, requests, responses, validation, and unit tests.

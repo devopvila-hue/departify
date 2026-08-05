@@ -31,6 +31,8 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 `packages/executive-director` is the provider-independent orchestration boundary for the digital company. It evaluates intents, routes them conceptually, creates decisions, emits internal events, and models coordination contracts toward Application Layer, Provisioning Engine, and Agent Runtime. It must not execute AI, implement the LLM Router, persist data, call providers, expose transport APIs, run agents, or access environment variables.
 
+`packages/llm-router` is the only authorized boundary for future AI model access. It defines provider-neutral contracts for chat, completion, embeddings, tool calling, streaming, and structured output, plus capability modeling, abstract model descriptors, routing policies, request/response validation, and model selection decisions. No other package may import provider SDKs or call models directly. Its current state must not include provider implementations, product prompts, API keys, external calls, or environment access.
+
 ## Important paths
 
 | Path                            | Purpose                                             |
@@ -42,6 +44,7 @@ The Golden Image installs the platform. It does not create organizations, agents
 | packages/application/           | Pure application orchestration layer                |
 | packages/config/                | Only authorized runtime configuration reader        |
 | packages/executive-director/    | Provider-independent system orchestration boundary  |
+| packages/llm-router/            | Only authorized AI model routing boundary           |
 | packages/organization-domain/   | Canonical provider-independent Organization domain  |
 | packages/platform-composition/  | Official package composition and first provisioning |
 | packages/persistence-contracts/ | Provider-independent persistence contracts          |

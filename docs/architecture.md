@@ -20,7 +20,7 @@ The backend does not contain authentication, users, organizations, persistence, 
 - `packages/shared`: cross-cutting shared primitives boundary.
 - `packages/logging`: logging and observability boundary.
 - `packages/departments`: department capability boundary.
-- `packages/llm-router`: decoupled LLM routing boundary.
+- `packages/llm-router`: only authorized AI model access boundary, with provider-neutral contracts, capability modeling, abstract model catalog, routing policies, requests, responses, and validation.
 - `packages/rag`: retrieval-augmented generation boundary.
 - `packages/memory`: organization-scoped memory boundary.
 - `packages/plugins`: organization-scoped plugin boundary.
@@ -53,6 +53,6 @@ The backend does not contain authentication, users, organizations, persistence, 
 - Executive Director owns system-level orchestration intent evaluation and decision creation. It coordinates conceptually through contracts toward Application Layer, Provisioning Engine, and Agent Runtime, but does not execute infrastructure, persist data, call providers, run models, or replace Agent Runtime.
 - Future persistence must adapt to `packages/organization-domain`; the domain must not depend on databases, provider SDKs, Docker, Railway, Netlify, Supabase, OpenClaw, or environment variables.
 - Agent Runtime is not part of the Golden Image and is not infrastructure.
-- LLM routing is decoupled from applications.
+- LLM Router is the only authorized package for future AI model provider access. Other packages must not import provider SDKs or perform model calls directly. Sprint 14 defines contracts and routing policy models only; it does not implement providers, product prompts, external calls, API keys, or business logic.
 - Memory, vector data, plugins, and workflows are organization-scoped concerns.
 - OpenClaw is not part of the product.
