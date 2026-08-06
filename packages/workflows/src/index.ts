@@ -68,3 +68,9 @@ export {
   FIRST_RESULT_WORKFLOW,
   FIRST_RESULT_WORKFLOW_ID,
 } from "./workflows/first-result.workflow.js";
+
+export {
+  buildDepartmentOnboardingWorkflow,
+  DEPARTMENT_ONBOARDING_WORKFLOW,
+  DEPARTMENT_ONBOARDING_WORKFLOW_ID,
+} from "./workflows/department-onboarding.workflow.js";

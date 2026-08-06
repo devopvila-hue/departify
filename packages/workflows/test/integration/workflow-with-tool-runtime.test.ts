@@ -16,6 +16,7 @@ import {
   buildBusinessReadinessWorkflow,
   buildDepartmentPlanWorkflow,
   buildDepartmentDelegationWorkflow,
+  buildDepartmentOnboardingWorkflow,
   buildFirstWorkWorkflow,
   buildFirstResultWorkflow,
   buildLeadQualificationWorkflow,
@@ -815,6 +816,146 @@ describe("Business Briefing Workflow integration with Tool Runtime", () => {
     };
     expect(storedOutput.gapCount).toBe(1);
     expect(storedOutput.questionCount).toBe(0);
+    expect(
+      workResults.findByOrganizationId("org_departify"),
+    ).toHaveLength(1);
+  });
+
+  it("runs the full Department onboarding and delivers the first value", async () => {
+    // Seed the repository with a completed discovery report (gaps + questions).
+    const repository = createInMemoryDiscoveryReportRepository();
+    const report: CompanyDiscoveryReport = {
+      organizationId: "org_departify",
+      sessionId: "session_onboarding",
+      metadata: {
+        sessionId: "session_onboarding",
+        startedAt: new Date("2026-08-06T10:00:00Z"),
+        completedAt: new Date("2026-08-06T10:00:01Z"),
+        durationMs: 1000,
+        sources: [],
+        dataPoints: 0,
+        questionsAsked: 1,
+        questionsAnswered: 0,
+      },
+      companyDna: {
+        organizationId: "org_departify",
+        mission: {
+          statement: "To make the world better",
+          confidence: {
+            level: "low",
+            source: "user_input",
+            lastVerified: new Date("2026-08-06T10:00:00Z"),
+          },
+        },
+      } as unknown as CompanyDiscoveryReport["companyDna"],
+      findings: [],
+      gaps: [
+        {
+          id: "gap_mission",
+          category: "mission",
+          description: "Missing mission detail",
+          importance: "high",
+          blockingAction: false,
+        },
+      ],
+      questions: [
+        {
+          id: "q_mission",
+          gapId: "gap_mission",
+          category: "mission",
+          question: "What is your mission?",
+          type: "open",
+          priority: 100,
+          context: "ctx",
+          importance: "high",
+        },
+      ],
+      confidence: {
+        overall: "low",
+        companyDna: 0,
+        founderBrain: 0,
+        breakdown: {} as CompanyDiscoveryReport["confidence"]["breakdown"],
+      },
+      generatedAt: new Date("2026-08-06T10:00:01Z"),
+    };
+    repository.save({
+      executionId: "exe_disc_onboarding_001",
+      sessionId: "session_onboarding",
+      organizationId: "org_departify",
+      report,
+      savedAt: new Date("2026-08-06T10:00:02Z"),
+    });
+
+    const toolRegistry = new ToolRuntimeRegistry();
+    registerAllCoreTools(toolRegistry, { discoveryRepository: repository });
+    const runtime = createToolRuntime({
+      grantedScopes: ["read.public", "read.private"],
+    });
+    for (const entry of toolRegistry.list()) {
+      runtime.registry.register(entry.definition);
+      runtime.registry.setStatus(entry.definition.id, "active");
+    }
+
+    const permissions = new Map([
+      [
+        "agent_sales_director",
+        [
+          {
+            scope: "runtime" as const,
+            action: "manage" as const,
+            resource: "*",
+          },
+        ],
+      ],
+      [
+        "agent_lead_qualifier",
+        [
+          {
+            scope: "runtime" as const,
+            action: "manage" as const,
+            resource: "*",
+          },
+        ],
+      ],
+    ]);
+
+    const port: AgentToolPort = new AgentToolRuntimeAdapter({
+      runtime,
+      fetchPermissionSet: buildAgentPermissionSetResolver(permissions),
+    });
+
+    const workResults = createInMemoryWorkResultRepository();
+    const execution = new WorkflowExecution({
+      port,
+      workResultRepository: workResults,
+      organizationId: "org_departify",
+      executionIdFactory: () => "wfe_onboarding_001",
+    });
+
+    const result = await execution.run(
+      buildDepartmentOnboardingWorkflow(
+        "org_departify",
+        "agent_lead_qualifier",
+      ),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.steps).toHaveLength(6);
+    expect(result.steps.every((step) => step.status === "completed")).toBe(true);
+
+    // The finalOutput of the last step is the first value delivered:
+    // the executive summary produced by the delegated employee.
+    const finalOutput = result.finalOutput as {
+      gapCount: number;
+      questionCount: number;
+    };
+    expect(finalOutput.gapCount).toBe(1);
+    expect(finalOutput.questionCount).toBe(1);
+
+    // The finished onboarding work is persisted and recoverable.
+    const stored = workResults.findById("wfe_onboarding_001");
+    expect(stored).not.toBeNull();
+    expect(stored?.workflowId).toBe("wf_department_onboarding");
     expect(
       workResults.findByOrganizationId("org_departify"),
     ).toHaveLength(1);
