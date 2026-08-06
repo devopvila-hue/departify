@@ -18,6 +18,8 @@ export {
   type DepartmentPausedEvent,
   type DepartmentToolAssociatedEvent,
   type DepartmentToolDissociatedEvent,
+  type DepartmentWorkflowAttachedEvent,
+  type DepartmentWorkflowDetachedEvent,
 } from "./domain/department.js";
 
 export {
@@ -57,6 +59,7 @@ export {
   type KnowledgeCollectionId,
   type MemorySessionId,
   type ToolId,
+  type WorkflowId,
   departmentStatuses,
 } from "./domain/department-types.js";
 

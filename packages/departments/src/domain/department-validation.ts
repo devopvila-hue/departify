@@ -212,4 +212,12 @@ function assertNonEmptyString(value: unknown, field: string): string {
   return value.trim();
 }
 
+export function validateWorkflowId(value: unknown): string {
+  assertDepartmentDomainInvariant(
+    typeof value === "string" && value.trim().length > 0,
+    "Workflow id must be a non-empty string.",
+  );
+  return value.trim();
+}
+
 export type { DepartmentSnapshot };

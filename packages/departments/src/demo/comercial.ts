@@ -7,6 +7,7 @@ import {
   DepartmentService,
   createDepartmentService,
 } from "../services/department-service.js";
+import { LEAD_QUALIFICATION_WORKFLOW_ID } from "@departify/workflows";
 import type { DepartmentSnapshot } from "../domain/department-types.js";
 
 /**
@@ -67,6 +68,7 @@ export function materializeTemplate(
     }
   }
 
+  service.attachWorkflow(departmentId, LEAD_QUALIFICATION_WORKFLOW_ID);
   service.activate(departmentId);
 
   const snapshot = service.get(departmentId).toSnapshot();

@@ -84,6 +84,9 @@ export interface DepartmentSnapshot {
   readonly connections: readonly DepartmentConnection[];
   readonly status: DepartmentStatus;
   readonly metrics: DepartmentMetricsSnapshot;
+  readonly workflowIds: readonly WorkflowId[];
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
+
+export type WorkflowId = string;

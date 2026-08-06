@@ -29,6 +29,11 @@ describe("Comercial demo department", () => {
     expect(snapshot.metrics.connectedApplicationCount).toBe(1);
   });
 
+  it("attaches the Lead Qualification Workflow by default", () => {
+    const { snapshot } = buildComercialDepartment();
+    expect(snapshot.workflowIds).toContain("wf_lead_qualification");
+  });
+
   it("returns the same shape from a freshly built service", () => {
     const { service, snapshot } = buildComercialDepartment();
     const refreshed = service.get("dep_comercial").toSnapshot();

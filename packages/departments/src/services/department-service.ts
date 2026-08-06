@@ -10,6 +10,7 @@ import type {
   KnowledgeCollectionId,
   MemorySessionId,
   ToolId,
+  WorkflowId,
 } from "../domain/department-types.js";
 
 /**
@@ -148,6 +149,28 @@ export class DepartmentService {
     const department = this.get(departmentId);
     department.archive();
     return department;
+  }
+
+  attachWorkflow(
+    departmentId: DepartmentId,
+    workflowId: WorkflowId,
+  ): Department {
+    const department = this.get(departmentId);
+    department.attachWorkflow(workflowId);
+    return department;
+  }
+
+  detachWorkflow(
+    departmentId: DepartmentId,
+    workflowId: WorkflowId,
+  ): Department {
+    const department = this.get(departmentId);
+    department.detachWorkflow(workflowId);
+    return department;
+  }
+
+  listWorkflows(departmentId: DepartmentId): readonly WorkflowId[] {
+    return this.get(departmentId).listWorkflows();
   }
 }
 

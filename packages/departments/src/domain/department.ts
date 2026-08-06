@@ -12,6 +12,7 @@ import {
   validateMemorySessionId,
   validateOrganizationId,
   validateToolId,
+  validateWorkflowId,
 } from "./department-validation.js";
 import type {
   AgentId,
@@ -27,6 +28,7 @@ import type {
   KnowledgeCollectionId,
   MemorySessionId,
   ToolId,
+  WorkflowId,
 } from "./department-types.js";
 
 /**
@@ -47,6 +49,8 @@ export const departmentEventTypes = [
   "department.memory_associated",
   "department.memory_dissociated",
   "department.director_assigned",
+  "department.workflow_attached",
+  "department.workflow_detached",
 ] as const;
 
 export type DepartmentEventType = (typeof departmentEventTypes)[number];
@@ -119,6 +123,16 @@ export interface DepartmentDirectorAssignedEvent extends DepartmentEventBase {
   readonly agentId: AgentId;
 }
 
+export interface DepartmentWorkflowAttachedEvent extends DepartmentEventBase {
+  readonly type: "department.workflow_attached";
+  readonly workflowId: string;
+}
+
+export interface DepartmentWorkflowDetachedEvent extends DepartmentEventBase {
+  readonly type: "department.workflow_detached";
+  readonly workflowId: string;
+}
+
 export type DepartmentEvent =
   | DepartmentCreatedEvent
   | DepartmentActivatedEvent
@@ -132,7 +146,9 @@ export type DepartmentEvent =
   | DepartmentKnowledgeDissociatedEvent
   | DepartmentMemoryAssociatedEvent
   | DepartmentMemoryDissociatedEvent
-  | DepartmentDirectorAssignedEvent;
+  | DepartmentDirectorAssignedEvent
+  | DepartmentWorkflowAttachedEvent
+  | DepartmentWorkflowDetachedEvent;
 
 /**
  * Department aggregate. Composes references to existing components
@@ -167,6 +183,7 @@ export class Department {
       DepartmentConnectionKind,
       Set<string>
     >,
+    private readonly workflowIds: Set<WorkflowId>,
     private status: DepartmentStatus,
     private readonly createdAt: Date,
     private updatedAt: Date,
@@ -205,6 +222,7 @@ export class Department {
         ["memory_session", new Set<string>()],
         ["connected_application", new Set<string>()],
       ]),
+      new Set<WorkflowId>(),
       "draft",
       input.occurredAt ?? new Date(),
       input.occurredAt ?? new Date(),
@@ -260,6 +278,7 @@ export class Department {
         snapshot.connections.map((c) => `${c.kind}:${c.referenceId}`),
       ),
       buildConnectionsByKind(snapshot.connections),
+      new Set<WorkflowId>(snapshot.workflowIds),
       validateDepartmentStatus(snapshot.status),
       snapshot.createdAt,
       snapshot.updatedAt,
@@ -313,6 +332,42 @@ export class Department {
 
   listConnectedApplications(): readonly string[] {
     return this.byKind("connected_application");
+  }
+
+  listWorkflows(): readonly WorkflowId[] {
+    return [...this.workflowIds];
+  }
+
+  attachWorkflow(workflowId: WorkflowId, occurredAt = new Date()): void {
+    this.assertMutable();
+    const validated = validateWorkflowId(workflowId);
+    if (this.workflowIds.has(validated)) {
+      return;
+    }
+    this.workflowIds.add(validated);
+    this.touch();
+    this.record({
+      type: "department.workflow_attached",
+      departmentId: this.id,
+      workflowId: validated,
+      occurredAt,
+    });
+  }
+
+  detachWorkflow(workflowId: WorkflowId, occurredAt = new Date()): void {
+    this.assertMutable();
+    const validated = validateWorkflowId(workflowId);
+    if (!this.workflowIds.has(validated)) {
+      return;
+    }
+    this.workflowIds.delete(validated);
+    this.touch();
+    this.record({
+      type: "department.workflow_detached",
+      departmentId: this.id,
+      workflowId: validated,
+      occurredAt,
+    });
   }
 
   getMetrics(): DepartmentMetricsSnapshot {
@@ -538,6 +593,7 @@ export class Department {
       connections: this.listConnections(),
       status: this.status,
       metrics: this.getMetrics(),
+      workflowIds: this.listWorkflows(),
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
     };
