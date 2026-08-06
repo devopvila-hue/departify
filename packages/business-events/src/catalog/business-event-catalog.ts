@@ -123,9 +123,14 @@ export function buildDefaultCatalogHandlers(options: {
   readonly "organization.discovered": BusinessEventHandler;
 } {
   return {
-    "payment.confirmed": createPaymentConfirmedHandler(
-      options.organizationCreator,
-    ),
+    "payment.confirmed": createPaymentConfirmedHandler({
+      organizationCreator: options.organizationCreator,
+      provisioningHandler: options.provisioningHandler,
+      discoveryWorkflow: options.discoveryWorkflow,
+      workflowExecutor: options.workflowExecutor,
+      onboardingEmployeeAgentId:
+        options.onboardingEmployeeAgentId ?? DEFAULT_ONBOARDING_EMPLOYEE_AGENT_ID,
+    }),
     "lead.created": createLeadCreatedHandler(options),
     "organization.created": createOrganizationCreatedHandler(
       options.provisioningHandler,
@@ -154,21 +159,49 @@ export function buildDefaultCatalogHandlers(options: {
  * (Sprint 39); the rest of the flow (provision → discovery → onboarding) is
  * already chained. Without a creator the event is rejected in a controlled way.
  */
-function createPaymentConfirmedHandler(
-  organizationCreator: OrganizationCreator | undefined,
-): BusinessEventHandler {
+function createPaymentConfirmedHandler(options: {
+  organizationCreator: OrganizationCreator | undefined;
+  provisioningHandler:
+    | ((event: BusinessEvent) => Promise<BusinessEventHandlerOutcome>)
+    | undefined;
+  discoveryWorkflow: ExecutiveDiscoveryWorkflow | undefined;
+  workflowExecutor: WorkflowExecution;
+  onboardingEmployeeAgentId: string;
+}): BusinessEventHandler {
   return async (event) => {
     if (event.type !== "payment.confirmed") {
       return rejected(
         "payment.confirmed handler invoked for non payment event",
       );
     }
-    if (!organizationCreator) {
+    if (!options.organizationCreator) {
       return rejected(
         "payment.confirmed requires an organization creator. No organization creator was supplied to the catalog.",
       );
     }
-    return organizationCreator(event);
+    if (!options.provisioningHandler) {
+      return rejected(
+        "payment.confirmed requires a provisioning handler. No provisioning handler was supplied to the catalog.",
+      );
+    }
+
+    // Sprint 50 — the Vending Machine step: a single `payment.confirmed`
+    // puts the whole Empresa Digital in motion. After the organization is
+    // created, run the same provisioning pipeline that
+    // `organization.provisioned` uses (Sprints 38/48): activation →
+    // discovery → onboarding → first value.
+    const organization = await options.organizationCreator(event);
+    if (organization.status === "rejected" || organization.status === "failed") {
+      return organization;
+    }
+
+    return runProvisioningPipeline({
+      event,
+      provisioningHandler: options.provisioningHandler,
+      discoveryWorkflow: options.discoveryWorkflow,
+      workflowExecutor: options.workflowExecutor,
+      onboardingEmployeeAgentId: options.onboardingEmployeeAgentId,
+    });
   };
 }
 
@@ -258,90 +291,113 @@ function createOrganizationProvisionedHandler(
         "organization.provisioned requires a provisioning handler. No provisioning handler was supplied to the catalog.",
       );
     }
-
-    const activation = await provisioningHandler(event);
-    if (activation.status === "rejected" || activation.status === "failed") {
-      // A failed activation means the Empresa Digital was not created —
-      // there is nothing to discover yet.
-      return activation;
-    }
-
-    // Sprint 38 — automatic discovery: once the Empresa Digital is created,
-    // run the Executive Discovery Workflow (Sprint 31) when the host wired
-    // one. The resulting report (Sprint 36) and its association to the
-    // Department (Sprint 35) complete the end-to-end flow without a manual
-    // `organization.discovery_requested`.
-    if (!discoveryWorkflow) {
-      return activation;
-    }
-
-    const discovery: ExecutiveDiscoveryWorkflowResult =
-      await discoveryWorkflow.run({
-        organizationId: event.organizationId,
-        requestedBy: "system",
-        options: {
-          includeFounderBrain: true,
-          includeCompetitorAnalysis: false,
-          includeMarketAnalysis: false,
-          depth: "standard",
-        },
-      });
-
-    if (discovery.status === "failed") {
-      return {
-        status: "failed",
-        output: { activation: activation.output, discovery },
-        errors: [
-          {
-            code: discovery.error.code,
-            message: discovery.error.message,
-            phase: "execution",
-          },
-        ],
-        workflowId: discovery.workflowId,
-        executionId: discovery.executionId,
-      };
-    }
-
-    // Sprint 48 — automatic Department Onboarding: once the Empresa Digital
-    // is discovered, run the Department Onboarding workflow (Sprint 47) so
-    // the Department starts working and delivers its first value without a
-    // manual trigger. The onboarding result is appended to the output.
-    const onboardingWorkflow = buildDepartmentOnboardingWorkflow(
-      event.organizationId,
+    return runProvisioningPipeline({
+      event,
+      provisioningHandler,
+      discoveryWorkflow,
+      workflowExecutor,
       onboardingEmployeeAgentId,
-    );
-    const onboardingResult: WorkflowResult = await workflowExecutor.run(
-      onboardingWorkflow,
-    );
+    });
+  };
+}
 
-    if (onboardingResult.status !== "completed") {
-      return {
-        status: "failed",
-        output: { activation: activation.output, discovery, onboarding: onboardingResult },
-        errors: [
-          {
-            code: onboardingResult.error?.code ?? "ONBOARDING_FAILED",
-            message:
-              onboardingResult.error?.message ?? "Department onboarding failed.",
-            phase: "execution",
-          },
-        ],
-        workflowId: onboardingWorkflow.id,
-        executionId: onboardingResult.executionId,
-      };
-    }
+/**
+ * Shared provisioning pipeline (Sprints 38/48): activation → discovery →
+ * Department onboarding. Used by both `organization.provisioned` and
+ * `payment.confirmed` (Sprint 50) so a single event puts the whole Empresa
+ * Digital in motion without duplicating logic.
+ */
+async function runProvisioningPipeline(options: {
+  event: BusinessEvent & { organizationId: string };
+  provisioningHandler: (event: BusinessEvent) => Promise<BusinessEventHandlerOutcome>;
+  discoveryWorkflow: ExecutiveDiscoveryWorkflow | undefined;
+  workflowExecutor: WorkflowExecution;
+  onboardingEmployeeAgentId: string;
+}): Promise<BusinessEventHandlerOutcome> {
+  const { event, provisioningHandler, discoveryWorkflow } = options;
 
-    return {
-      ...activation,
-      output: {
-        activation: activation.output,
-        discovery,
-        onboarding: onboardingResult,
+  const activation = await provisioningHandler(event);
+  if (activation.status === "rejected" || activation.status === "failed") {
+    // A failed activation means the Empresa Digital was not created —
+    // there is nothing to discover yet.
+    return activation;
+  }
+
+  // Sprint 38 — automatic discovery: once the Empresa Digital is created,
+  // run the Executive Discovery Workflow (Sprint 31) when the host wired
+  // one. The resulting report (Sprint 36) and its association to the
+  // Department (Sprint 35) complete the end-to-end flow without a manual
+  // `organization.discovery_requested`.
+  if (!discoveryWorkflow) {
+    return activation;
+  }
+
+  const discovery: ExecutiveDiscoveryWorkflowResult =
+    await discoveryWorkflow.run({
+      organizationId: event.organizationId,
+      requestedBy: "system",
+      options: {
+        includeFounderBrain: true,
+        includeCompetitorAnalysis: false,
+        includeMarketAnalysis: false,
+        depth: "standard",
       },
+    });
+
+  if (discovery.status === "failed") {
+    return {
+      status: "failed",
+      output: { activation: activation.output, discovery },
+      errors: [
+        {
+          code: discovery.error.code,
+          message: discovery.error.message,
+          phase: "execution",
+        },
+      ],
+      workflowId: discovery.workflowId,
+      executionId: discovery.executionId,
+    };
+  }
+
+  // Sprint 48 — automatic Department Onboarding: once the Empresa Digital
+  // is discovered, run the Department Onboarding workflow (Sprint 47) so
+  // the Department starts working and delivers its first value without a
+  // manual trigger. The onboarding result is appended to the output.
+  const onboardingWorkflow = buildDepartmentOnboardingWorkflow(
+    event.organizationId,
+    options.onboardingEmployeeAgentId,
+  );
+  const onboardingResult: WorkflowResult = await options.workflowExecutor.run(
+    onboardingWorkflow,
+  );
+
+  if (onboardingResult.status !== "completed") {
+    return {
+      status: "failed",
+      output: { activation: activation.output, discovery, onboarding: onboardingResult },
+      errors: [
+        {
+          code: onboardingResult.error?.code ?? "ONBOARDING_FAILED",
+          message:
+            onboardingResult.error?.message ?? "Department onboarding failed.",
+          phase: "execution",
+        },
+      ],
       workflowId: onboardingWorkflow.id,
       executionId: onboardingResult.executionId,
     };
+  }
+
+  return {
+    ...activation,
+    output: {
+      activation: activation.output,
+      discovery,
+      onboarding: onboardingResult,
+    },
+    workflowId: onboardingWorkflow.id,
+    executionId: onboardingResult.executionId,
   };
 }
 

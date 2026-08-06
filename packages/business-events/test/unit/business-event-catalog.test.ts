@@ -699,6 +699,12 @@ describe("BusinessEventCatalog", () => {
       port,
       workflowExecutor: executor,
       organizationCreator,
+      provisioningHandler: async (event) => ({
+        status: "completed" as const,
+        output: { organizationId: event.organizationId },
+        errors: [],
+        provisioningId: "prv_from_payment",
+      }),
     });
 
     const event: BusinessEvent = {
@@ -722,12 +728,12 @@ describe("BusinessEventCatalog", () => {
     });
 
     expect(outcome.status).toBe("completed");
+    // Without a discovery workflow the pipeline returns the activation
+    // result of the provisioning handler directly.
     const output = outcome.output as {
       organizationId: string;
-      paymentId: string;
     };
     expect(output.organizationId).toBe("org_from_payment");
-    expect(output.paymentId).toBe("pay_001");
   });
 
   it("rejects a confirmed payment when no organization creator is wired", async () => {
@@ -760,5 +766,112 @@ describe("BusinessEventCatalog", () => {
     expect(outcome.status).toBe("rejected");
     expect(outcome.errors[0]?.code).toBe("BUSINESS_EVENT_REJECTED");
     expect(outcome.errors[0]?.message).toMatch(/organization creator/i);
+  });
+
+  it("chains provisioning after a confirmed payment when a provisioning handler is wired", async () => {
+    const port = new SuccessAgentToolPort();
+    const executor = new WorkflowExecution({ port });
+    const organizationCreator: OrganizationCreator = async (event) => ({
+      status: "completed",
+      output: { organizationId: event.organizationId },
+      errors: [],
+      provisioningId: "prv_org",
+    });
+    const provisioningHandler = async (event: BusinessEvent) => ({
+      status: "completed" as const,
+      output: { activated: true, organizationId: event.organizationId },
+      errors: [],
+      provisioningId: "prv_chain",
+    });
+
+    const handlers = buildDefaultCatalogHandlers({
+      port,
+      workflowExecutor: executor,
+      organizationCreator,
+      provisioningHandler,
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_payment_chain",
+      type: "payment.confirmed",
+      occurredAt: new Date(),
+      paymentId: "pay_chain_001",
+      organizationId: "org_chain",
+      planId: "plan_pro",
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers[
+      "payment.confirmed"
+    ](event, {
+      now: () => new Date(),
+      eventId: () => "evt",
+      workflowId: () => "wf",
+      executionId: () => "wf_exec",
+    });
+
+    expect(outcome.status).toBe("completed");
+    // Without a discovery workflow, the pipeline returns the activation
+    // result produced by the provisioning handler.
+    const output = outcome.output as {
+      activated: boolean;
+      organizationId: string;
+    };
+    expect(output.activated).toBe(true);
+    expect(output.organizationId).toBe("org_chain");
+  });
+
+  it("does not chain provisioning when the organization creation fails", async () => {
+    const port = new SuccessAgentToolPort();
+    const executor = new WorkflowExecution({ port });
+    let provisioningInvoked = false;
+    const organizationCreator: OrganizationCreator = async () => ({
+      status: "failed",
+      output: null,
+      errors: [
+        {
+          code: "org_failed",
+          message: "organization exploded",
+          phase: "delegation",
+        },
+      ],
+    });
+    const provisioningHandler = async () => {
+      provisioningInvoked = true;
+      return {
+        status: "completed" as const,
+        output: null,
+        errors: [],
+      };
+    };
+
+    const handlers = buildDefaultCatalogHandlers({
+      port,
+      workflowExecutor: executor,
+      organizationCreator,
+      provisioningHandler,
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_payment_org_fail",
+      type: "payment.confirmed",
+      occurredAt: new Date(),
+      paymentId: "pay_fail_001",
+      organizationId: "org_fail",
+      planId: "plan_basic",
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers[
+      "payment.confirmed"
+    ](event, {
+      now: () => new Date(),
+      eventId: () => "evt",
+      workflowId: () => "wf",
+      executionId: () => "wf_exec",
+    });
+
+    expect(outcome.status).toBe("failed");
+    expect(provisioningInvoked).toBe(false);
   });
 });

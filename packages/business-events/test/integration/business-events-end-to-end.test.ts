@@ -496,6 +496,12 @@ describe("BusinessEvent end-to-end integration", () => {
           provisioningId: "prv_from_payment",
         };
       },
+      provisioningHandler: async (event) => ({
+        status: "completed" as const,
+        output: { organizationId: event.organizationId },
+        errors: [],
+        provisioningId: "prv_from_payment",
+      }),
     });
     const service = new BusinessEventService({ catalog });
 
@@ -513,13 +519,140 @@ describe("BusinessEvent end-to-end integration", () => {
     const result = await service.publish(payment);
 
     expect(result.status).toBe("completed");
+    // Without a discovery workflow the pipeline returns the activation result.
     const output = result.output as {
       organizationId: string;
-      paymentId: string;
-      planId: string;
     };
     expect(output.organizationId).toBe("org_departify");
-    expect(output.paymentId).toBe("pay_e2e_001");
-    expect(output.planId).toBe("plan_pro");
+  });
+
+  it("starts the whole Empresa Digital from a single payment.confirmed", async () => {
+    // The only mock is the external event. One `payment.confirmed` must put
+    // the whole Empresa Digital in motion: organization → provisioning →
+    // discovery → onboarding → first value (Sprints 38-50 chained).
+    const reportRepository = createInMemoryDiscoveryReportRepository();
+
+    const toolRegistry = new ToolRuntimeRegistry();
+    registerAllCoreTools(toolRegistry, {
+      discoveryRepository: reportRepository,
+    });
+    const runtime = createToolRuntime({
+      grantedScopes: ["read.public", "read.private"],
+    });
+    for (const entry of toolRegistry.list()) {
+      runtime.registry.register(entry.definition);
+      runtime.registry.setStatus(entry.definition.id, "active");
+    }
+
+    const port: AgentToolPort = new AgentToolRuntimeAdapter({
+      runtime,
+      fetchPermissionSet: buildAgentPermissionSetResolver(
+        new Map([
+          [
+            "agent.executive",
+            [
+              {
+                scope: "runtime" as const,
+                action: "manage" as const,
+                resource: "*",
+              },
+            ],
+          ],
+          [
+            "agent_sales_director",
+            [
+              {
+                scope: "runtime" as const,
+                action: "manage" as const,
+                resource: "*",
+              },
+            ],
+          ],
+          [
+            "agent_lead_qualifier",
+            [
+              {
+                scope: "runtime" as const,
+                action: "manage" as const,
+                resource: "*",
+              },
+            ],
+          ],
+        ]),
+      ),
+    });
+
+    const orchestrator = createExecutiveOrchestrator({
+      director: new ExecutiveDirector(),
+      bridge: port,
+    });
+
+    const discoveryWorkflow = createExecutiveDiscoveryWorkflow({
+      discoveryService: new BusinessDiscoveryService({
+        sessionIdGenerator: () => "session_vending",
+      }),
+      orchestrator,
+      executionIdFactory: () => "exe_disc_vending_001",
+      reportRepository,
+    });
+
+    const executor = new WorkflowExecution({ port });
+    const { catalog } = buildCanonicalCatalog({
+      port,
+      workflowExecutor: executor,
+      discoveryWorkflow,
+      organizationCreator: async (event) => {
+        if (event.type !== "payment.confirmed") {
+          return {
+            status: "rejected",
+            output: null,
+            errors: [
+              {
+                code: "wrong_type",
+                message: "wrong event",
+                phase: "delegation",
+              },
+            ],
+          };
+        }
+        return {
+          status: "completed",
+          output: { organizationId: event.organizationId },
+          errors: [],
+          provisioningId: "prv_from_payment",
+        };
+      },
+      provisioningHandler: async (event) => ({
+        status: "completed",
+        output: { organizationId: event.organizationId },
+        errors: [],
+        provisioningId: "prv_vending",
+      }),
+    });
+    const service = new BusinessEventService({ catalog });
+
+    const payment: BusinessEvent = {
+      eventId: "evt_e2e_vending",
+      type: "payment.confirmed",
+      occurredAt: new Date(),
+      paymentId: "pay_vending_001",
+      organizationId: "org_departify",
+      planId: "plan_pro",
+      customerEmail: "client@example.com",
+      payload: {},
+    };
+
+    const result = await service.publish(payment);
+
+    // The whole flow completed from a single event: the onboarding ran and
+    // delivered the first value.
+    expect(result.status).toBe("completed");
+    const stored = reportRepository.findById("exe_disc_vending_001");
+    expect(stored).not.toBeNull();
+    expect(stored?.organizationId).toBe("org_departify");
+    const output = result.output as {
+      onboarding?: { finalOutput?: { gapCount?: number } };
+    };
+    expect(output.onboarding?.finalOutput?.gapCount).toBeGreaterThan(0);
   });
 });
