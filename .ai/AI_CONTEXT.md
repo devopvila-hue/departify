@@ -33,6 +33,10 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 `packages/executive-orchestrator` is the official composition boundary that wires Executive Director into the runtime flow. It defines `OrchestratorIntent` types (`health_check`, `organization_summary`, `generate_identifier`), the `ExecutiveDecisionMapper` (the only component authorised to translate `ExecutiveDecision` into `AgentToolAction`), and the `ExecutiveOrchestrator` facade that drives the pipeline `OrchestratorIntent → ExecutiveDirector → DecisionMapper → AgentToolBridge → Tool Runtime → Core Tool Catalog`. It preserves the full correlation chain (intentId → decisionId → actionId) inside the `OrchestrationResult` envelope. The orchestrator depends only on public contracts of Executive Director, AgentToolBridge, Agent Runtime and Tool Runtime; it never modifies them. No IA, no LLM Router, no HTTP, no SDKs, no Fastify, no Supabase, no Docker, no plugins, no MCP.
 
+`packages/departments` is the **external product unit** (Sprint 24). A Department composes references to existing components: Executive Director (director), Agent Runtime (digital employees), Tool Runtime + Core Tool Catalog (tools), Knowledge Engine (knowledge collections), Memory Engine (memory sessions) and a placeholder for connected applications. It owns identity, configuration, lifecycle states (`draft`, `active`, `paused`, `archived`), metrics and an event taxonomy (`department.created`, `department.activated`, `department.employee_added`, `department.tool_associated`, etc.). The Department never duplicates logic — it only carries references. Sprint 24 ships the canonical `Comercial` demo department with four Digital Employees (`agent_sales_director`, `agent_lead_qualifier`, `agent_outreach_specialist`, `agent_proposal_writer`) and pre-associated Tools, Knowledge Collections and Memory Sessions. The package must not import provider SDKs, read environment variables, perform HTTP calls, depend on the LLM Router, or contain IA.
+
+**External vs internal naming.** The **Department** is the visible unit of the product (the customer-facing language). The **Digital Employee** — modelled by `packages/agent-runtime` and `packages/agent-domain` — is the internal execution unit. A Department contains one or more Digital Employees; a Digital Employee belongs to exactly one Department. The two languages must never be mixed.
+
 `packages/llm-router` is the only authorized boundary for future AI model access. It defines provider-neutral contracts for chat, completion, embeddings, tool calling, streaming, and structured output, plus capability modeling, abstract model descriptors, routing policies, request/response validation, and model selection decisions. No other package may import provider SDKs or call models directly. Its current state must not include provider implementations, product prompts, API keys, external calls, or environment access. As of Sprint 18 it is the only operational entry point for AI access: it ships an internal `ProviderRegistry`, a `ProviderSelector` for routing decisions, a provider-agnostic observability surface, and the official `LlmRouter` facade exposing `chat`, `complete`, `embed`, and `stream`. All other packages (Executive Director, Agent Runtime, applications) must talk to this facade and to it alone. The router is provider-agnostic: Sprint 19 added OpenAI, Google Vertex and MiniMax adapters behind the same `ProviderRegistry` without modifying the router.
 
 `packages/llm-provider-openai` is the first concrete LLM Router provider adapter. It is the only package authorized to import the official OpenAI SDK. It implements existing `packages/llm-router` contracts, maps router requests/responses to OpenAI SDK calls internally, and obtains OpenAI configuration exclusively through `packages/config`. It must not expose SDK types, modify router contracts, connect to Executive Director, Agent Runtime, Memory Engine, Knowledge Engine, plugins, RAG, n8n, HTTP APIs, or contain product prompts/business logic. It exposes `registerOpenAIProvider` for use by the LLM Router composition; the provider never registers itself autonomously.
@@ -55,38 +59,39 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 ## Important paths
 
-| Path                             | Purpose                                             |
-| -------------------------------- | --------------------------------------------------- |
-| apps/backend/                    | Independent Fastify backend runtime                 |
-| apps/portal/                     | Independent Vite portal runtime                     |
-| packages/agent-domain/           | Canonical provider-independent Agent domain         |
-| packages/agent-runtime/          | Provider-independent digital employee runtime       |
-| packages/application/            | Pure application orchestration layer                |
-| packages/config/                 | Only authorized runtime configuration reader        |
-| packages/executive-director/     | Provider-independent system orchestration boundary  |
-| packages/executive-orchestrator/ | Wires Executive Director into the runtime flow      |
-| packages/knowledge-engine/       | Provider-independent knowledge model boundary       |
-| packages/llm-provider-google/    | Google Vertex AI adapter for LLM Router contracts   |
-| packages/llm-provider-minimax/   | MiniMax (OpenAI-compatible) adapter for LLM Router  |
-| packages/llm-provider-openai/    | OpenAI adapter for LLM Router contracts             |
-| packages/llm-provider-bridge/    | Multi-provider composition boundary for LLM Router  |
-| packages/llm-router/             | Only authorized AI model routing boundary           |
-| packages/memory-engine/          | Provider-independent memory model boundary          |
-| packages/organization-domain/    | Canonical provider-independent Organization domain  |
-| packages/platform-composition/   | Official package composition and first provisioning |
-| packages/persistence-contracts/  | Provider-independent persistence contracts          |
-| packages/persistence-supabase/   | Supabase implementation of persistence contracts    |
-| packages/agent-tool-bridge/      | Official Agent Runtime ↔ Tool Runtime bridge        |
-| packages/tool-catalog/           | Official catalog of core Tools                      |
-| packages/provisioning-engine/    | Organization provisioning contracts and state model |
-| packages/tool-runtime/           | Only authorized boundary for executing Tools        |
-| deploy/docker/                   | Docker image definitions                            |
-| supabase/                        | Supabase CLI local configuration                    |
-| docs/                            | Repository documentation                            |
-| docs/adr/                        | Architecture decisions                              |
-| railway.json                     | Railway Docker deployment config                    |
-| compose.yaml                     | Local Docker composition                            |
-| .env.example                     | Golden Image variable contract                      |
+| Path                             | Purpose                                              |
+| -------------------------------- | ---------------------------------------------------- |
+| apps/backend/                    | Independent Fastify backend runtime                  |
+| apps/portal/                     | Independent Vite portal runtime                      |
+| packages/agent-domain/           | Canonical provider-independent Agent domain          |
+| packages/agent-runtime/          | Provider-independent digital employee runtime        |
+| packages/application/            | Pure application orchestration layer                 |
+| packages/config/                 | Only authorized runtime configuration reader         |
+| packages/executive-director/     | Provider-independent system orchestration boundary   |
+| packages/executive-orchestrator/ | Wires Executive Director into the runtime flow       |
+| packages/knowledge-engine/       | Provider-independent knowledge model boundary        |
+| packages/llm-provider-google/    | Google Vertex AI adapter for LLM Router contracts    |
+| packages/llm-provider-minimax/   | MiniMax (OpenAI-compatible) adapter for LLM Router   |
+| packages/llm-provider-openai/    | OpenAI adapter for LLM Router contracts              |
+| packages/llm-provider-bridge/    | Multi-provider composition boundary for LLM Router   |
+| packages/llm-router/             | Only authorized AI model routing boundary            |
+| packages/memory-engine/          | Provider-independent memory model boundary           |
+| packages/organization-domain/    | Canonical provider-independent Organization domain   |
+| packages/platform-composition/   | Official package composition and first provisioning  |
+| packages/persistence-contracts/  | Provider-independent persistence contracts           |
+| packages/persistence-supabase/   | Supabase implementation of persistence contracts     |
+| packages/agent-tool-bridge/      | Official Agent Runtime ↔ Tool Runtime bridge         |
+| packages/tool-catalog/           | Official catalog of core Tools                       |
+| packages/provisioning-engine/    | Organization provisioning contracts and state model  |
+| packages/departments/            | External product unit composed of existing contracts |
+| packages/tool-runtime/           | Only authorized boundary for executing Tools         |
+| deploy/docker/                   | Docker image definitions                             |
+| supabase/                        | Supabase CLI local configuration                     |
+| docs/                            | Repository documentation                             |
+| docs/adr/                        | Architecture decisions                               |
+| railway.json                     | Railway Docker deployment config                     |
+| compose.yaml                     | Local Docker composition                             |
+| .env.example                     | Golden Image variable contract                       |
 
 ## Commands
 
