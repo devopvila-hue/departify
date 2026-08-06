@@ -1,4 +1,5 @@
 import {
+  buildMarketingTemplate,
   createDepartmentService,
   createDepartmentTemplateCatalog,
 } from "@departify/departments";
@@ -90,5 +91,38 @@ describe("Business Provisioning integration", () => {
       },
     );
     expect(result.templateIds).toContain("tpl_comercial");
+  });
+
+  it("instantiates the Marketing department from its template (Customer Zero)", () => {
+    const catalog = createDepartmentTemplateCatalog();
+    catalog.register(buildMarketingTemplate());
+    const departmentService = createDepartmentService();
+    const service = new BusinessProvisioningService({
+      catalog,
+      departmentService,
+    });
+
+    const result = service.instantiateBusiness(
+      "prv_marketing",
+      "org_marketing",
+      "wsp_marketing_primary",
+      {
+        requestedBy: "platform",
+        organizationName: "Departify Marketing",
+        business: {
+          departmentTemplateId: "tpl_marketing",
+        },
+      },
+    );
+
+    expect(result.templateIds).toEqual(["tpl_marketing"]);
+    expect(result.departments).toHaveLength(1);
+
+    const department = result.departments[0];
+    expect(department?.status).toBe("active");
+    expect(department?.employees).toHaveLength(4);
+    expect(department?.directorAgentId).toBe("agent_marketing_director");
+    expect(department?.resources.some((r) => r.kind === "tool")).toBe(true);
+    expect(result.issues).toEqual([]);
   });
 });

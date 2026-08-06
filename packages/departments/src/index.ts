@@ -96,6 +96,11 @@ export {
 } from "./templates/templates/comercial.template.js";
 
 export {
+  buildMarketingTemplate,
+  MARKETING_TEMPLATE_ID,
+} from "./templates/templates/marketing.template.js";
+
+export {
   buildComercialDepartment,
   materializeTemplate,
 } from "./demo/comercial.js";
