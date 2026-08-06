@@ -16,6 +16,7 @@ export const businessEventTypes = [
   "organization.created",
   "organization.provisioned",
   "organization.discovery_requested",
+  "organization.discovered",
 ] as const;
 
 export type BusinessEventType = (typeof businessEventTypes)[number];
@@ -78,11 +79,28 @@ export interface OrganizationDiscoveryRequestedEvent extends BusinessEventBase {
   readonly priority?: "low" | "normal" | "high";
 }
 
+/**
+ * Fact event emitted once an organization has been discovered. Represents
+ * the completed Business Discovery outcome (Sprint 28/31) as a business
+ * fact other components can react to — the step before building the
+ * organization's Empresa Digital.
+ */
+export interface OrganizationDiscoveredEvent extends BusinessEventBase {
+  readonly type: "organization.discovered";
+  readonly organizationId: BusinessOrganizationId;
+  readonly sessionId: string;
+  readonly discoveryExecutionId: string;
+  readonly confidence: "low" | "medium" | "high";
+  readonly gapCount: number;
+  readonly questionCount: number;
+}
+
 export type BusinessEvent =
   | LeadCreatedEvent
   | OrganizationCreatedEvent
   | OrganizationProvisionedEvent
-  | OrganizationDiscoveryRequestedEvent;
+  | OrganizationDiscoveryRequestedEvent
+  | OrganizationDiscoveredEvent;
 
 export class BusinessEventValidationError extends Error {
   constructor(message: string) {
@@ -199,6 +217,44 @@ export function validateBusinessEvent(event: unknown): BusinessEvent {
     ) {
       throw new BusinessEventValidationError(
         "organization.discovery_requested has an invalid priority.",
+      );
+    }
+  } else if (type === "organization.discovered") {
+    if (typeof candidate.organizationId !== "string") {
+      throw new BusinessEventValidationError(
+        "organization.discovered requires an organizationId.",
+      );
+    }
+    if (typeof candidate.sessionId !== "string") {
+      throw new BusinessEventValidationError(
+        "organization.discovered requires a sessionId.",
+      );
+    }
+    if (typeof candidate.discoveryExecutionId !== "string") {
+      throw new BusinessEventValidationError(
+        "organization.discovered requires a discoveryExecutionId.",
+      );
+    }
+    const confidence = candidate.confidence;
+    if (
+      typeof confidence !== "string" ||
+      !["low", "medium", "high"].includes(confidence)
+    ) {
+      throw new BusinessEventValidationError(
+        "organization.discovered requires a valid confidence.",
+      );
+    }
+    if (typeof candidate.gapCount !== "number" || candidate.gapCount < 0) {
+      throw new BusinessEventValidationError(
+        "organization.discovered requires a non-negative gapCount.",
+      );
+    }
+    if (
+      typeof candidate.questionCount !== "number" ||
+      candidate.questionCount < 0
+    ) {
+      throw new BusinessEventValidationError(
+        "organization.discovered requires a non-negative questionCount.",
       );
     }
   }

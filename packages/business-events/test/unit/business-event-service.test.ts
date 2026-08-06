@@ -178,6 +178,7 @@ describe("BusinessEventService", () => {
       "organization.created",
       "organization.provisioned",
       "organization.discovery_requested",
+      "organization.discovered",
     ]);
   });
 

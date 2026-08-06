@@ -34,7 +34,7 @@ class SuccessAgentToolPort implements AgentToolPort {
 }
 
 describe("BusinessEventCatalog", () => {
-  it("builds the canonical catalog with the four default handlers", () => {
+  it("builds the canonical catalog with the five default handlers", () => {
     const port = new SuccessAgentToolPort();
     const executor = new WorkflowExecution({ port });
     const { catalog, handlers } = buildCanonicalCatalog({
@@ -42,17 +42,19 @@ describe("BusinessEventCatalog", () => {
       workflowExecutor: executor,
     });
 
-    expect(catalog.size()).toBe(4);
+    expect(catalog.size()).toBe(5);
     expect(catalog.has("lead.created")).toBe(true);
     expect(catalog.has("organization.created")).toBe(true);
     expect(catalog.has("organization.provisioned")).toBe(true);
     expect(catalog.has("organization.discovery_requested")).toBe(true);
+    expect(catalog.has("organization.discovered")).toBe(true);
     expect([...catalog.list()].sort()).toEqual(
       [
         "lead.created",
         "organization.created",
         "organization.provisioned",
         "organization.discovery_requested",
+        "organization.discovered",
       ].sort(),
     );
 
@@ -60,6 +62,7 @@ describe("BusinessEventCatalog", () => {
     expect(typeof handlers["organization.created"]).toBe("function");
     expect(typeof handlers["organization.provisioned"]).toBe("function");
     expect(typeof handlers["organization.discovery_requested"]).toBe("function");
+    expect(typeof handlers["organization.discovered"]).toBe("function");
   });
 
   it("rejects duplicate registrations", () => {
@@ -166,5 +169,40 @@ describe("BusinessEventCatalog", () => {
     expect(outcome.status).toBe("rejected");
     expect(outcome.errors[0]?.code).toBe("BUSINESS_EVENT_REJECTED");
     expect(outcome.errors[0]?.message).toMatch(/discovery workflow/i);
+  });
+
+  it("returns a controlled rejection when the discovery completion handler is missing", async () => {
+    const port = new SuccessAgentToolPort();
+    const executor = new WorkflowExecution({ port });
+    const handlers = buildDefaultCatalogHandlers({
+      port,
+      workflowExecutor: executor,
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_disc_done_001",
+      type: "organization.discovered",
+      occurredAt: new Date(),
+      organizationId: "org_demo",
+      sessionId: "session_001",
+      discoveryExecutionId: "exe_disc_001",
+      confidence: "low",
+      gapCount: 14,
+      questionCount: 20,
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers[
+      "organization.discovered"
+    ](event, {
+      now: () => new Date(),
+      eventId: () => "evt",
+      workflowId: () => "wf",
+      executionId: () => "wf_exec",
+    });
+
+    expect(outcome.status).toBe("rejected");
+    expect(outcome.errors[0]?.code).toBe("BUSINESS_EVENT_REJECTED");
+    expect(outcome.errors[0]?.message).toMatch(/completion handler/i);
   });
 });

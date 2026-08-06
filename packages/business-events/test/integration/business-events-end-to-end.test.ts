@@ -232,4 +232,56 @@ describe("BusinessEvent end-to-end integration", () => {
     expect(output.report.gaps.length).toBeGreaterThan(0);
     expect(output.report.questions.length).toBeGreaterThan(0);
   });
+
+  it("delegates organization.discovered to the discovery completion handler", async () => {
+    const port = {
+      executeAction: async () => {
+        throw new Error("bridge not used");
+      },
+    } as unknown as AgentToolPort;
+
+    const executor = new WorkflowExecution({ port });
+    const captured: { event: BusinessEvent | null } = { event: null };
+    const { catalog } = buildCanonicalCatalog({
+      port,
+      workflowExecutor: executor,
+      discoveryCompletionHandler: async (event) => {
+        captured.event = event;
+        return {
+          status: "completed",
+          output: {
+            organizationId: event.organizationId,
+            sessionId:
+              event.type === "organization.discovered"
+                ? event.sessionId
+                : null,
+          },
+          errors: [],
+          executionId: "exe_disc_completion_001",
+        };
+      },
+    });
+    const service = new BusinessEventService({ catalog });
+
+    const event: BusinessEvent = {
+      eventId: "evt_e2e_discovered",
+      type: "organization.discovered",
+      occurredAt: new Date(),
+      organizationId: "org_departify",
+      sessionId: "session_evt_discovered",
+      discoveryExecutionId: "exe_disc_evt_e2e",
+      confidence: "low",
+      gapCount: 14,
+      questionCount: 20,
+      payload: {},
+    };
+
+    const result = await service.publish(event);
+
+    expect(result.status).toBe("completed");
+    expect(result.executionId).toBe("exe_disc_completion_001");
+    expect(result.errors).toEqual([]);
+    expect(captured.event?.type).toBe("organization.discovered");
+    expect(captured.event?.organizationId).toBe("org_departify");
+  });
 });

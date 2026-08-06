@@ -52,6 +52,15 @@ export interface BusinessEventHandlerOutcome {
   readonly provisioningId?: string;
 }
 
+/**
+ * Host-supplied reaction to the `organization.discovered` fact event. The
+ * catalog never executes business logic; hosts decide what to do once an
+ * organization has been discovered (e.g. prepare its Empresa Digital).
+ */
+export type DiscoveryCompletionHandler = (
+  event: BusinessEvent,
+) => Promise<BusinessEventHandlerOutcome>;
+
 export const DEFAULT_LEAD_QUALIFICATION_WORKFLOW_ID = "wf_lead_qualification";
 
 /**
@@ -69,11 +78,15 @@ export function buildDefaultCatalogHandlers(options: {
   // The discovery workflow is optional — hosts that don't wire the
   // Executive Discovery Workflow (Sprint 31) get a controlled rejection.
   discoveryWorkflow?: ExecutiveDiscoveryWorkflow;
+  // The discovery completion handler is optional — hosts that don't react
+  // to the `organization.discovered` fact get a controlled rejection.
+  discoveryCompletionHandler?: DiscoveryCompletionHandler;
 }): {
   readonly "lead.created": BusinessEventHandler;
   readonly "organization.created": BusinessEventHandler;
   readonly "organization.provisioned": BusinessEventHandler;
   readonly "organization.discovery_requested": BusinessEventHandler;
+  readonly "organization.discovered": BusinessEventHandler;
 } {
   return {
     "lead.created": createLeadCreatedHandler(options),
@@ -85,6 +98,9 @@ export function buildDefaultCatalogHandlers(options: {
     ),
     "organization.discovery_requested": createOrganizationDiscoveryRequestedHandler(
       options.discoveryWorkflow,
+    ),
+    "organization.discovered": createOrganizationDiscoveredHandler(
+      options.discoveryCompletionHandler,
     ),
   };
 }
@@ -208,6 +224,30 @@ function createOrganizationDiscoveryRequestedHandler(
   };
 }
 
+/**
+ * Handler for `organization.discovered` fact event. Delegates to the
+ * host-supplied `DiscoveryCompletionHandler` — the catalog never executes
+ * business logic. Without a completion handler the event is rejected in a
+ * controlled way.
+ */
+function createOrganizationDiscoveredHandler(
+  completionHandler: DiscoveryCompletionHandler | undefined,
+): BusinessEventHandler {
+  return async (event) => {
+    if (event.type !== "organization.discovered") {
+      return rejected(
+        "organization.discovered handler invoked for non discovery event",
+      );
+    }
+    if (!completionHandler) {
+      return rejected(
+        "organization.discovered requires a discovery completion handler. No completion handler was supplied to the catalog.",
+      );
+    }
+    return completionHandler(event);
+  };
+}
+
 function rejected(message: string): BusinessEventHandlerOutcome {
   return {
     status: "rejected",
@@ -274,6 +314,7 @@ export function createBusinessEventCatalog(
     readonly "organization.created": BusinessEventHandler;
     readonly "organization.provisioned": BusinessEventHandler;
     readonly "organization.discovery_requested": BusinessEventHandler;
+    readonly "organization.discovered": BusinessEventHandler;
   }>,
 ): BusinessEventCatalog {
   const catalog = new BusinessEventCatalog();
@@ -293,6 +334,12 @@ export function createBusinessEventCatalog(
     catalog.register(
       "organization.discovery_requested",
       handlers["organization.discovery_requested"],
+    );
+  }
+  if (handlers?.["organization.discovered"]) {
+    catalog.register(
+      "organization.discovered",
+      handlers["organization.discovered"],
     );
   }
   return catalog;
@@ -320,6 +367,7 @@ export function buildCanonicalCatalog(
     .register(
       "organization.discovery_requested",
       handlers["organization.discovery_requested"],
-    );
+    )
+    .register("organization.discovered", handlers["organization.discovered"]);
   return { catalog, handlers };
 }

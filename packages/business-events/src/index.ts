@@ -8,6 +8,7 @@ export {
   type OrganizationCreatedEvent,
   type OrganizationProvisionedEvent,
   type OrganizationDiscoveryRequestedEvent,
+  type OrganizationDiscoveredEvent,
   businessEventTypes,
   validateBusinessEvent,
   BusinessEventValidationError,
@@ -30,6 +31,7 @@ export {
   type BusinessEventHandlerContext,
   type BusinessEventHandlerOutcome,
   type BusinessEventPhase,
+  type DiscoveryCompletionHandler,
 } from "./catalog/business-event-catalog.js";
 
 export {
