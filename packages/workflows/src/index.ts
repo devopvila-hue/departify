@@ -47,3 +47,9 @@ export {
   DEPARTMENT_DELEGATION_WORKFLOW,
   DEPARTMENT_DELEGATION_WORKFLOW_ID,
 } from "./workflows/department-delegation.workflow.js";
+
+export {
+  buildFirstWorkWorkflow,
+  FIRST_WORK_WORKFLOW,
+  FIRST_WORK_WORKFLOW_ID,
+} from "./workflows/first-work.workflow.js";
