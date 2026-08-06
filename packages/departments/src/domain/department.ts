@@ -8,6 +8,7 @@ import {
   validateDepartmentId,
   validateDepartmentName,
   validateDepartmentStatus,
+  validateDiscoveryId,
   validateKnowledgeCollectionId,
   validateMemorySessionId,
   validateOrganizationId,
@@ -25,6 +26,7 @@ import type {
   DepartmentName,
   DepartmentSnapshot,
   DepartmentStatus,
+  DiscoveryId,
   KnowledgeCollectionId,
   MemorySessionId,
   ToolId,
@@ -51,6 +53,8 @@ export const departmentEventTypes = [
   "department.director_assigned",
   "department.workflow_attached",
   "department.workflow_detached",
+  "department.discovery_associated",
+  "department.discovery_dissociated",
 ] as const;
 
 export type DepartmentEventType = (typeof departmentEventTypes)[number];
@@ -133,6 +137,16 @@ export interface DepartmentWorkflowDetachedEvent extends DepartmentEventBase {
   readonly workflowId: string;
 }
 
+export interface DepartmentDiscoveryAssociatedEvent extends DepartmentEventBase {
+  readonly type: "department.discovery_associated";
+  readonly discoveryId: DiscoveryId;
+}
+
+export interface DepartmentDiscoveryDissociatedEvent extends DepartmentEventBase {
+  readonly type: "department.discovery_dissociated";
+  readonly discoveryId: DiscoveryId;
+}
+
 export type DepartmentEvent =
   | DepartmentCreatedEvent
   | DepartmentActivatedEvent
@@ -148,7 +162,9 @@ export type DepartmentEvent =
   | DepartmentMemoryDissociatedEvent
   | DepartmentDirectorAssignedEvent
   | DepartmentWorkflowAttachedEvent
-  | DepartmentWorkflowDetachedEvent;
+  | DepartmentWorkflowDetachedEvent
+  | DepartmentDiscoveryAssociatedEvent
+  | DepartmentDiscoveryDissociatedEvent;
 
 /**
  * Department aggregate. Composes references to existing components
@@ -184,6 +200,7 @@ export class Department {
       Set<string>
     >,
     private readonly workflowIds: Set<WorkflowId>,
+    private discoveryId: DiscoveryId | null,
     private status: DepartmentStatus,
     private readonly createdAt: Date,
     private updatedAt: Date,
@@ -223,6 +240,7 @@ export class Department {
         ["connected_application", new Set<string>()],
       ]),
       new Set<WorkflowId>(),
+      null,
       "draft",
       input.occurredAt ?? new Date(),
       input.occurredAt ?? new Date(),
@@ -279,6 +297,7 @@ export class Department {
       ),
       buildConnectionsByKind(snapshot.connections),
       new Set<WorkflowId>(snapshot.workflowIds),
+      snapshot.discoveryId ? validateDiscoveryId(snapshot.discoveryId) : null,
       validateDepartmentStatus(snapshot.status),
       snapshot.createdAt,
       snapshot.updatedAt,
@@ -368,6 +387,47 @@ export class Department {
       workflowId: validated,
       occurredAt,
     });
+  }
+
+  /**
+   * Associates the Business Discovery of the organization with this
+   * Department (Sprint 34). The Department only carries the reference; the
+   * authoritative report lives in `packages/business-discovery`.
+   */
+  associateDiscovery(discoveryId: DiscoveryId, occurredAt = new Date()): void {
+    this.assertMutable();
+    const validated = validateDiscoveryId(discoveryId);
+    if (this.discoveryId === validated) {
+      return;
+    }
+    this.discoveryId = validated;
+    this.touch();
+    this.record({
+      type: "department.discovery_associated",
+      departmentId: this.id,
+      discoveryId: validated,
+      occurredAt,
+    });
+  }
+
+  disassociateDiscovery(occurredAt = new Date()): void {
+    this.assertMutable();
+    if (this.discoveryId === null) {
+      return;
+    }
+    const previous = this.discoveryId;
+    this.discoveryId = null;
+    this.touch();
+    this.record({
+      type: "department.discovery_dissociated",
+      departmentId: this.id,
+      discoveryId: previous,
+      occurredAt,
+    });
+  }
+
+  getDiscoveryId(): DiscoveryId | null {
+    return this.discoveryId;
   }
 
   getMetrics(): DepartmentMetricsSnapshot {
@@ -594,6 +654,7 @@ export class Department {
       status: this.status,
       metrics: this.getMetrics(),
       workflowIds: this.listWorkflows(),
+      ...(this.discoveryId ? { discoveryId: this.discoveryId } : {}),
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
     };

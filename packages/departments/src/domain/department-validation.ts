@@ -10,6 +10,7 @@ import {
   type DepartmentName,
   type DepartmentSnapshot,
   type DepartmentStatus,
+  type DiscoveryId,
   type KnowledgeCollectionId,
   type MemorySessionId,
   type ToolId,
@@ -139,6 +140,10 @@ export function validateKnowledgeCollectionId(
 
 export function validateMemorySessionId(value: unknown): MemorySessionId {
   return validateAgentId(value, "Memory session id");
+}
+
+export function validateDiscoveryId(value: unknown): DiscoveryId {
+  return validateAgentId(value, "Discovery id");
 }
 
 export function validateConnections(

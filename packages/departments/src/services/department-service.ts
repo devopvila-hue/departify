@@ -7,6 +7,7 @@ import type {
   AgentId,
   DepartmentId,
   DepartmentSnapshot,
+  DiscoveryId,
   KnowledgeCollectionId,
   MemorySessionId,
   ToolId,
@@ -171,6 +172,22 @@ export class DepartmentService {
 
   listWorkflows(departmentId: DepartmentId): readonly WorkflowId[] {
     return this.get(departmentId).listWorkflows();
+  }
+
+  associateDiscovery(departmentId: DepartmentId, discoveryId: DiscoveryId): Department {
+    const department = this.get(departmentId);
+    department.associateDiscovery(discoveryId);
+    return department;
+  }
+
+  disassociateDiscovery(departmentId: DepartmentId): Department {
+    const department = this.get(departmentId);
+    department.disassociateDiscovery();
+    return department;
+  }
+
+  getDiscoveryId(departmentId: DepartmentId): DiscoveryId | null {
+    return this.get(departmentId).getDiscoveryId();
   }
 }
 

@@ -18,6 +18,7 @@ export type KnowledgeCollectionId = string;
 export type MemorySessionId = string;
 export type ToolId = string;
 export type ConnectedApplicationId = string;
+export type DiscoveryId = string;
 
 /**
  * Basic metrics captured by the Department aggregate. These are computed
@@ -85,6 +86,12 @@ export interface DepartmentSnapshot {
   readonly status: DepartmentStatus;
   readonly metrics: DepartmentMetricsSnapshot;
   readonly workflowIds: readonly WorkflowId[];
+  /**
+   * Optional reference to the Business Discovery of the organization
+   * (Sprint 34). The Department only carries the reference; the
+   * authoritative report state lives in `packages/business-discovery`.
+   */
+  readonly discoveryId?: DiscoveryId;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

@@ -120,6 +120,34 @@ describe("Department aggregate", () => {
     expect(() => department.rename("Renamed")).toThrow(/archived/i);
     expect(() => department.addEmployee("agent_alice")).toThrow(/archived/i);
   });
+
+  it("associates and dissociates the discovery reference with events", () => {
+    const department = createBaseDepartment();
+    expect(department.getDiscoveryId()).toBeNull();
+
+    department.associateDiscovery("disc_session_001");
+    expect(department.getDiscoveryId()).toBe("disc_session_001");
+    expect(department.toSnapshot().discoveryId).toBe("disc_session_001");
+
+    // Idempotent.
+    department.associateDiscovery("disc_session_001");
+    expect(department.getDiscoveryId()).toBe("disc_session_001");
+
+    department.disassociateDiscovery();
+    expect(department.getDiscoveryId()).toBeNull();
+    expect(department.toSnapshot().discoveryId).toBeUndefined();
+
+    const events = department.pullDepartmentEvents();
+    const discoveryEvents = events.filter(
+      (event) =>
+        event.type === "department.discovery_associated" ||
+        event.type === "department.discovery_dissociated",
+    );
+    expect(discoveryEvents.map((event) => event.type)).toEqual([
+      "department.discovery_associated",
+      "department.discovery_dissociated",
+    ]);
+  });
 });
 
 describe("Department event types", () => {
@@ -134,5 +162,11 @@ describe("Department event types", () => {
     expect(departmentEventTypes).toContain("department.knowledge_associated");
     expect(departmentEventTypes).toContain("department.memory_associated");
     expect(departmentEventTypes).toContain("department.director_assigned");
+    expect(departmentEventTypes).toContain(
+      "department.discovery_associated",
+    );
+    expect(departmentEventTypes).toContain(
+      "department.discovery_dissociated",
+    );
   });
 });

@@ -110,4 +110,25 @@ describe("DepartmentService", () => {
     const service = createDepartmentService();
     expect(() => service.get("dep_unknown")).toThrow(/not registered/i);
   });
+
+  it("supports associating and dissociating the discovery reference", () => {
+    const service = createDepartmentService();
+    service.create(makeBaseInput());
+
+    expect(service.getDiscoveryId("dep_comercial")).toBeNull();
+
+    service.associateDiscovery("dep_comercial", "disc_session_001");
+    expect(service.getDiscoveryId("dep_comercial")).toBe("disc_session_001");
+
+    const snapshot = service.get("dep_comercial").toSnapshot();
+    expect(snapshot.discoveryId).toBe("disc_session_001");
+
+    // Associating the same discovery is idempotent.
+    service.associateDiscovery("dep_comercial", "disc_session_001");
+    expect(service.getDiscoveryId("dep_comercial")).toBe("disc_session_001");
+
+    service.disassociateDiscovery("dep_comercial");
+    expect(service.getDiscoveryId("dep_comercial")).toBeNull();
+    expect(service.get("dep_comercial").toSnapshot().discoveryId).toBeUndefined();
+  });
 });
