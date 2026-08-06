@@ -404,6 +404,9 @@ importers:
       '@departify/agent-tool-bridge':
         specifier: workspace:*
         version: link:../agent-tool-bridge
+      '@departify/business-discovery':
+        specifier: workspace:*
+        version: link:../business-discovery
       '@departify/executive-director':
         specifier: workspace:*
         version: link:../executive-director
@@ -417,9 +420,6 @@ importers:
         specifier: workspace:*
         version: link:../tool-runtime
     devDependencies:
-      '@departify/business-discovery':
-        specifier: workspace:*
-        version: link:../business-discovery
       '@eslint/js':
         specifier: ^9.17.0
         version: 9.39.5

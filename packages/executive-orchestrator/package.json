@@ -19,13 +19,13 @@
   "dependencies": {
     "@departify/agent-tool-bridge": "workspace:*",
     "@departify/agent-runtime": "workspace:*",
+    "@departify/business-discovery": "workspace:*",
     "@departify/executive-director": "workspace:*",
     "@departify/organization-domain": "workspace:*",
     "@departify/tool-catalog": "workspace:*",
     "@departify/tool-runtime": "workspace:*"
   },
   "devDependencies": {
-    "@departify/business-discovery": "workspace:*",
     "@eslint/js": "^9.17.0",
     "@types/node": "^22.10.2",
     "eslint": "^9.17.0",

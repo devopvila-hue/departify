@@ -3,7 +3,7 @@ import {
   AgentToolRuntimeAdapter,
   buildAgentPermissionSetResolver,
 } from "@departify/agent-tool-bridge";
-import { buildEmptyCompanyDNA } from "@departify/business-discovery";
+import { BusinessDiscoveryService, buildEmptyCompanyDNA } from "@departify/business-discovery";
 import { ExecutiveDirector } from "@departify/executive-director";
 import { Organization } from "@departify/organization-domain";
 import {
@@ -17,6 +17,7 @@ import {
 } from "@departify/tool-catalog";
 import {
   createExecutiveOrchestrator,
+  createExecutiveDiscoveryWorkflow,
   type OrchestratorIntent,
 } from "../../src/index.js";
 
@@ -329,6 +330,83 @@ describe("Executive Director ↔ Tool Runtime end-to-end orchestration", () => {
 
     expect(result.tool.status).toBe("rejected");
     expect(result.error?.phase).toBe("bridge");
+  });
+
+  it("runs the Executive Discovery Workflow end-to-end with real runtimes", async () => {
+    const catalogContext: CoreCatalogContext = {};
+    const toolRegistry = new ToolRuntimeRegistry();
+    registerAllCoreTools(toolRegistry, catalogContext);
+
+    const runtime = createToolRuntime({
+      grantedScopes: ["read.public", "read.private"],
+    });
+    for (const entry of toolRegistry.list()) {
+      runtime.registry.register(entry.definition);
+      runtime.registry.setStatus(entry.definition.id, "active");
+    }
+
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register({
+      id: "agent.executive",
+      organizationId: "org_departify",
+      displayName: "Executive Agent",
+      role: "orchestrator",
+    });
+
+    const permissions = new Map([
+      [
+        "agent.executive",
+        [
+          {
+            scope: "runtime" as const,
+            action: "manage" as const,
+            resource: "*",
+          },
+        ],
+      ],
+    ]);
+
+    const bridge = new AgentToolRuntimeAdapter({
+      runtime,
+      fetchPermissionSet: buildAgentPermissionSetResolver(permissions),
+    });
+
+    const orchestrator = createExecutiveOrchestrator({
+      director: new ExecutiveDirector(),
+      bridge,
+    });
+
+    const workflow = createExecutiveDiscoveryWorkflow({
+      discoveryService: new BusinessDiscoveryService({
+        sessionIdGenerator: () => "session_workflow_e2e",
+      }),
+      orchestrator,
+      executionIdFactory: () => "exe_disc_e2e_001",
+    });
+
+    const result = await workflow.run({
+      organizationId: "org_departify",
+      requestedBy: "tester",
+      options: {
+        includeFounderBrain: true,
+        includeCompetitorAnalysis: false,
+        includeMarketAnalysis: false,
+        depth: "standard",
+      },
+    });
+
+    expect(result.status).toBe("completed");
+    if (result.status !== "completed") return;
+    expect(result.workflowId).toBe("wf_executive_discovery");
+    expect(result.executionId).toBe("exe_disc_e2e_001");
+    expect(result.report.organizationId).toBe("org_departify");
+    expect(result.report.companyDna).toBeDefined();
+    expect(result.report.founderBrain).toBeDefined();
+    expect(result.report.gaps.length).toBeGreaterThan(0);
+    expect(result.report.questions.length).toBeGreaterThan(0);
+    expect(result.orchestration.tool.toolId).toBe("discovery.analyze");
+    expect(result.orchestration.tool.status).toBe("completed");
+    expect(result.discovery.status).toBe("completed");
   });
 
   it("exposes the canonical catalog ids used by the orchestrator", () => {

@@ -29,3 +29,11 @@ export {
   createExecutiveOrchestrator,
   type CreateOrchestratorOptions,
 } from "./orchestrator.js";
+
+export {
+  ExecutiveDiscoveryWorkflow,
+  createExecutiveDiscoveryWorkflow,
+  type ExecutiveDiscoveryWorkflowInput,
+  type ExecutiveDiscoveryWorkflowOptions,
+  type ExecutiveDiscoveryWorkflowResult,
+} from "./workflows/executive-discovery-workflow.js";
