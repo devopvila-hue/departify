@@ -60,3 +60,10 @@ export {
   type DiscoveryGetOutput,
   type DiscoveryGetToolOptions,
 } from "./tools/discovery-get-tool.js";
+
+export {
+  createDiscoveryReadinessToolDefinition,
+  type DiscoveryReadinessInput,
+  type DiscoveryReadinessOutput,
+  type DiscoveryReadinessToolOptions,
+} from "./tools/discovery-readiness-tool.js";

@@ -11,6 +11,11 @@ import {
   type DiscoveryGetOutput,
 } from "../tools/discovery-get-tool.js";
 import {
+  createDiscoveryReadinessToolDefinition,
+  type DiscoveryReadinessInput,
+  type DiscoveryReadinessOutput,
+} from "../tools/discovery-readiness-tool.js";
+import {
   createKnowledgeSearchToolDefinition,
   type KnowledgeSearchInput,
   type KnowledgeSearchOutput,
@@ -64,6 +69,7 @@ export const CORE_CATALOG_IDS = [
   "system.health",
   "discovery.analyze",
   "discovery.get",
+  "discovery.readiness",
 ] as const;
 
 export type CoreCatalogId = (typeof CORE_CATALOG_IDS)[number];
@@ -87,6 +93,11 @@ export function buildCoreCatalog(
   if (context.discoveryRepository) {
     catalog.push(
       createDiscoveryGetToolDefinition({
+        repository: context.discoveryRepository,
+      }) as unknown as ToolDefinition,
+    );
+    catalog.push(
+      createDiscoveryReadinessToolDefinition({
         repository: context.discoveryRepository,
       }) as unknown as ToolDefinition,
     );
@@ -202,4 +213,6 @@ export type {
   DiscoveryAnalyzeOutput,
   DiscoveryGetInput,
   DiscoveryGetOutput,
+  DiscoveryReadinessInput,
+  DiscoveryReadinessOutput,
 };
