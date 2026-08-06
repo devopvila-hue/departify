@@ -83,3 +83,10 @@ export {
   type DiscoveryDelegateOutput,
   type DiscoveryDelegateToolOptions,
 } from "./tools/discovery-delegate-tool.js";
+
+export {
+  createDiscoverySummaryToolDefinition,
+  type DiscoverySummaryInput,
+  type DiscoverySummaryOutput,
+  type DiscoverySummaryToolOptions,
+} from "./tools/discovery-summary-tool.js";

@@ -53,3 +53,9 @@ export {
   FIRST_WORK_WORKFLOW,
   FIRST_WORK_WORKFLOW_ID,
 } from "./workflows/first-work.workflow.js";
+
+export {
+  buildFirstResultWorkflow,
+  FIRST_RESULT_WORKFLOW,
+  FIRST_RESULT_WORKFLOW_ID,
+} from "./workflows/first-result.workflow.js";
