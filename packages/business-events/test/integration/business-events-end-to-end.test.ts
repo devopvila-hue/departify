@@ -10,7 +10,10 @@ import {
 import { registerAllCoreTools } from "@departify/tool-catalog";
 import { WorkflowExecution } from "@departify/workflows";
 import { createDepartmentService } from "@departify/departments";
-import { BusinessDiscoveryService } from "@departify/business-discovery";
+import {
+  BusinessDiscoveryService,
+  createInMemoryDiscoveryReportRepository,
+} from "@departify/business-discovery";
 import { ExecutiveDirector } from "@departify/executive-director";
 import {
   createExecutiveDiscoveryWorkflow,
@@ -337,5 +340,91 @@ describe("BusinessEvent end-to-end integration", () => {
     expect(
       departmentService.get("dep_comercial").toSnapshot().discoveryId,
     ).toBe("exe_disc_assoc_001");
+  });
+
+  it("runs the discovery workflow automatically on organization.provisioned", async () => {
+    // Real composition: provisioning handler + Executive Discovery Workflow
+    // (Sprint 31) with a real BusinessDiscoveryService, ExecutiveOrchestrator,
+    // AgentToolBridge, Tool Runtime, Core Tool Catalog and a report repository.
+    const reportRepository = createInMemoryDiscoveryReportRepository();
+
+    const toolRegistry = new ToolRuntimeRegistry();
+    registerAllCoreTools(toolRegistry, {});
+    const runtime = createToolRuntime({
+      grantedScopes: ["read.public", "read.private"],
+    });
+    for (const entry of toolRegistry.list()) {
+      runtime.registry.register(entry.definition);
+      runtime.registry.setStatus(entry.definition.id, "active");
+    }
+
+    const port: AgentToolPort = new AgentToolRuntimeAdapter({
+      runtime,
+      fetchPermissionSet: buildAgentPermissionSetResolver(
+        new Map([
+          [
+            "agent.executive",
+            [
+              {
+                scope: "runtime" as const,
+                action: "manage" as const,
+                resource: "*",
+              },
+            ],
+          ],
+        ]),
+      ),
+    });
+
+    const orchestrator = createExecutiveOrchestrator({
+      director: new ExecutiveDirector(),
+      bridge: port,
+    });
+
+    const discoveryWorkflow = createExecutiveDiscoveryWorkflow({
+      discoveryService: new BusinessDiscoveryService({
+        sessionIdGenerator: () => "session_provisioned_auto",
+      }),
+      orchestrator,
+      executionIdFactory: () => "exe_disc_provisioned_auto",
+      reportRepository,
+    });
+
+    const executor = new WorkflowExecution({ port });
+    const { catalog } = buildCanonicalCatalog({
+      port,
+      workflowExecutor: executor,
+      discoveryWorkflow,
+      provisioningHandler: async (event) => ({
+        status: "completed",
+        output: { organizationId: event.organizationId },
+        errors: [],
+        provisioningId:
+          event.type === "organization.provisioned"
+            ? event.provisioningId
+            : "prv_auto",
+      }),
+    });
+    const service = new BusinessEventService({ catalog });
+
+    const event: BusinessEvent = {
+      eventId: "evt_e2e_provisioned_auto",
+      type: "organization.provisioned",
+      occurredAt: new Date(),
+      organizationId: "org_departify",
+      workspaceId: "wsp_default",
+      provisioningId: "prv_auto_001",
+      payload: {},
+    };
+
+    const result = await service.publish(event);
+
+    expect(result.status).toBe("completed");
+    expect(result.workflowId).toBe("wf_executive_discovery");
+    expect(result.executionId).toBe("exe_disc_provisioned_auto");
+    const stored = reportRepository.findById("exe_disc_provisioned_auto");
+    expect(stored).not.toBeNull();
+    expect(stored?.organizationId).toBe("org_departify");
+    expect(stored?.report.gaps.length).toBeGreaterThan(0);
   });
 });

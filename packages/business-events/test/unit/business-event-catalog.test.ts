@@ -5,6 +5,7 @@ import type {
 } from "@departify/agent-tool-bridge";
 import { WorkflowExecution } from "@departify/workflows";
 import { createDepartmentService } from "@departify/departments";
+import type { ExecutiveDiscoveryWorkflow } from "@departify/executive-orchestrator";
 import {
   BusinessEventCatalog,
   buildCanonicalCatalog,
@@ -388,5 +389,158 @@ describe("BusinessEventCatalog", () => {
     expect(
       (outcome.output as { associatedCount: number }).associatedCount,
     ).toBe(0);
+  });
+
+  it("runs the discovery workflow automatically after a successful provisioning", async () => {
+    const port = new SuccessAgentToolPort();
+    const executor = new WorkflowExecution({ port });
+    const discoveryWorkflow = {
+      run: async () => ({
+        status: "completed" as const,
+        workflowId: "wf_executive_discovery",
+        executionId: "exe_disc_auto_001",
+        report: { organizationId: "org_demo" },
+        orchestration: null,
+        discovery: { status: "completed" },
+        startedAt: "2026-08-06T10:00:00Z",
+        completedAt: "2026-08-06T10:00:01Z",
+        durationMs: 1000,
+        error: null,
+      }),
+    } as unknown as ExecutiveDiscoveryWorkflow;
+
+    const handlers = buildDefaultCatalogHandlers({
+      port,
+      workflowExecutor: executor,
+      discoveryWorkflow,
+      provisioningHandler: async (event) => ({
+        status: "completed",
+        output: { organizationId: event.organizationId },
+        errors: [],
+        provisioningId: "prv_auto_001",
+      }),
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_provisioned_auto",
+      type: "organization.provisioned",
+      occurredAt: new Date(),
+      organizationId: "org_demo",
+      workspaceId: "wsp_demo",
+      provisioningId: "prv_auto_001",
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers[
+      "organization.provisioned"
+    ](event, {
+      now: () => new Date(),
+      eventId: () => "evt",
+      workflowId: () => "wf",
+      executionId: () => "wf_exec",
+    });
+
+    expect(outcome.status).toBe("completed");
+    expect(outcome.workflowId).toBe("wf_executive_discovery");
+    expect(outcome.executionId).toBe("exe_disc_auto_001");
+    const output = outcome.output as {
+      activation: { organizationId: string };
+      discovery: { workflowId: string };
+    };
+    expect(output.activation.organizationId).toBe("org_demo");
+    expect(output.discovery.workflowId).toBe("wf_executive_discovery");
+  });
+
+  it("does not run discovery when no discovery workflow is wired", async () => {
+    const port = new SuccessAgentToolPort();
+    const executor = new WorkflowExecution({ port });
+
+    const handlers = buildDefaultCatalogHandlers({
+      port,
+      workflowExecutor: executor,
+      provisioningHandler: async (event) => ({
+        status: "completed",
+        output: { organizationId: event.organizationId },
+        errors: [],
+        provisioningId: "prv_manual_001",
+      }),
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_provisioned_manual",
+      type: "organization.provisioned",
+      occurredAt: new Date(),
+      organizationId: "org_demo",
+      workspaceId: "wsp_demo",
+      provisioningId: "prv_manual_001",
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers[
+      "organization.provisioned"
+    ](event, {
+      now: () => new Date(),
+      eventId: () => "evt",
+      workflowId: () => "wf",
+      executionId: () => "wf_exec",
+    });
+
+    expect(outcome.status).toBe("completed");
+    // The output shape stays the provisioning result only (retro-compatible).
+    expect((outcome.output as { organizationId: string }).organizationId).toBe(
+      "org_demo",
+    );
+    expect(outcome.workflowId).toBeUndefined();
+    expect(outcome.executionId).toBeUndefined();
+  });
+
+  it("does not run discovery when provisioning fails", async () => {
+    const port = new SuccessAgentToolPort();
+    const executor = new WorkflowExecution({ port });
+    const discoveryWorkflow = {
+      run: async () => {
+        throw new Error("must not run");
+      },
+    } as unknown as ExecutiveDiscoveryWorkflow;
+
+    const handlers = buildDefaultCatalogHandlers({
+      port,
+      workflowExecutor: executor,
+      discoveryWorkflow,
+      provisioningHandler: async () => ({
+        status: "failed",
+        output: null,
+        errors: [
+          {
+            code: "provisioning_failed",
+            message: "provisioning exploded",
+            phase: "execution",
+          },
+        ],
+        provisioningId: "prv_fail_001",
+      }),
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_provisioned_fail",
+      type: "organization.provisioned",
+      occurredAt: new Date(),
+      organizationId: "org_demo",
+      workspaceId: "wsp_demo",
+      provisioningId: "prv_fail_001",
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers[
+      "organization.provisioned"
+    ](event, {
+      now: () => new Date(),
+      eventId: () => "evt",
+      workflowId: () => "wf",
+      executionId: () => "wf_exec",
+    });
+
+    expect(outcome.status).toBe("failed");
+    expect(outcome.errors[0]?.code).toBe("provisioning_failed");
   });
 });

@@ -101,6 +101,7 @@ export function buildDefaultCatalogHandlers(options: {
     ),
     "organization.provisioned": createOrganizationProvisionedHandler(
       options.provisioningHandler,
+      options.discoveryWorkflow,
     ),
     "organization.discovery_requested": createOrganizationDiscoveryRequestedHandler(
       options.discoveryWorkflow,
@@ -158,14 +159,70 @@ function createOrganizationProvisionedHandler(
   provisioningHandler:
     | ((event: BusinessEvent) => Promise<BusinessEventHandlerOutcome>)
     | undefined,
+  discoveryWorkflow: ExecutiveDiscoveryWorkflow | undefined,
 ): BusinessEventHandler {
   return async (event) => {
+    if (event.type !== "organization.provisioned") {
+      return rejected(
+        "organization.provisioned handler invoked for non provisioning event",
+      );
+    }
     if (!provisioningHandler) {
       return rejected(
         "organization.provisioned requires a provisioning handler. No provisioning handler was supplied to the catalog.",
       );
     }
-    return provisioningHandler(event);
+
+    const activation = await provisioningHandler(event);
+    if (activation.status === "rejected" || activation.status === "failed") {
+      // A failed activation means the Empresa Digital was not created —
+      // there is nothing to discover yet.
+      return activation;
+    }
+
+    // Sprint 38 — automatic discovery: once the Empresa Digital is created,
+    // run the Executive Discovery Workflow (Sprint 31) when the host wired
+    // one. The resulting report (Sprint 36) and its association to the
+    // Department (Sprint 35) complete the end-to-end flow without a manual
+    // `organization.discovery_requested`.
+    if (!discoveryWorkflow) {
+      return activation;
+    }
+
+    const discovery: ExecutiveDiscoveryWorkflowResult =
+      await discoveryWorkflow.run({
+        organizationId: event.organizationId,
+        requestedBy: "system",
+        options: {
+          includeFounderBrain: true,
+          includeCompetitorAnalysis: false,
+          includeMarketAnalysis: false,
+          depth: "standard",
+        },
+      });
+
+    if (discovery.status === "failed") {
+      return {
+        status: "failed",
+        output: { activation: activation.output, discovery },
+        errors: [
+          {
+            code: discovery.error.code,
+            message: discovery.error.message,
+            phase: "execution",
+          },
+        ],
+        workflowId: discovery.workflowId,
+        executionId: discovery.executionId,
+      };
+    }
+
+    return {
+      ...activation,
+      output: { activation: activation.output, discovery },
+      workflowId: discovery.workflowId,
+      executionId: discovery.executionId,
+    };
   };
 }
 
