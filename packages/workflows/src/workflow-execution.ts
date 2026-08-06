@@ -11,6 +11,10 @@ import {
   type WorkflowStepContextMapping,
   type WorkflowStepResult,
 } from "./workflow-types.js";
+import {
+  toWorkResultRecord,
+  type WorkResultRepository,
+} from "./persistence/work-result-repository.js";
 
 /**
  * WorkflowExecution — deterministic executor for `WorkflowDefinition`.
@@ -26,6 +30,19 @@ export interface WorkflowExecutionOptions {
   readonly signal?: AbortSignal;
   readonly clock?: () => Date;
   readonly executionIdFactory?: () => WorkflowExecutionId;
+  /**
+   * Optional repository (Sprint 46) that persists completed work results.
+   * When wired, every completed run stores its `WorkResultRecord` so the
+   * finished work of the Department is recoverable. Without it the run
+   * still returns the result — it is simply not persisted.
+   */
+  readonly workResultRepository?: WorkResultRepository;
+  /**
+   * Organization the executed work belongs to. Required when a
+   * `workResultRepository` is wired so the record can be keyed by
+   * organization.
+   */
+  readonly organizationId?: string;
 }
 
 export class WorkflowExecution {
@@ -33,6 +50,8 @@ export class WorkflowExecution {
   private readonly signal: AbortSignal | undefined;
   private readonly clock: () => Date;
   private readonly executionIdFactory: () => WorkflowExecutionId;
+  private readonly workResultRepository: WorkResultRepository | undefined;
+  private readonly organizationId: string | undefined;
 
   constructor(options: WorkflowExecutionOptions) {
     this.port = options.port;
@@ -42,6 +61,8 @@ export class WorkflowExecution {
       options.executionIdFactory ??
       (() =>
         `wfe_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`);
+    this.workResultRepository = options.workResultRepository;
+    this.organizationId = options.organizationId;
   }
 
   async run(definition: WorkflowDefinition): Promise<WorkflowResult> {
@@ -53,7 +74,7 @@ export class WorkflowExecution {
       if (this.signal?.aborted) {
         const cancelledResult = this.buildCancelledResult(step);
         stepResults.push(cancelledResult);
-        return this.buildOverallResult(
+        return this.finish(
           definition,
           "cancelled",
           startedAt,
@@ -78,7 +99,7 @@ export class WorkflowExecution {
         const finalOutput = stepResults.find(
           (result) => result.status === "completed",
         )?.output;
-        return this.buildOverallResult(
+        return this.finish(
           definition,
           firstFailure?.status === "cancelled" ? "cancelled" : "failed",
           startedAt,
@@ -91,7 +112,7 @@ export class WorkflowExecution {
       previousResult = stepResult;
     }
 
-    return this.buildOverallResult(
+    return this.finish(
       definition,
       "completed",
       startedAt,
@@ -99,6 +120,41 @@ export class WorkflowExecution {
       null,
       previousResult?.output,
     );
+  }
+
+  /**
+   * Builds the overall result and, when the run completed with a repository
+   * and an organization wired (Sprint 46), persists the finished work so it
+   * is recoverable by the Empresa Digital.
+   */
+  private finish(
+    definition: WorkflowDefinition,
+    status: WorkflowStatus,
+    startedAt: Date,
+    steps: readonly WorkflowStepResult[],
+    error: WorkflowResult["error"],
+    finalOutput: unknown,
+  ): WorkflowResult {
+    const result = this.buildOverallResult(
+      definition,
+      status,
+      startedAt,
+      steps,
+      error,
+      finalOutput,
+    );
+
+    if (
+      result.status === "completed" &&
+      this.workResultRepository &&
+      this.organizationId
+    ) {
+      this.workResultRepository.save(
+        toWorkResultRecord(result, this.organizationId),
+      );
+    }
+
+    return result;
   }
 
   private async executeStep(

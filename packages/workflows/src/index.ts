@@ -19,6 +19,15 @@ export { WorkflowBuilder } from "./builder/workflow-builder.js";
 export { WorkflowExecution } from "./workflow-execution.js";
 
 export {
+  InMemoryWorkResultRepository,
+  createInMemoryWorkResultRepository,
+  toWorkResultRecord,
+  type WorkOrganizationId,
+  type WorkResultRecord,
+  type WorkResultRepository,
+} from "./persistence/work-result-repository.js";
+
+export {
   buildLeadQualificationWorkflow,
   LEAD_QUALIFICATION_WORKFLOW,
   LEAD_QUALIFICATION_WORKFLOW_ID,

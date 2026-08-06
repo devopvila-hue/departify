@@ -2,6 +2,7 @@ import {
   buildLeadQualificationWorkflow,
   LEAD_QUALIFICATION_WORKFLOW_ID,
   WorkflowExecution,
+  createInMemoryWorkResultRepository,
 } from "../../src/index.js";
 import type {
   AgentToolAction,
@@ -81,5 +82,36 @@ describe("Lead Qualification Workflow execution", () => {
     expect(result.startedAt).toBeTruthy();
     expect(result.completedAt).toBeTruthy();
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("persists the completed result when a repository is wired", async () => {
+    const port = new SuccessAgentToolPort();
+    const repository = createInMemoryWorkResultRepository();
+    const execution = new WorkflowExecution({
+      port,
+      workResultRepository: repository,
+      organizationId: "org_departify",
+      executionIdFactory: () => "wfe_persist_001",
+    });
+
+    const result = await execution.run(buildLeadQualificationWorkflow());
+
+    expect(result.status).toBe("completed");
+    const stored = repository.findById("wfe_persist_001");
+    expect(stored).not.toBeNull();
+    expect(stored?.organizationId).toBe("org_departify");
+    expect(stored?.workflowId).toBe(LEAD_QUALIFICATION_WORKFLOW_ID);
+    expect(stored?.finalOutput).toEqual(
+      expect.objectContaining({ uuid: expect.any(String) }),
+    );
+  });
+
+  it("does not fail when no work result repository is wired", async () => {
+    const port = new SuccessAgentToolPort();
+    const execution = new WorkflowExecution({ port });
+
+    const result = await execution.run(buildLeadQualificationWorkflow());
+
+    expect(result.status).toBe("completed");
   });
 });

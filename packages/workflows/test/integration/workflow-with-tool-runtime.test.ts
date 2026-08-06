@@ -19,6 +19,7 @@ import {
   buildFirstWorkWorkflow,
   buildFirstResultWorkflow,
   buildLeadQualificationWorkflow,
+  createInMemoryWorkResultRepository,
   WorkflowExecution,
 } from "../../src/index.js";
 import type { AgentToolPort } from "@departify/agent-tool-bridge";
@@ -715,5 +716,107 @@ describe("Business Briefing Workflow integration with Tool Runtime", () => {
     expect(output.criticalGapCount).toBe(1);
     expect(output.blockingGapCount).toBe(1);
     expect(output.questionCount).toBe(1);
+  });
+
+  it("persists the first useful result so the Department can consult it", async () => {
+    // Seed a report with a gap.
+    const repository = createInMemoryDiscoveryReportRepository();
+    const report: CompanyDiscoveryReport = {
+      organizationId: "org_departify",
+      sessionId: "session_persist_result",
+      metadata: {
+        sessionId: "session_persist_result",
+        startedAt: new Date("2026-08-06T10:00:00Z"),
+        completedAt: new Date("2026-08-06T10:00:01Z"),
+        durationMs: 1000,
+        sources: [],
+        dataPoints: 0,
+        questionsAsked: 0,
+        questionsAnswered: 0,
+      },
+      companyDna: {
+        organizationId: "org_departify",
+      } as unknown as CompanyDiscoveryReport["companyDna"],
+      findings: [],
+      gaps: [
+        {
+          id: "gap_mission",
+          category: "mission",
+          description: "Missing mission",
+          importance: "critical",
+          blockingAction: true,
+        },
+      ],
+      questions: [],
+      confidence: {
+        overall: "low",
+        companyDna: 0,
+        founderBrain: 0,
+        breakdown: {} as CompanyDiscoveryReport["confidence"]["breakdown"],
+      },
+      generatedAt: new Date("2026-08-06T10:00:01Z"),
+    };
+    repository.save({
+      executionId: "exe_disc_persist_001",
+      sessionId: "session_persist_result",
+      organizationId: "org_departify",
+      report,
+      savedAt: new Date("2026-08-06T10:00:02Z"),
+    });
+
+    const toolRegistry = new ToolRuntimeRegistry();
+    registerAllCoreTools(toolRegistry, { discoveryRepository: repository });
+    const runtime = createToolRuntime({
+      grantedScopes: ["read.public", "read.private"],
+    });
+    for (const entry of toolRegistry.list()) {
+      runtime.registry.register(entry.definition);
+      runtime.registry.setStatus(entry.definition.id, "active");
+    }
+
+    const permissions = new Map([
+      [
+        "agent_lead_qualifier",
+        [
+          {
+            scope: "runtime" as const,
+            action: "manage" as const,
+            resource: "discovery.summary",
+          },
+        ],
+      ],
+    ]);
+
+    const port: AgentToolPort = new AgentToolRuntimeAdapter({
+      runtime,
+      fetchPermissionSet: buildAgentPermissionSetResolver(permissions),
+    });
+
+    const workResults = createInMemoryWorkResultRepository();
+    const execution = new WorkflowExecution({
+      port,
+      workResultRepository: workResults,
+      organizationId: "org_departify",
+      executionIdFactory: () => "wfe_first_result_persist",
+    });
+
+    const result = await execution.run(
+      buildFirstResultWorkflow("org_departify", "agent_lead_qualifier"),
+    );
+
+    expect(result.status).toBe("completed");
+    const stored = workResults.findById("wfe_first_result_persist");
+    expect(stored).not.toBeNull();
+    expect(stored?.organizationId).toBe("org_departify");
+    expect(stored?.workflowId).toBe("wf_first_result");
+    const storedOutput = stored?.finalOutput as {
+      gapCount: number;
+      questionCount: number;
+    };
+    expect(storedOutput.gapCount).toBe(1);
+    expect(storedOutput.questionCount).toBe(0);
+    expect(
+      workResults.findByOrganizationId("org_departify"),
+    ).toHaveLength(1);
   });
 });
