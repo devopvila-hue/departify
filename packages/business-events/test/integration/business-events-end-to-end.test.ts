@@ -9,6 +9,7 @@ import {
 } from "@departify/tool-runtime";
 import { registerAllCoreTools } from "@departify/tool-catalog";
 import { WorkflowExecution } from "@departify/workflows";
+import { createDepartmentService } from "@departify/departments";
 import { BusinessDiscoveryService } from "@departify/business-discovery";
 import { ExecutiveDirector } from "@departify/executive-director";
 import {
@@ -283,5 +284,58 @@ describe("BusinessEvent end-to-end integration", () => {
     expect(result.errors).toEqual([]);
     expect(captured.event?.type).toBe("organization.discovered");
     expect(captured.event?.organizationId).toBe("org_departify");
+  });
+
+  it("associates the discovery to the organization's Department by default", async () => {
+    const departmentService = createDepartmentService();
+    departmentService.create({
+      id: "dep_comercial",
+      organizationId: "org_departify",
+      name: "Comercial",
+      description: "Sales department",
+      configuration: {
+        displayName: "Comercial",
+        description: "Sales",
+        tags: [],
+        metadata: {},
+      },
+    });
+    departmentService.activate("dep_comercial");
+
+    const port = {
+      executeAction: async () => {
+        throw new Error("bridge not used");
+      },
+    } as unknown as AgentToolPort;
+    const executor = new WorkflowExecution({ port });
+    const { catalog } = buildCanonicalCatalog({
+      port,
+      workflowExecutor: executor,
+      departmentService,
+    });
+    const service = new BusinessEventService({ catalog });
+
+    const event: BusinessEvent = {
+      eventId: "evt_e2e_assoc",
+      type: "organization.discovered",
+      occurredAt: new Date(),
+      organizationId: "org_departify",
+      sessionId: "session_assoc",
+      discoveryExecutionId: "exe_disc_assoc_001",
+      confidence: "low",
+      gapCount: 14,
+      questionCount: 20,
+      payload: {},
+    };
+
+    const result = await service.publish(event);
+
+    expect(result.status).toBe("completed");
+    expect(departmentService.getDiscoveryId("dep_comercial")).toBe(
+      "exe_disc_assoc_001",
+    );
+    expect(
+      departmentService.get("dep_comercial").toSnapshot().discoveryId,
+    ).toBe("exe_disc_assoc_001");
   });
 });

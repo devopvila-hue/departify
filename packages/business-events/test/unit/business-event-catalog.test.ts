@@ -4,6 +4,7 @@ import type {
   AgentToolActionResult,
 } from "@departify/agent-tool-bridge";
 import { WorkflowExecution } from "@departify/workflows";
+import { createDepartmentService } from "@departify/departments";
 import {
   BusinessEventCatalog,
   buildCanonicalCatalog,
@@ -203,6 +204,189 @@ describe("BusinessEventCatalog", () => {
 
     expect(outcome.status).toBe("rejected");
     expect(outcome.errors[0]?.code).toBe("BUSINESS_EVENT_REJECTED");
-    expect(outcome.errors[0]?.message).toMatch(/completion handler/i);
+    expect(outcome.errors[0]?.message).toMatch(/completion handler|department service/i);
+  });
+
+  it("associates the discovery to the organization's departments by default", async () => {
+    const port = new SuccessAgentToolPort();
+    const executor = new WorkflowExecution({ port });
+    const departmentService = createDepartmentService();
+    departmentService.create({
+      id: "dep_comercial",
+      organizationId: "org_demo",
+      name: "Comercial",
+      description: "Sales department",
+      configuration: {
+        displayName: "Comercial",
+        description: "Sales",
+        tags: [],
+        metadata: {},
+      },
+    });
+    departmentService.activate("dep_comercial");
+    // An archived department of the same org must be skipped.
+    departmentService.create({
+      id: "dep_legacy",
+      organizationId: "org_demo",
+      name: "Legacy",
+      description: "Archived department",
+      configuration: {
+        displayName: "Legacy",
+        description: "Legacy",
+        tags: [],
+        metadata: {},
+      },
+    });
+    departmentService.archive("dep_legacy");
+    // A department of another org must be skipped.
+    departmentService.create({
+      id: "dep_other_org",
+      organizationId: "org_other",
+      name: "Other",
+      description: "Other org",
+      configuration: {
+        displayName: "Other",
+        description: "Other",
+        tags: [],
+        metadata: {},
+      },
+    });
+
+    const handlers = buildDefaultCatalogHandlers({
+      port,
+      workflowExecutor: executor,
+      departmentService,
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_disc_done_assoc",
+      type: "organization.discovered",
+      occurredAt: new Date(),
+      organizationId: "org_demo",
+      sessionId: "session_001",
+      discoveryExecutionId: "exe_disc_001",
+      confidence: "low",
+      gapCount: 14,
+      questionCount: 20,
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers[
+      "organization.discovered"
+    ](event, {
+      now: () => new Date(),
+      eventId: () => "evt",
+      workflowId: () => "wf",
+      executionId: () => "wf_exec",
+    });
+
+    expect(outcome.status).toBe("completed");
+    const output = outcome.output as {
+      associatedCount: number;
+      departmentIds: string[];
+    };
+    expect(output.associatedCount).toBe(1);
+    expect(output.departmentIds).toEqual(["dep_comercial"]);
+    expect(departmentService.getDiscoveryId("dep_comercial")).toBe(
+      "exe_disc_001",
+    );
+    expect(departmentService.getDiscoveryId("dep_legacy")).toBeNull();
+    expect(departmentService.getDiscoveryId("dep_other_org")).toBeNull();
+  });
+
+  it("prefers the host-supplied completion handler over the department service fallback", async () => {
+    const port = new SuccessAgentToolPort();
+    const executor = new WorkflowExecution({ port });
+    const departmentService = createDepartmentService();
+    departmentService.create({
+      id: "dep_comercial",
+      organizationId: "org_demo",
+      name: "Comercial",
+      description: "Sales department",
+      configuration: {
+        displayName: "Comercial",
+        description: "Sales",
+        tags: [],
+        metadata: {},
+      },
+    });
+
+    const handlers = buildDefaultCatalogHandlers({
+      port,
+      workflowExecutor: executor,
+      departmentService,
+      discoveryCompletionHandler: async () => ({
+        status: "completed",
+        output: { custom: true },
+        errors: [],
+        executionId: "custom_exe",
+      }),
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_disc_done_custom",
+      type: "organization.discovered",
+      occurredAt: new Date(),
+      organizationId: "org_demo",
+      sessionId: "session_001",
+      discoveryExecutionId: "exe_disc_001",
+      confidence: "low",
+      gapCount: 14,
+      questionCount: 20,
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers[
+      "organization.discovered"
+    ](event, {
+      now: () => new Date(),
+      eventId: () => "evt",
+      workflowId: () => "wf",
+      executionId: () => "wf_exec",
+    });
+
+    expect(outcome.status).toBe("completed");
+    expect((outcome.output as { custom: boolean }).custom).toBe(true);
+    // The fallback must NOT have run.
+    expect(departmentService.getDiscoveryId("dep_comercial")).toBeNull();
+  });
+
+  it("skips when the organization has no non-archived departments", async () => {
+    const port = new SuccessAgentToolPort();
+    const executor = new WorkflowExecution({ port });
+    const departmentService = createDepartmentService();
+
+    const handlers = buildDefaultCatalogHandlers({
+      port,
+      workflowExecutor: executor,
+      departmentService,
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_disc_done_empty",
+      type: "organization.discovered",
+      occurredAt: new Date(),
+      organizationId: "org_demo",
+      sessionId: "session_001",
+      discoveryExecutionId: "exe_disc_001",
+      confidence: "low",
+      gapCount: 14,
+      questionCount: 20,
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers[
+      "organization.discovered"
+    ](event, {
+      now: () => new Date(),
+      eventId: () => "evt",
+      workflowId: () => "wf",
+      executionId: () => "wf_exec",
+    });
+
+    expect(outcome.status).toBe("skipped");
+    expect(
+      (outcome.output as { associatedCount: number }).associatedCount,
+    ).toBe(0);
   });
 });

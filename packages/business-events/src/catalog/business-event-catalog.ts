@@ -1,4 +1,5 @@
 import type { AgentToolPort } from "@departify/agent-tool-bridge";
+import type { DepartmentService } from "@departify/departments";
 import {
   ExecutiveDiscoveryWorkflow,
   type ExecutiveDiscoveryWorkflowResult,
@@ -81,6 +82,11 @@ export function buildDefaultCatalogHandlers(options: {
   // The discovery completion handler is optional — hosts that don't react
   // to the `organization.discovered` fact get a controlled rejection.
   discoveryCompletionHandler?: DiscoveryCompletionHandler;
+  // The Department service is optional — when no `discoveryCompletionHandler`
+  // is supplied, the catalog associates the discovery to the organization's
+  // non-archived Departments (Sprint 34 capability). Without either, the
+  // event is rejected in a controlled way.
+  departmentService?: DepartmentService;
 }): {
   readonly "lead.created": BusinessEventHandler;
   readonly "organization.created": BusinessEventHandler;
@@ -101,6 +107,7 @@ export function buildDefaultCatalogHandlers(options: {
     ),
     "organization.discovered": createOrganizationDiscoveredHandler(
       options.discoveryCompletionHandler,
+      options.departmentService,
     ),
   };
 }
@@ -226,12 +233,16 @@ function createOrganizationDiscoveryRequestedHandler(
 
 /**
  * Handler for `organization.discovered` fact event. Delegates to the
- * host-supplied `DiscoveryCompletionHandler` — the catalog never executes
- * business logic. Without a completion handler the event is rejected in a
- * controlled way.
+ * host-supplied `DiscoveryCompletionHandler` when present — the catalog never
+ * executes business logic. Without a completion handler, the catalog falls
+ * back to associating the discovery (`event.discoveryExecutionId`) to the
+ * organization's non-archived Departments through the supplied
+ * `DepartmentService` (Sprint 34 capability). Without either, the event is
+ * rejected in a controlled way.
  */
 function createOrganizationDiscoveredHandler(
   completionHandler: DiscoveryCompletionHandler | undefined,
+  departmentService: DepartmentService | undefined,
 ): BusinessEventHandler {
   return async (event) => {
     if (event.type !== "organization.discovered") {
@@ -239,12 +250,45 @@ function createOrganizationDiscoveredHandler(
         "organization.discovered handler invoked for non discovery event",
       );
     }
-    if (!completionHandler) {
+    if (completionHandler) {
+      return completionHandler(event);
+    }
+    if (!departmentService) {
       return rejected(
-        "organization.discovered requires a discovery completion handler. No completion handler was supplied to the catalog.",
+        "organization.discovered requires a discovery completion handler or a department service. Neither was supplied to the catalog.",
       );
     }
-    return completionHandler(event);
+
+    const departments = departmentService
+      .list()
+      .filter(
+        (snapshot) =>
+          snapshot.organizationId === event.organizationId &&
+          snapshot.status !== "archived",
+      );
+
+    if (departments.length === 0) {
+      return {
+        status: "skipped",
+        output: { associatedCount: 0, departmentIds: [] },
+        errors: [],
+      };
+    }
+
+    const departmentIds: string[] = [];
+    for (const snapshot of departments) {
+      departmentService.associateDiscovery(
+        snapshot.id,
+        event.discoveryExecutionId,
+      );
+      departmentIds.push(snapshot.id);
+    }
+
+    return {
+      status: "completed",
+      output: { associatedCount: departmentIds.length, departmentIds },
+      errors: [],
+    };
   };
 }
 

@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@departify/agent-tool-bridge": "workspace:*",
+    "@departify/departments": "workspace:*",
     "@departify/executive-orchestrator": "workspace:*",
     "@departify/platform-composition": "workspace:*",
     "@departify/tool-catalog": "workspace:*",
