@@ -174,6 +174,7 @@ describe("BusinessEventService", () => {
 
   it("exposes the canonical event types as a typed list", () => {
     expect(businessEventTypes).toEqual([
+      "payment.confirmed",
       "lead.created",
       "organization.created",
       "organization.provisioned",

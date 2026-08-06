@@ -37,7 +37,7 @@ class SuccessAgentToolPort implements AgentToolPort {
 }
 
 describe("BusinessEventCatalog", () => {
-  it("builds the canonical catalog with the five default handlers", () => {
+  it("builds the canonical catalog with the six default handlers", () => {
     const port = new SuccessAgentToolPort();
     const executor = new WorkflowExecution({ port });
     const { catalog, handlers } = buildCanonicalCatalog({
@@ -45,7 +45,8 @@ describe("BusinessEventCatalog", () => {
       workflowExecutor: executor,
     });
 
-    expect(catalog.size()).toBe(5);
+    expect(catalog.size()).toBe(6);
+    expect(catalog.has("payment.confirmed")).toBe(true);
     expect(catalog.has("lead.created")).toBe(true);
     expect(catalog.has("organization.created")).toBe(true);
     expect(catalog.has("organization.provisioned")).toBe(true);
@@ -53,6 +54,7 @@ describe("BusinessEventCatalog", () => {
     expect(catalog.has("organization.discovered")).toBe(true);
     expect([...catalog.list()].sort()).toEqual(
       [
+        "payment.confirmed",
         "lead.created",
         "organization.created",
         "organization.provisioned",
@@ -61,6 +63,7 @@ describe("BusinessEventCatalog", () => {
       ].sort(),
     );
 
+    expect(typeof handlers["payment.confirmed"]).toBe("function");
     expect(typeof handlers["lead.created"]).toBe("function");
     expect(typeof handlers["organization.created"]).toBe("function");
     expect(typeof handlers["organization.provisioned"]).toBe("function");
@@ -677,5 +680,85 @@ describe("BusinessEventCatalog", () => {
 
     expect(outcome.status).toBe("failed");
     expect(creatorInvoked).toBe(false);
+  });
+
+  it("creates the organization from a confirmed payment via the organization creator", async () => {
+    const port = new SuccessAgentToolPort();
+    const executor = new WorkflowExecution({ port });
+    const organizationCreator: OrganizationCreator = async (event) => ({
+      status: "completed",
+      output: {
+        organizationId: event.organizationId,
+        paymentId: event.type === "payment.confirmed" ? event.paymentId : null,
+      },
+      errors: [],
+      provisioningId: "prv_from_payment",
+    });
+
+    const handlers = buildDefaultCatalogHandlers({
+      port,
+      workflowExecutor: executor,
+      organizationCreator,
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_payment_confirmed",
+      type: "payment.confirmed",
+      occurredAt: new Date(),
+      paymentId: "pay_001",
+      organizationId: "org_from_payment",
+      planId: "plan_pro",
+      customerEmail: "client@example.com",
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers[
+      "payment.confirmed"
+    ](event, {
+      now: () => new Date(),
+      eventId: () => "evt",
+      workflowId: () => "wf",
+      executionId: () => "wf_exec",
+    });
+
+    expect(outcome.status).toBe("completed");
+    const output = outcome.output as {
+      organizationId: string;
+      paymentId: string;
+    };
+    expect(output.organizationId).toBe("org_from_payment");
+    expect(output.paymentId).toBe("pay_001");
+  });
+
+  it("rejects a confirmed payment when no organization creator is wired", async () => {
+    const port = new SuccessAgentToolPort();
+    const executor = new WorkflowExecution({ port });
+    const handlers = buildDefaultCatalogHandlers({
+      port,
+      workflowExecutor: executor,
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_payment_rejected",
+      type: "payment.confirmed",
+      occurredAt: new Date(),
+      paymentId: "pay_002",
+      organizationId: "org_rejected",
+      planId: "plan_basic",
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers[
+      "payment.confirmed"
+    ](event, {
+      now: () => new Date(),
+      eventId: () => "evt",
+      workflowId: () => "wf",
+      executionId: () => "wf_exec",
+    });
+
+    expect(outcome.status).toBe("rejected");
+    expect(outcome.errors[0]?.code).toBe("BUSINESS_EVENT_REJECTED");
+    expect(outcome.errors[0]?.message).toMatch(/organization creator/i);
   });
 });

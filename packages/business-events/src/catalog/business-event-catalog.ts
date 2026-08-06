@@ -115,6 +115,7 @@ export function buildDefaultCatalogHandlers(options: {
   // Defaults to the Comercial lead qualifier.
   onboardingEmployeeAgentId?: string;
 }): {
+  readonly "payment.confirmed": BusinessEventHandler;
   readonly "lead.created": BusinessEventHandler;
   readonly "organization.created": BusinessEventHandler;
   readonly "organization.provisioned": BusinessEventHandler;
@@ -122,6 +123,9 @@ export function buildDefaultCatalogHandlers(options: {
   readonly "organization.discovered": BusinessEventHandler;
 } {
   return {
+    "payment.confirmed": createPaymentConfirmedHandler(
+      options.organizationCreator,
+    ),
     "lead.created": createLeadCreatedHandler(options),
     "organization.created": createOrganizationCreatedHandler(
       options.provisioningHandler,
@@ -139,6 +143,32 @@ export function buildDefaultCatalogHandlers(options: {
       options.discoveryCompletionHandler,
       options.departmentService,
     ),
+  };
+}
+
+/**
+ * Handler for `payment.confirmed` (Sprint 49) — the entry point of the
+ * Vending Machine. Emitted by Stripe (or a simulator emitting the exact same
+ * event shape) when a client pays for a plan. The handler turns the paid
+ * customer into an organization through the host-supplied `OrganizationCreator`
+ * (Sprint 39); the rest of the flow (provision → discovery → onboarding) is
+ * already chained. Without a creator the event is rejected in a controlled way.
+ */
+function createPaymentConfirmedHandler(
+  organizationCreator: OrganizationCreator | undefined,
+): BusinessEventHandler {
+  return async (event) => {
+    if (event.type !== "payment.confirmed") {
+      return rejected(
+        "payment.confirmed handler invoked for non payment event",
+      );
+    }
+    if (!organizationCreator) {
+      return rejected(
+        "payment.confirmed requires an organization creator. No organization creator was supplied to the catalog.",
+      );
+    }
+    return organizationCreator(event);
   };
 }
 
@@ -500,6 +530,7 @@ export class BusinessEventCatalog {
 
 export function createBusinessEventCatalog(
   handlers?: Partial<{
+    readonly "payment.confirmed": BusinessEventHandler;
     readonly "lead.created": BusinessEventHandler;
     readonly "organization.created": BusinessEventHandler;
     readonly "organization.provisioned": BusinessEventHandler;
@@ -508,6 +539,9 @@ export function createBusinessEventCatalog(
   }>,
 ): BusinessEventCatalog {
   const catalog = new BusinessEventCatalog();
+  if (handlers?.["payment.confirmed"]) {
+    catalog.register("payment.confirmed", handlers["payment.confirmed"]);
+  }
   if (handlers?.["lead.created"]) {
     catalog.register("lead.created", handlers["lead.created"]);
   }
@@ -551,6 +585,7 @@ export function buildCanonicalCatalog(
 } {
   const handlers = buildDefaultCatalogHandlers(options);
   const catalog = new BusinessEventCatalog()
+    .register("payment.confirmed", handlers["payment.confirmed"])
     .register("lead.created", handlers["lead.created"])
     .register("organization.created", handlers["organization.created"])
     .register("organization.provisioned", handlers["organization.provisioned"])

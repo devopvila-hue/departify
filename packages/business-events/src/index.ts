@@ -4,6 +4,7 @@ export {
   type BusinessEventId,
   type BusinessEventPayload,
   type BusinessEventType,
+  type PaymentConfirmedEvent,
   type LeadCreatedEvent,
   type OrganizationCreatedEvent,
   type OrganizationProvisionedEvent,

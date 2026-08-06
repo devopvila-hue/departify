@@ -12,6 +12,7 @@ export type BusinessDepartmentId = string;
 export type BusinessAgentId = string;
 
 export const businessEventTypes = [
+  "payment.confirmed",
   "lead.created",
   "organization.created",
   "organization.provisioned",
@@ -38,6 +39,21 @@ export interface BusinessEventBase {
   readonly actor?: BusinessAgentId;
   readonly payload: BusinessEventPayload;
   readonly metadata?: Readonly<Record<string, string>>;
+}
+
+/**
+ * External payment confirmation (Sprint 49) — the entry point of the Vending
+ * Machine. Emitted by Stripe (or a simulator that substitutes the external
+ * event with the exact same shape) when a client pays for a plan. The handler
+ * turns the paid customer into an organization, provisioning its Empresa
+ * Digital.
+ */
+export interface PaymentConfirmedEvent extends BusinessEventBase {
+  readonly type: "payment.confirmed";
+  readonly paymentId: string;
+  readonly organizationId: BusinessOrganizationId;
+  readonly planId: string;
+  readonly customerEmail?: string;
 }
 
 export interface LeadCreatedEvent extends BusinessEventBase {
@@ -96,6 +112,7 @@ export interface OrganizationDiscoveredEvent extends BusinessEventBase {
 }
 
 export type BusinessEvent =
+  | PaymentConfirmedEvent
   | LeadCreatedEvent
   | OrganizationCreatedEvent
   | OrganizationProvisionedEvent
@@ -142,7 +159,23 @@ export function validateBusinessEvent(event: unknown): BusinessEvent {
       "Business event is missing its payload object.",
     );
   }
-  if (type === "lead.created") {
+  if (type === "payment.confirmed") {
+    if (typeof candidate.paymentId !== "string") {
+      throw new BusinessEventValidationError(
+        "payment.confirmed requires a paymentId.",
+      );
+    }
+    if (typeof candidate.organizationId !== "string") {
+      throw new BusinessEventValidationError(
+        "payment.confirmed requires an organizationId.",
+      );
+    }
+    if (typeof candidate.planId !== "string") {
+      throw new BusinessEventValidationError(
+        "payment.confirmed requires a planId.",
+      );
+    }
+  } else if (type === "lead.created") {
     if (typeof candidate.departmentId !== "string") {
       throw new BusinessEventValidationError(
         "lead.created requires a departmentId.",

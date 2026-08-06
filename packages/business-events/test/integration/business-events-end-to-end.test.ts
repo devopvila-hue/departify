@@ -455,4 +455,71 @@ describe("BusinessEvent end-to-end integration", () => {
     };
     expect(output.onboarding?.finalOutput?.gapCount).toBeGreaterThan(0);
   });
+
+  it("turns a confirmed payment into an organization (Vending Machine entry)", async () => {
+    // The only mock is the external event: `payment.confirmed` is emitted by
+    // Stripe (or a simulator) with the exact same shape. The handler turns
+    // the paid customer into an organization through the existing
+    // `OrganizationCreator` port; provisioning, discovery and onboarding are
+    // chained downstream (Sprints 38-48) once the organization is created.
+    const port = {
+      executeAction: async () => {
+        throw new Error("bridge not used");
+      },
+    } as unknown as AgentToolPort;
+    const executor = new WorkflowExecution({ port });
+    const { catalog } = buildCanonicalCatalog({
+      port,
+      workflowExecutor: executor,
+      organizationCreator: async (event) => {
+        if (event.type !== "payment.confirmed") {
+          return {
+            status: "rejected",
+            output: null,
+            errors: [
+              {
+                code: "wrong_type",
+                message: "wrong event",
+                phase: "delegation",
+              },
+            ],
+          };
+        }
+        return {
+          status: "completed",
+          output: {
+            organizationId: event.organizationId,
+            paymentId: event.paymentId,
+            planId: event.planId,
+          },
+          errors: [],
+          provisioningId: "prv_from_payment",
+        };
+      },
+    });
+    const service = new BusinessEventService({ catalog });
+
+    const payment: BusinessEvent = {
+      eventId: "evt_e2e_payment",
+      type: "payment.confirmed",
+      occurredAt: new Date(),
+      paymentId: "pay_e2e_001",
+      organizationId: "org_departify",
+      planId: "plan_pro",
+      customerEmail: "client@example.com",
+      payload: {},
+    };
+
+    const result = await service.publish(payment);
+
+    expect(result.status).toBe("completed");
+    const output = result.output as {
+      organizationId: string;
+      paymentId: string;
+      planId: string;
+    };
+    expect(output.organizationId).toBe("org_departify");
+    expect(output.paymentId).toBe("pay_e2e_001");
+    expect(output.planId).toBe("plan_pro");
+  });
 });
