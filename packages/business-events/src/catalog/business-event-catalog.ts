@@ -83,6 +83,12 @@ export const DEFAULT_LEAD_QUALIFICATION_WORKFLOW_ID = "wf_lead_qualification";
 export const DEFAULT_ONBOARDING_EMPLOYEE_AGENT_ID = "agent_lead_qualifier";
 
 /**
+ * Default Director that executes the first four steps of the Department
+ * Onboarding workflow when the host does not specify one (Comercial).
+ */
+export const DEFAULT_ONBOARDING_DIRECTOR_AGENT_ID = "agent_sales_director";
+
+/**
  * Default catalog handler factory. Returns the handlers wired to
  * the existing runtimes.
  */
@@ -114,6 +120,11 @@ export function buildDefaultCatalogHandlers(options: {
   // activation + discovery, delivering the first value without a manual trigger.
   // Defaults to the Comercial lead qualifier.
   onboardingEmployeeAgentId?: string;
+  // The onboarding director is optional — when wired, the Department Onboarding
+  // runs its first four steps with the contracted Department's director (Sprint
+  // 52, e.g. `agent_marketing_director` for the Marketing Customer Zero).
+  // Defaults to the Comercial Sales Director.
+  onboardingDirectorAgentId?: string;
 }): {
   readonly "payment.confirmed": BusinessEventHandler;
   readonly "lead.created": BusinessEventHandler;
@@ -130,6 +141,8 @@ export function buildDefaultCatalogHandlers(options: {
       workflowExecutor: options.workflowExecutor,
       onboardingEmployeeAgentId:
         options.onboardingEmployeeAgentId ?? DEFAULT_ONBOARDING_EMPLOYEE_AGENT_ID,
+      onboardingDirectorAgentId:
+        options.onboardingDirectorAgentId ?? DEFAULT_ONBOARDING_DIRECTOR_AGENT_ID,
     }),
     "lead.created": createLeadCreatedHandler(options),
     "organization.created": createOrganizationCreatedHandler(
@@ -140,6 +153,7 @@ export function buildDefaultCatalogHandlers(options: {
       options.discoveryWorkflow,
       options.workflowExecutor,
       options.onboardingEmployeeAgentId ?? DEFAULT_ONBOARDING_EMPLOYEE_AGENT_ID,
+      options.onboardingDirectorAgentId ?? DEFAULT_ONBOARDING_DIRECTOR_AGENT_ID,
     ),
     "organization.discovery_requested": createOrganizationDiscoveryRequestedHandler(
       options.discoveryWorkflow,
@@ -167,6 +181,7 @@ function createPaymentConfirmedHandler(options: {
   discoveryWorkflow: ExecutiveDiscoveryWorkflow | undefined;
   workflowExecutor: WorkflowExecution;
   onboardingEmployeeAgentId: string;
+  onboardingDirectorAgentId: string;
 }): BusinessEventHandler {
   return async (event) => {
     if (event.type !== "payment.confirmed") {
@@ -201,6 +216,7 @@ function createPaymentConfirmedHandler(options: {
       discoveryWorkflow: options.discoveryWorkflow,
       workflowExecutor: options.workflowExecutor,
       onboardingEmployeeAgentId: options.onboardingEmployeeAgentId,
+      onboardingDirectorAgentId: options.onboardingDirectorAgentId,
     });
   };
 }
@@ -279,6 +295,7 @@ function createOrganizationProvisionedHandler(
   discoveryWorkflow: ExecutiveDiscoveryWorkflow | undefined,
   workflowExecutor: WorkflowExecution,
   onboardingEmployeeAgentId: string,
+  onboardingDirectorAgentId: string,
 ): BusinessEventHandler {
   return async (event) => {
     if (event.type !== "organization.provisioned") {
@@ -297,6 +314,7 @@ function createOrganizationProvisionedHandler(
       discoveryWorkflow,
       workflowExecutor,
       onboardingEmployeeAgentId,
+      onboardingDirectorAgentId,
     });
   };
 }
@@ -313,6 +331,7 @@ async function runProvisioningPipeline(options: {
   discoveryWorkflow: ExecutiveDiscoveryWorkflow | undefined;
   workflowExecutor: WorkflowExecution;
   onboardingEmployeeAgentId: string;
+  onboardingDirectorAgentId: string;
 }): Promise<BusinessEventHandlerOutcome> {
   const { event, provisioningHandler, discoveryWorkflow } = options;
 
@@ -366,6 +385,7 @@ async function runProvisioningPipeline(options: {
   // manual trigger. The onboarding result is appended to the output.
   const onboardingWorkflow = buildDepartmentOnboardingWorkflow(
     event.organizationId,
+    options.onboardingDirectorAgentId,
     options.onboardingEmployeeAgentId,
   );
   const onboardingResult: WorkflowResult = await options.workflowExecutor.run(

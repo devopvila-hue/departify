@@ -935,6 +935,7 @@ describe("Business Briefing Workflow integration with Tool Runtime", () => {
     const result = await execution.run(
       buildDepartmentOnboardingWorkflow(
         "org_departify",
+        "agent_sales_director",
         "agent_lead_qualifier",
       ),
     );

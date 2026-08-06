@@ -655,4 +655,124 @@ describe("BusinessEvent end-to-end integration", () => {
     };
     expect(output.onboarding?.finalOutput?.gapCount).toBeGreaterThan(0);
   });
+
+  it("runs the Marketing Customer Zero onboarding with its own Director", async () => {
+    // A real company contracts the Marketing department: the onboarding must
+    // run with the Marketing Director and a Marketing employee (Sprint 52),
+    // not with the Comercial agents.
+    const reportRepository = createInMemoryDiscoveryReportRepository();
+
+    const toolRegistry = new ToolRuntimeRegistry();
+    registerAllCoreTools(toolRegistry, {
+      discoveryRepository: reportRepository,
+    });
+    const runtime = createToolRuntime({
+      grantedScopes: ["read.public", "read.private"],
+    });
+    for (const entry of toolRegistry.list()) {
+      runtime.registry.register(entry.definition);
+      runtime.registry.setStatus(entry.definition.id, "active");
+    }
+
+    const port: AgentToolPort = new AgentToolRuntimeAdapter({
+      runtime,
+      fetchPermissionSet: buildAgentPermissionSetResolver(
+        new Map([
+          [
+            "agent.executive",
+            [
+              {
+                scope: "runtime" as const,
+                action: "manage" as const,
+                resource: "*",
+              },
+            ],
+          ],
+          [
+            "agent_marketing_director",
+            [
+              {
+                scope: "runtime" as const,
+                action: "manage" as const,
+                resource: "*",
+              },
+            ],
+          ],
+          [
+            "agent_content_strategist",
+            [
+              {
+                scope: "runtime" as const,
+                action: "manage" as const,
+                resource: "*",
+              },
+            ],
+          ],
+        ]),
+      ),
+    });
+
+    const orchestrator = createExecutiveOrchestrator({
+      director: new ExecutiveDirector(),
+      bridge: port,
+    });
+
+    const discoveryWorkflow = createExecutiveDiscoveryWorkflow({
+      discoveryService: new BusinessDiscoveryService({
+        sessionIdGenerator: () => "session_marketing_c0",
+      }),
+      orchestrator,
+      executionIdFactory: () => "exe_disc_marketing_c0",
+      reportRepository,
+    });
+
+    const executor = new WorkflowExecution({ port });
+    const { catalog } = buildCanonicalCatalog({
+      port,
+      workflowExecutor: executor,
+      discoveryWorkflow,
+      onboardingDirectorAgentId: "agent_marketing_director",
+      onboardingEmployeeAgentId: "agent_content_strategist",
+      organizationCreator: async (event) => ({
+        status: "completed",
+        output: { organizationId: event.organizationId },
+        errors: [],
+        provisioningId: "prv_marketing_c0",
+      }),
+      provisioningHandler: async (event) => ({
+        status: "completed",
+        output: { organizationId: event.organizationId },
+        errors: [],
+        provisioningId: "prv_marketing_c0",
+      }),
+    });
+    const service = new BusinessEventService({ catalog });
+
+    const payment: BusinessEvent = {
+      eventId: "evt_e2e_marketing_c0",
+      type: "payment.confirmed",
+      occurredAt: new Date(),
+      paymentId: "pay_marketing_c0",
+      organizationId: "org_departify",
+      planId: "plan_marketing",
+      customerEmail: "client@example.com",
+      payload: {},
+    };
+
+    const result = await service.publish(payment);
+
+    expect(result.status).toBe("completed");
+    const output = result.output as {
+      onboarding?: {
+        steps?: { agentId?: string }[];
+        finalOutput?: { gapCount?: number };
+      };
+    };
+    // The first four steps ran with the Marketing Director; the last two
+    // with the Marketing employee.
+    const steps = output.onboarding?.steps ?? [];
+    expect(steps[0]?.agentId).toBe("agent_marketing_director");
+    expect(steps[4]?.agentId).toBe("agent_content_strategist");
+    expect(output.onboarding?.finalOutput?.gapCount).toBeGreaterThan(0);
+  });
 });

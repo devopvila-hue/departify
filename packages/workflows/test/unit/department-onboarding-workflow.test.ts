@@ -9,7 +9,8 @@ describe("Department Onboarding Workflow", () => {
   it("builds the canonical workflow with six ordered steps", () => {
     const workflow = buildDepartmentOnboardingWorkflow(
       "org_departify",
-      "agent_lead_qualifier",
+      "agent_marketing_director",
+      "agent_content_strategist",
     );
     expect(workflow.id).toBe(DEPARTMENT_ONBOARDING_WORKFLOW_ID);
     expect(workflow.steps).toHaveLength(6);
@@ -23,11 +24,16 @@ describe("Department Onboarding Workflow", () => {
       "first_result",
     ]);
 
-    // Director executes the first four steps.
-    expect(workflow.steps.slice(0, 4).every((s) => s.agentId === "agent_sales_director")).toBe(true);
+    // The contracted Department's Director executes the first four steps
+    // (Sprint 52 — parameterised, e.g. Marketing director).
+    expect(
+      workflow.steps.slice(0, 4).every(
+        (s) => s.agentId === "agent_marketing_director",
+      ),
+    ).toBe(true);
     // Delegated employee executes the last two steps.
-    expect(workflow.steps[4]?.agentId).toBe("agent_lead_qualifier");
-    expect(workflow.steps[5]?.agentId).toBe("agent_lead_qualifier");
+    expect(workflow.steps[4]?.agentId).toBe("agent_content_strategist");
+    expect(workflow.steps[5]?.agentId).toBe("agent_content_strategist");
 
     expect(workflow.steps.map((step) => step.toolId)).toEqual([
       "discovery.get",
@@ -46,7 +52,8 @@ describe("Department Onboarding Workflow", () => {
   it("passes validation", () => {
     const workflow = buildDepartmentOnboardingWorkflow(
       "org_departify",
-      "agent_lead_qualifier",
+      "agent_marketing_director",
+      "agent_content_strategist",
     );
     expect(validateWorkflowDefinition(workflow).id).toBe(
       DEPARTMENT_ONBOARDING_WORKFLOW_ID,
