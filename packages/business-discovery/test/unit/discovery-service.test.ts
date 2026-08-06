@@ -111,8 +111,7 @@ describe("Business Discovery Service", () => {
       const request = {
         organizationId: "org-123",
         requestedAt: new Date(),
-        priority: "normal" as const,
-        options: {},
+        priority: "normal" as const,        options: {},
       };
 
       const result = service.validateRequest(request);
@@ -172,6 +171,57 @@ describe("Business Discovery Service", () => {
       const result = service.validateDiscoveryReport(report);
 
       expect(result.organizationId).toBe("org-123");
+    });
+  });
+
+  describe("initiateDiscovery with rawData", () => {
+    it("builds a real Company DNA from the host-provided company information", async () => {
+      const service = new BusinessDiscoveryService({
+        sessionIdGenerator: () => "session-rawdata",
+      });
+
+      const request = {
+        organizationId: "org-moon",
+        requestedAt: new Date("2026-08-06T10:00:00Z"),
+        priority: "high" as const,
+        options: {
+          includeFounderBrain: true,
+          includeCompetitorAnalysis: false,
+          includeMarketAnalysis: false,
+          depth: "standard" as const,
+        },
+        rawData: {
+          mission: {
+            statement: "MOON co-living: shared living in Barcelona and Madrid",
+            confidence: {
+              level: "verified" as const,
+              source: "user_input" as const,
+              lastVerified: new Date("2026-08-06T10:00:00Z"),
+            },
+          },
+          market: {
+            industry: "co-living",
+            competition: "medium" as const,
+            confidence: {
+              level: "high" as const,
+              source: "user_input" as const,
+              lastVerified: new Date("2026-08-06T10:00:00Z"),
+            },
+          },
+        },
+      };
+
+      const result = await service.initiateDiscovery(request);
+
+      expect(result.status).toBe("completed");
+      expect(result.report).toBeDefined();
+      const report = result.report!;
+      expect(report.companyDna.mission?.statement).toContain("MOON");
+      expect(report.companyDna.market?.industry).toBe("co-living");
+      // The mission gap is closed because the CEO provided it.
+      expect(report.gaps.some((gap) => gap.category === "mission")).toBe(
+        false,
+      );
     });
   });
 });

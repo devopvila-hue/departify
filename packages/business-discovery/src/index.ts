@@ -99,8 +99,10 @@ export {
   createMinimalConfidence,
   createVerifiedConfidence,
   buildEmptyCompanyDNA,
+  mergeRawDna,
   validateCompanyDNA,
   CompanyDnaValidationError,
+  type RawCompanyDna,
 } from "./models/company-dna.js";
 
 // Founder Brain functions

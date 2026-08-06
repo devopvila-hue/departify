@@ -359,3 +359,47 @@ export function validateCompanyDNA(dna: unknown): CompanyDNA {
 
   return candidate as unknown as CompanyDNA;
 }
+
+/**
+ * Partial Company DNA supplied by the host / CEO with real company
+ * information (Sprint 55). Only the fields present are merged onto the
+ * empty DNA; the rest stays empty.
+ */
+export type RawCompanyDna = Partial<
+  Pick<
+    CompanyDNA,
+    | "mission"
+    | "vision"
+    | "values"
+    | "valueProposition"
+    | "products"
+    | "services"
+    | "market"
+    | "idealCustomer"
+    | "tone"
+    | "positioning"
+    | "strengths"
+    | "weaknesses"
+    | "objectives"
+    | "processes"
+  >
+>;
+
+/**
+ * Merges host-supplied real company information onto an empty Company DNA
+ * (Sprint 55). Recalculates completeness so the gap analysis runs on real
+ * data when the CEO provides it.
+ */
+export function mergeRawDna(
+  base: CompanyDNA,
+  raw: RawCompanyDna,
+): CompanyDNA {
+  const merged: CompanyDNA = {
+    ...base,
+    ...raw,
+    organizationId: base.organizationId,
+    lastUpdated: new Date(),
+  };
+  const completeness = calculateDnaCompleteness(merged);
+  return { ...merged, completeness };
+}

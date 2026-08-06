@@ -37,6 +37,12 @@ export interface BusinessDiscoveryRequest {
     readonly includeMarketAnalysis: boolean;
     readonly depth: "basic" | "standard" | "comprehensive";
   }>;
+  /**
+   * Raw information about the real company (Sprint 55). The CEO / host
+   * provides this so the pipeline can build a real Company DNA instead of an
+   * empty one. The pipeline owns how to interpret the shape.
+   */
+  readonly rawData?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -199,6 +205,16 @@ export function validateBusinessDiscoveryRequest(
     );
   }
 
+  const rawData = candidate.rawData;
+  if (
+    rawData !== undefined &&
+    (typeof rawData !== "object" || rawData === null)
+  ) {
+    throw new DiscoveryValidationError(
+      "Discovery request rawData must be an object when provided.",
+    );
+  }
+
   return {
     organizationId: candidate.organizationId as OrganizationId,
     requestedAt:
@@ -216,5 +232,8 @@ export function validateBusinessDiscoveryRequest(
           ? ((options as Record<string, unknown>).depth as "basic" | "standard" | "comprehensive")
           : "standard",
     },
+    ...(rawData !== undefined
+      ? { rawData: rawData as Readonly<Record<string, unknown>> }
+      : {}),
   };
 }

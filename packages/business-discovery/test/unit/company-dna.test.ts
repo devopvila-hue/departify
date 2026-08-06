@@ -4,6 +4,7 @@ import {
   calculateDnaCompleteness,
   createMinimalConfidence,
   createVerifiedConfidence,
+  mergeRawDna,
   validateCompanyDNA,
   CompanyDnaValidationError,
 } from "../../src/models/company-dna.js";
@@ -228,6 +229,46 @@ describe("Company DNA", () => {
       const dna = createDna({ completeness: null as unknown as never });
 
       expect(() => validateCompanyDNA(dna)).toThrow("completeness");
+    });
+  });
+
+  describe("mergeRawDna", () => {
+    it("merges host-provided company information onto the empty DNA", () => {
+      const base = buildEmptyCompanyDNA("org-moon");
+      const merged = mergeRawDna(base, {
+        mission: {
+          statement: "MOON shared living",
+          confidence: {
+            level: "verified",
+            source: "user_input",
+            lastVerified: new Date(),
+          },
+        },
+      });
+
+      expect(merged.organizationId).toBe("org-moon");
+      expect(merged.mission?.statement).toBe("MOON shared living");
+      // Completeness is recalculated: mission is now populated.
+      expect(merged.completeness.mission).toBe(true);
+      expect(merged.completeness.overallPercentage).toBeGreaterThan(0);
+    });
+
+    it("leaves absent fields empty", () => {
+      const base = buildEmptyCompanyDNA("org-moon");
+      const merged = mergeRawDna(base, {
+        mission: {
+          statement: "MOON shared living",
+          confidence: {
+            level: "verified",
+            source: "user_input",
+            lastVerified: new Date(),
+          },
+        },
+      });
+
+      expect(merged.vision).toBeUndefined();
+      expect(merged.products).toHaveLength(0);
+      expect(merged.completeness.vision).toBe(false);
     });
   });
 });

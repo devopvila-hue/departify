@@ -127,11 +127,12 @@ async function executePhase(
 async function phaseInitialization(
   context: PipelineContext,
 ): Promise<{ input: DiscoveryInput }> {
-  // In a real implementation, this would set up data collection
   return {
     input: {
       organizationId: context.organizationId,
-      rawData: {},
+      // Sprint 55 — the CEO / host provides the real company information
+      // through the request; the pipeline carries it into DNA analysis.
+      rawData: context.request.rawData ?? {},
       sources: [],
     },
   };
@@ -155,11 +156,21 @@ async function phaseDataCollection(
  */
 async function phaseCompanyDnaAnalysis(
   context: PipelineContext,
+  input: DiscoveryInput,
 ): Promise<{ companyDna: CompanyDNA }> {
   // Import dynamically to avoid circular dependency
-  const { buildEmptyCompanyDNA } = await import("../models/company-dna.js");
+  const { buildEmptyCompanyDNA, mergeRawDna } = await import(
+    "../models/company-dna.js"
+  );
 
-  const companyDna = buildEmptyCompanyDNA(context.organizationId);
+  const base = buildEmptyCompanyDNA(context.organizationId);
+  // Sprint 55 — when the host provided real company information, merge it
+  // into the Company DNA so the gap analysis works on real data instead of
+  // an empty model.
+  const companyDna =
+    Object.keys(input.rawData).length > 0
+      ? mergeRawDna(base, input.rawData)
+      : base;
   return { companyDna };
 }
 
@@ -302,7 +313,7 @@ export async function executeDiscoveryPipeline(
     currentPhase: "company_dna_analysis" as const,
     phasesCompleted: [...session.phasesCompleted, "company_dna_analysis" as const],
   };
-  const { companyDna } = await phaseCompanyDnaAnalysis(context);
+  const { companyDna } = await phaseCompanyDnaAnalysis(context, input);
 
   // Phase 4: Founder Brain Analysis
   const brainResult = await executePhase("founder_brain_analysis", context, async () => {
