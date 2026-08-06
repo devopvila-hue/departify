@@ -41,3 +41,9 @@ export {
   DEPARTMENT_PLAN_WORKFLOW,
   DEPARTMENT_PLAN_WORKFLOW_ID,
 } from "./workflows/department-plan.workflow.js";
+
+export {
+  buildDepartmentDelegationWorkflow,
+  DEPARTMENT_DELEGATION_WORKFLOW,
+  DEPARTMENT_DELEGATION_WORKFLOW_ID,
+} from "./workflows/department-delegation.workflow.js";

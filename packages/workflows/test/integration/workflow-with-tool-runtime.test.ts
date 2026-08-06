@@ -15,6 +15,7 @@ import {
   buildBusinessBriefingWorkflow,
   buildBusinessReadinessWorkflow,
   buildDepartmentPlanWorkflow,
+  buildDepartmentDelegationWorkflow,
   buildLeadQualificationWorkflow,
   WorkflowExecution,
 } from "../../src/index.js";
@@ -412,5 +413,110 @@ describe("Business Briefing Workflow integration with Tool Runtime", () => {
       "q_high",
       "q_low",
     ]);
+  });
+
+  it("lets the Sales Director delegate the plan through discovery.delegate", async () => {
+    // Seed a report with questions of different categories.
+    const repository = createInMemoryDiscoveryReportRepository();
+    const report: CompanyDiscoveryReport = {
+      organizationId: "org_departify",
+      sessionId: "session_delegation",
+      metadata: {
+        sessionId: "session_delegation",
+        startedAt: new Date("2026-08-06T10:00:00Z"),
+        completedAt: new Date("2026-08-06T10:00:01Z"),
+        durationMs: 1000,
+        sources: [],
+        dataPoints: 0,
+        questionsAsked: 2,
+        questionsAnswered: 0,
+      },
+      companyDna: {
+        organizationId: "org_departify",
+      } as unknown as CompanyDiscoveryReport["companyDna"],
+      findings: [],
+      gaps: [],
+      questions: [
+        {
+          id: "q_products",
+          gapId: "gap_products",
+          category: "products",
+          question: "What products do you offer?",
+          type: "open",
+          priority: 100,
+          context: "ctx",
+          importance: "critical",
+        },
+        {
+          id: "q_mission",
+          gapId: "gap_mission",
+          category: "mission",
+          question: "What is your mission?",
+          type: "open",
+          priority: 90,
+          context: "ctx",
+          importance: "critical",
+        },
+      ],
+      confidence: {
+        overall: "low",
+        companyDna: 0,
+        founderBrain: 0,
+        breakdown: {} as CompanyDiscoveryReport["confidence"]["breakdown"],
+      },
+      generatedAt: new Date("2026-08-06T10:00:01Z"),
+    };
+    repository.save({
+      executionId: "exe_disc_delegate_001",
+      sessionId: "session_delegation",
+      organizationId: "org_departify",
+      report,
+      savedAt: new Date("2026-08-06T10:00:02Z"),
+    });
+
+    const toolRegistry = new ToolRuntimeRegistry();
+    registerAllCoreTools(toolRegistry, { discoveryRepository: repository });
+    const runtime = createToolRuntime({
+      grantedScopes: ["read.public", "read.private"],
+    });
+    for (const entry of toolRegistry.list()) {
+      runtime.registry.register(entry.definition);
+      runtime.registry.setStatus(entry.definition.id, "active");
+    }
+
+    const permissions = new Map([
+      [
+        "agent_sales_director",
+        [
+          {
+            scope: "runtime" as const,
+            action: "manage" as const,
+            resource: "discovery.delegate",
+          },
+        ],
+      ],
+    ]);
+
+    const port: AgentToolPort = new AgentToolRuntimeAdapter({
+      runtime,
+      fetchPermissionSet: buildAgentPermissionSetResolver(permissions),
+    });
+
+    const execution = new WorkflowExecution({ port });
+    const result = await execution.run(
+      buildDepartmentDelegationWorkflow("org_departify"),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0]?.status).toBe("completed");
+    const output = result.steps[0]?.output as {
+      delegation: { workItem: { id: string }; agentId: string }[];
+    };
+    expect(output.delegation).toHaveLength(2);
+    expect(output.delegation[0]?.workItem.id).toBe("q_products");
+    expect(output.delegation[0]?.agentId).toBe("agent_lead_qualifier");
+    expect(output.delegation[1]?.workItem.id).toBe("q_mission");
+    expect(output.delegation[1]?.agentId).toBe("agent_sales_director");
   });
 });

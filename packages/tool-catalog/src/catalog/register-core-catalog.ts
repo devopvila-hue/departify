@@ -21,6 +21,11 @@ import {
   type DiscoveryPlanOutput,
 } from "../tools/discovery-plan-tool.js";
 import {
+  createDiscoveryDelegateToolDefinition,
+  type DiscoveryDelegateInput,
+  type DiscoveryDelegateOutput,
+} from "../tools/discovery-delegate-tool.js";
+import {
   createKnowledgeSearchToolDefinition,
   type KnowledgeSearchInput,
   type KnowledgeSearchOutput,
@@ -76,6 +81,7 @@ export const CORE_CATALOG_IDS = [
   "discovery.get",
   "discovery.readiness",
   "discovery.plan",
+  "discovery.delegate",
 ] as const;
 
 export type CoreCatalogId = (typeof CORE_CATALOG_IDS)[number];
@@ -109,6 +115,11 @@ export function buildCoreCatalog(
     );
     catalog.push(
       createDiscoveryPlanToolDefinition({
+        repository: context.discoveryRepository,
+      }) as unknown as ToolDefinition,
+    );
+    catalog.push(
+      createDiscoveryDelegateToolDefinition({
         repository: context.discoveryRepository,
       }) as unknown as ToolDefinition,
     );
@@ -228,4 +239,6 @@ export type {
   DiscoveryReadinessOutput,
   DiscoveryPlanInput,
   DiscoveryPlanOutput,
+  DiscoveryDelegateInput,
+  DiscoveryDelegateOutput,
 };

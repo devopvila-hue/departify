@@ -75,3 +75,11 @@ export {
   type DiscoveryPlanOutput,
   type DiscoveryPlanToolOptions,
 } from "./tools/discovery-plan-tool.js";
+
+export {
+  createDiscoveryDelegateToolDefinition,
+  type DiscoveryDelegateInput,
+  type DiscoveryDelegationItem,
+  type DiscoveryDelegateOutput,
+  type DiscoveryDelegateToolOptions,
+} from "./tools/discovery-delegate-tool.js";
