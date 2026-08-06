@@ -2,6 +2,7 @@ import {
   CreateOrganizationHandler,
   type CreateOrganizationCommand,
 } from "@departify/application";
+import { type DepartmentTemplateCatalog } from "@departify/departments";
 import {
   Organization,
   type OrganizationSnapshot,
@@ -11,6 +12,7 @@ import type { UnitOfWork, Versioned } from "@departify/persistence-contracts";
 import {
   provisioningPipelineStepIds,
   validateProvisioningRequest,
+  type BusinessProvisioningResult,
   type OrganizationProvisioningRecord,
   type OrganizationProvisioningRequest,
   type ProvisioningIssue,
@@ -22,6 +24,10 @@ import {
   createProvisioningIdentifiers,
   type ProvisioningIdentifiers,
 } from "../identifiers/provisioning-identifiers.js";
+import {
+  BusinessProvisioningService,
+  defaultCatalog,
+} from "../business/business-provisioning-service.js";
 
 export interface FirstRealProvisioningResult {
   accepted: boolean;
@@ -31,14 +37,28 @@ export interface FirstRealProvisioningResult {
   state: ProvisioningState;
   currentStep?: ProvisioningStepId;
   issues: readonly ProvisioningIssue[];
+  business?: BusinessProvisioningResult;
+}
+
+export interface FirstRealProvisioningOptions {
+  readonly unitOfWork: UnitOfWork;
+  readonly templateCatalog?: DepartmentTemplateCatalog;
 }
 
 export class FirstRealProvisioningService {
   private readonly createOrganizationHandler = new CreateOrganizationHandler(
     new DirectOrganizationCommandPort(),
   );
+  private readonly businessProvisioning: BusinessProvisioningService;
+  private readonly unitOfWork: UnitOfWork;
 
-  constructor(private readonly unitOfWork: UnitOfWork) {}
+  constructor(options: FirstRealProvisioningOptions) {
+    const templateCatalog = options.templateCatalog ?? defaultCatalog();
+    this.businessProvisioning = new BusinessProvisioningService({
+      catalog: templateCatalog,
+    });
+    this.unitOfWork = options.unitOfWork;
+  }
 
   async createOrganization(
     command: CreateOrganizationCommand,
@@ -62,7 +82,7 @@ export class FirstRealProvisioningService {
     const request = intentResult.value.payload;
     const identifiers = createProvisioningIdentifiers(command, request);
 
-    return this.unitOfWork.execute(async (context) => {
+    const outcome = await this.unitOfWork.execute(async (context) => {
       await context.provisioning.save({
         snapshot: createProvisioningRecord({
           identifiers,
@@ -104,7 +124,7 @@ export class FirstRealProvisioningService {
           { expectedVersion: { value: "v2" } },
         );
 
-        return resultFromRecord(identifiers, failedRecord, false);
+        return resultFromRecord(identifiers, failedRecord, false, undefined);
       }
 
       await context.provisioning.save(
@@ -148,13 +168,23 @@ export class FirstRealProvisioningService {
       await context.organizations.save(toVersioned(organizationSnapshot));
       await context.workspaces.save(toVersioned(workspaceSnapshot));
 
+      // Sprint 25 — instantiate the business from the template catalog.
+      const business = this.businessProvisioning.instantiateBusiness(
+        identifiers.provisioningId,
+        identifiers.organizationId,
+        identifiers.workspaceId,
+        request,
+      );
+
+      const finalIssues = mergeIssues(validation.issues, business.issues);
+
       const finalRecord = createProvisioningRecord({
         identifiers,
         request,
-        state: "in_progress",
-        currentStep: "create_organization",
+        state: business.issues.length === 0 ? "completed" : "failed",
+        currentStep: "mark_organization_ready",
         attempts: 1,
-        issues: [],
+        issues: finalIssues,
       });
 
       await context.provisioning.save(
@@ -162,9 +192,26 @@ export class FirstRealProvisioningService {
         { expectedVersion: { value: "v4" } },
       );
 
-      return resultFromRecord(identifiers, finalRecord, true);
+      return resultFromRecord(
+        identifiers,
+        finalRecord,
+        business.issues.length === 0,
+        business,
+      );
     });
+
+    return outcome;
   }
+}
+
+function mergeIssues(
+  base: readonly ProvisioningIssue[],
+  business: readonly ProvisioningIssue[],
+): readonly ProvisioningIssue[] {
+  if (business.length === 0) {
+    return base;
+  }
+  return [...base, ...business];
 }
 
 function createOrganizationAggregate(
@@ -220,6 +267,7 @@ function resultFromRecord(
   identifiers: ProvisioningIdentifiers,
   record: OrganizationProvisioningRecord,
   accepted: boolean,
+  business: BusinessProvisioningResult | undefined,
 ): FirstRealProvisioningResult {
   return {
     accepted,
@@ -231,6 +279,7 @@ function resultFromRecord(
       ? {}
       : { currentStep: record.currentStep }),
     issues: record.issues,
+    ...(business ? { business } : {}),
   };
 }
 
@@ -246,6 +295,9 @@ function toVersioned<
 export function implementedProvisioningSteps(): readonly ProvisioningStepId[] {
   return provisioningPipelineStepIds.filter(
     (step): step is ProvisioningStepId =>
-      step === "validate_request" || step === "create_organization",
+      step === "validate_request" ||
+      step === "create_organization" ||
+      step === "instantiate_business" ||
+      step === "mark_organization_ready",
   );
 }

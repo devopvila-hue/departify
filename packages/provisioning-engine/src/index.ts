@@ -21,6 +21,10 @@ export {
   type ProvisioningIssue,
   type ProvisioningOperationResult,
   type ProvisioningStepId,
+  type BusinessProvisioningResult,
+  type BusinessProvisioningDepartment,
+  type BusinessProvisioningEmployee,
+  type BusinessProvisioningResource,
 } from "./domain/provisioning-types.js";
 
 export {

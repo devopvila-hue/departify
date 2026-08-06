@@ -6,8 +6,15 @@ export {
 export {
   FirstRealProvisioningService,
   implementedProvisioningSteps,
+  type FirstRealProvisioningOptions,
   type FirstRealProvisioningResult,
 } from "./provisioning/first-real-provisioning-service.js";
+export {
+  BusinessProvisioningService,
+  createBusinessProvisioningService,
+  defaultCatalog,
+  type BusinessProvisioningOptions,
+} from "./business/business-provisioning-service.js";
 export {
   createSupabasePlatformComposition,
   type SupabasePlatformComposition,

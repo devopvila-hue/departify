@@ -16,6 +16,7 @@ describe("provisioning pipeline", () => {
       "register_plugins",
       "register_agent_runtime",
       "activate_executive_director",
+      "instantiate_business",
       "mark_organization_ready",
     ]);
   });

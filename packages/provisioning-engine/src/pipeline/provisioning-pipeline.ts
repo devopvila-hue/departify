@@ -73,8 +73,16 @@ export const provisioningPipeline = [
     implemented: false,
   },
   {
-    id: "mark_organization_ready",
+    id: "instantiate_business",
     order: 10,
+    requiredState: "in_progress",
+    description:
+      "Instantiate the business from the DepartmentTemplateCatalog and wire Departments, Digital Employees, Tools, Knowledge and Memory.",
+    implemented: false,
+  },
+  {
+    id: "mark_organization_ready",
+    order: 11,
     requiredState: "in_progress",
     description:
       "Mark the organization as ready after all future phases succeed.",

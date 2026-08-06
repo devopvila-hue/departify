@@ -23,7 +23,9 @@ import { FirstRealProvisioningService } from "../src/index.js";
 describe("FirstRealProvisioningService", () => {
   it("creates organization, workspace, and provisioning records through contracts", async () => {
     const unitOfWork = new InMemoryUnitOfWork();
-    const service = new FirstRealProvisioningService(unitOfWork);
+    const service = new FirstRealProvisioningService({
+      unitOfWork,
+    });
 
     const result = await service.createOrganization({
       type: "create_organization",
@@ -34,8 +36,8 @@ describe("FirstRealProvisioningService", () => {
 
     expect(result).toMatchObject({
       accepted: true,
-      state: "in_progress",
-      currentStep: "create_organization",
+      state: "completed",
+      currentStep: "mark_organization_ready",
       organizationId: "org_departify_unit_cmd_unit_001",
       workspaceId: "wsp_departify_unit_cmd_unit_001_primary",
     });
@@ -58,10 +60,13 @@ describe("FirstRealProvisioningService", () => {
       unitOfWork.provisioning.findById(result.provisioningId),
     ).resolves.toMatchObject({
       snapshot: {
-        state: "in_progress",
-        currentStep: "create_organization",
+        state: "completed",
+        currentStep: "mark_organization_ready",
       },
     });
+
+    expect(result.business?.templateIds).toContain("tpl_comercial");
+    expect(result.business?.departments).toHaveLength(1);
   });
 });
 

@@ -20,6 +20,7 @@
   "dependencies": {
     "@departify/application": "workspace:*",
     "@departify/config": "workspace:*",
+    "@departify/departments": "workspace:*",
     "@departify/organization-domain": "workspace:*",
     "@departify/persistence-contracts": "workspace:*",
     "@departify/persistence-supabase": "workspace:*",

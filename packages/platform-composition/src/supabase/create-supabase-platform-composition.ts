@@ -20,6 +20,8 @@ export function createSupabasePlatformComposition(
 
   return {
     persistence,
-    provisioning: new FirstRealProvisioningService(persistence.unitOfWork),
+    provisioning: new FirstRealProvisioningService({
+      unitOfWork: persistence.unitOfWork,
+    }),
   };
 }

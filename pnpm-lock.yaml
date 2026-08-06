@@ -668,6 +668,9 @@ importers:
       "@departify/config":
         specifier: workspace:*
         version: link:../config
+      "@departify/departments":
+        specifier: workspace:*
+        version: link:../departments
       "@departify/organization-domain":
         specifier: workspace:*
         version: link:../organization-domain
