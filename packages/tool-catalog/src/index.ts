@@ -53,3 +53,10 @@ export {
   type DiscoveryAnalyzeInput,
   type DiscoveryAnalyzeOutput,
 } from "./tools/discovery-analyze-tool.js";
+
+export {
+  createDiscoveryGetToolDefinition,
+  type DiscoveryGetInput,
+  type DiscoveryGetOutput,
+  type DiscoveryGetToolOptions,
+} from "./tools/discovery-get-tool.js";

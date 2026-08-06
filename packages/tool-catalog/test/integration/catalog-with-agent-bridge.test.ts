@@ -3,7 +3,11 @@ import {
   AgentToolRuntimeAdapter,
   buildAgentPermissionSetResolver,
 } from "@departify/agent-tool-bridge";
-import { buildEmptyCompanyDNA } from "@departify/business-discovery";
+import {
+  buildEmptyCompanyDNA,
+  createInMemoryDiscoveryReportRepository,
+  type CompanyDiscoveryReport,
+} from "@departify/business-discovery";
 import { Organization } from "@departify/organization-domain";
 import {
   createToolRuntime,
@@ -286,5 +290,88 @@ describe("Core Catalog ↔ AgentToolBridge integration", () => {
       throw new Error(`integration failed: ${result.reason}`);
     }
     expect(["completed", "failed", "cancelled"]).toContain(result.status);
+  });
+
+  it("executes discovery.get through the bridge with a real repository", async () => {
+    const repository = createInMemoryDiscoveryReportRepository();
+    const dna = buildEmptyCompanyDNA("org_departify");
+    const report: CompanyDiscoveryReport = {
+      organizationId: "org_departify",
+      sessionId: "session_disc_get",
+      metadata: {
+        sessionId: "session_disc_get",
+        startedAt: new Date("2026-08-06T10:00:00Z"),
+        completedAt: new Date("2026-08-06T10:00:01Z"),
+        durationMs: 1000,
+        sources: [],
+        dataPoints: 0,
+        questionsAsked: 0,
+        questionsAnswered: 0,
+      },
+      companyDna: dna,
+      findings: [],
+      gaps: [],
+      questions: [],
+      confidence: {
+        overall: "low",
+        companyDna: 0,
+        founderBrain: 0,
+        breakdown: {} as CompanyDiscoveryReport["confidence"]["breakdown"],
+      },
+      generatedAt: new Date("2026-08-06T10:00:01Z"),
+    };
+    repository.save({
+      executionId: "exe_disc_get_001",
+      sessionId: "session_disc_get",
+      organizationId: "org_departify",
+      report,
+      savedAt: new Date("2026-08-06T10:00:02Z"),
+    });
+
+    const context: CoreCatalogContext = { discoveryRepository: repository };
+    const toolRegistry = new ToolRuntimeRegistry();
+    const registration = registerAllCoreTools(toolRegistry, context);
+    expect(registration.entries.map((e) => e.id)).toContain("discovery.get");
+
+    const runtime = createToolRuntime({
+      grantedScopes: ["read.private"],
+    });
+    for (const entry of registration.entries) {
+      runtime.registry.register(entry.definition);
+      runtime.registry.setStatus(entry.id, "active");
+    }
+
+    const permissions = new Map([
+      [
+        "agent.discovery_reader",
+        [
+          {
+            scope: "runtime" as const,
+            action: "manage" as const,
+            resource: "*",
+          },
+        ],
+      ],
+    ]);
+
+    const port = new AgentToolRuntimeAdapter({
+      runtime,
+      fetchPermissionSet: buildAgentPermissionSetResolver(permissions),
+    });
+
+    const result = await port.executeAction({
+      actionId: "catalog_integration_discovery_get_001",
+      agentId: "agent.discovery_reader",
+      organizationId: "org_departify",
+      toolId: "discovery.get",
+      args: { organizationId: "org_departify" },
+    });
+
+    if (result.status === "rejected") {
+      throw new Error(`integration failed: ${result.reason}`);
+    }
+    expect(result.status).toBe("completed");
+    const output = result.output as { executionId: string };
+    expect(output.executionId).toBe("exe_disc_get_001");
   });
 });

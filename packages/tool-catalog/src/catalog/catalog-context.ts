@@ -1,3 +1,4 @@
+import type { DiscoveryReportRepository } from "@departify/business-discovery";
 import type {
   LlmRouter,
   ProviderRegistry as LlmProviderRegistry,
@@ -22,6 +23,7 @@ export interface CoreCatalogContext {
   readonly organizationResolver?: OrganizationResolver;
   readonly memoryRetrieval?: MemoryRetrievalPort;
   readonly knowledgeRetrieval?: KnowledgeRetrievalPort;
+  readonly discoveryRepository?: DiscoveryReportRepository;
   readonly llmRouter?: LlmRouter;
   readonly llmProviderRegistry?: LlmProviderRegistry;
   readonly toolProviderRegistry?: ToolRegistry;

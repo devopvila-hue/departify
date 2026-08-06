@@ -9,6 +9,7 @@ import type {
   KnowledgeRetrievalResult,
 } from "@departify/knowledge-engine";
 import { Organization } from "@departify/organization-domain";
+import { createInMemoryDiscoveryReportRepository } from "@departify/business-discovery";
 import {
   CORE_CATALOG_IDS,
   buildCoreCatalog,
@@ -64,7 +65,7 @@ class FakeRegistry {
 }
 
 describe("registerAllCoreTools", () => {
-  it("is the single composition point and registers all 5 Tools by default", () => {
+  it("is the single composition point and registers all Tools by default", () => {
     const registry = new FakeRegistry();
     const organization = buildOrganization();
     const memoryPort: MemoryRetrievalPort = {
@@ -84,6 +85,7 @@ describe("registerAllCoreTools", () => {
       },
       memoryRetrieval: memoryPort,
       knowledgeRetrieval: knowledgePort,
+      discoveryRepository: createInMemoryDiscoveryReportRepository(),
     };
 
     const result = registerAllCoreTools(registry, context);
@@ -106,6 +108,7 @@ describe("registerAllCoreTools", () => {
     expect(ids).not.toContain("organization.get");
     expect(ids).not.toContain("memory.search");
     expect(ids).not.toContain("knowledge.search");
+    expect(ids).not.toContain("discovery.get");
   });
 
   it("skips duplicates when the same Tool is already registered", () => {
@@ -149,6 +152,7 @@ describe("registerAllCoreTools", () => {
       },
       memoryRetrieval: memoryPort,
       knowledgeRetrieval: knowledgePort,
+      discoveryRepository: createInMemoryDiscoveryReportRepository(),
     });
 
     expect(tools.map((tool) => tool.id).sort()).toEqual(
