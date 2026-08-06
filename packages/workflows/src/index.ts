@@ -35,3 +35,9 @@ export {
   BUSINESS_READINESS_WORKFLOW,
   BUSINESS_READINESS_WORKFLOW_ID,
 } from "./workflows/business-readiness.workflow.js";
+
+export {
+  buildDepartmentPlanWorkflow,
+  DEPARTMENT_PLAN_WORKFLOW,
+  DEPARTMENT_PLAN_WORKFLOW_ID,
+} from "./workflows/department-plan.workflow.js";

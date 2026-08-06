@@ -67,3 +67,11 @@ export {
   type DiscoveryReadinessOutput,
   type DiscoveryReadinessToolOptions,
 } from "./tools/discovery-readiness-tool.js";
+
+export {
+  createDiscoveryPlanToolDefinition,
+  type DiscoveryPlanInput,
+  type DiscoveryPlanItem,
+  type DiscoveryPlanOutput,
+  type DiscoveryPlanToolOptions,
+} from "./tools/discovery-plan-tool.js";
