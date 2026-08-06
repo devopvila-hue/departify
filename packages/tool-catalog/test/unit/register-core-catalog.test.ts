@@ -92,7 +92,7 @@ describe("registerAllCoreTools", () => {
       [...CORE_CATALOG_IDS].sort(),
     );
     expect(result.skipped).toHaveLength(0);
-    expect(registry.list().length).toBe(5);
+    expect(registry.list().length).toBe(CORE_CATALOG_IDS.length);
   });
 
   it("skips Tools whose context is missing", () => {
@@ -102,6 +102,7 @@ describe("registerAllCoreTools", () => {
     const ids = result.entries.map((entry) => entry.id);
     expect(ids).toContain("system.uuid");
     expect(ids).toContain("system.health");
+    expect(ids).toContain("discovery.analyze");
     expect(ids).not.toContain("organization.get");
     expect(ids).not.toContain("memory.search");
     expect(ids).not.toContain("knowledge.search");
@@ -123,6 +124,7 @@ describe("registerAllCoreTools", () => {
   it("buildCoreCatalog with empty context returns only the Tools that need no context", () => {
     const tools = buildCoreCatalog({});
     expect(tools.map((tool) => tool.id).sort()).toEqual([
+      "discovery.analyze",
       "system.health",
       "system.uuid",
     ]);

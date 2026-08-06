@@ -19,6 +19,7 @@
   "dependencies": {
     "@departify/agent-runtime": "workspace:*",
     "@departify/agent-tool-bridge": "workspace:*",
+    "@departify/business-discovery": "workspace:*",
     "@departify/knowledge-engine": "workspace:*",
     "@departify/llm-router": "workspace:*",
     "@departify/memory-engine": "workspace:*",

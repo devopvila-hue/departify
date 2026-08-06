@@ -3,6 +3,7 @@ import {
   AgentToolRuntimeAdapter,
   buildAgentPermissionSetResolver,
 } from "@departify/agent-tool-bridge";
+import { buildEmptyCompanyDNA } from "@departify/business-discovery";
 import { Organization } from "@departify/organization-domain";
 import {
   createToolRuntime,
@@ -150,6 +151,56 @@ describe("Core Catalog ↔ AgentToolBridge integration", () => {
     expect(result.status).toBe("completed");
     const output = result.output as { organization: { id: string } };
     expect(output.organization.id).toBe("org_departify");
+  });
+
+  it("executes discovery.analyze through the bridge", async () => {
+    const context: CoreCatalogContext = {};
+    const toolRegistry = new ToolRuntimeRegistry();
+    const registration = registerAllCoreTools(toolRegistry, context);
+    expect(registration.entries.map((e) => e.id)).toContain("discovery.analyze");
+
+    const runtime = createToolRuntime({
+      grantedScopes: ["read.private"],
+    });
+    for (const entry of registration.entries) {
+      runtime.registry.register(entry.definition);
+      runtime.registry.setStatus(entry.id, "active");
+    }
+
+    const permissions = new Map([
+      [
+        "agent.discovery",
+        [
+          {
+            scope: "runtime" as const,
+            action: "manage" as const,
+            resource: "*",
+          },
+        ],
+      ],
+    ]);
+
+    const port = new AgentToolRuntimeAdapter({
+      runtime,
+      fetchPermissionSet: buildAgentPermissionSetResolver(permissions),
+    });
+
+    const result = await port.executeAction({
+      actionId: "catalog_integration_discovery_001",
+      agentId: "agent.discovery",
+      organizationId: "org_departify",
+      toolId: "discovery.analyze",
+      args: {
+        companyDna: buildEmptyCompanyDNA("org_departify"),
+      },
+    });
+
+    if (result.status === "rejected") {
+      throw new Error(`integration failed: ${result.reason}`);
+    }
+    expect(result.status).toBe("completed");
+    const output = result.output as { gaps: { gaps: unknown[] } };
+    expect(output.gaps.gaps.length).toBeGreaterThan(0);
   });
 
   it("rejects unknown Tools at the catalog level", async () => {

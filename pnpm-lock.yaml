@@ -812,6 +812,9 @@ importers:
       '@departify/agent-tool-bridge':
         specifier: workspace:*
         version: link:../agent-tool-bridge
+      '@departify/business-discovery':
+        specifier: workspace:*
+        version: link:../business-discovery
       '@departify/knowledge-engine':
         specifier: workspace:*
         version: link:../knowledge-engine

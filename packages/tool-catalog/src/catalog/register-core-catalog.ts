@@ -1,6 +1,11 @@
 import type { ToolDefinition } from "@departify/tool-runtime";
 import { type CoreCatalogContext } from "./catalog-context.js";
 import {
+  createDiscoveryAnalyzeToolDefinition,
+  type DiscoveryAnalyzeInput,
+  type DiscoveryAnalyzeOutput,
+} from "../tools/discovery-analyze-tool.js";
+import {
   createKnowledgeSearchToolDefinition,
   type KnowledgeSearchInput,
   type KnowledgeSearchOutput,
@@ -43,7 +48,8 @@ export interface CoreCatalogRegistration {
 }
 
 /**
- * Catalog constants — the canonical list of Tools shipped in Sprint 22.
+ * Catalog constants — the canonical list of Tools shipped in the catalog.
+ * `discovery.analyze` is added in Sprint 29.
  */
 export const CORE_CATALOG_IDS = [
   "system.uuid",
@@ -51,6 +57,7 @@ export const CORE_CATALOG_IDS = [
   "memory.search",
   "knowledge.search",
   "system.health",
+  "discovery.analyze",
 ] as const;
 
 export type CoreCatalogId = (typeof CORE_CATALOG_IDS)[number];
@@ -66,6 +73,10 @@ export function buildCoreCatalog(
   const catalog: ToolDefinition[] = [];
 
   catalog.push(createSystemUuidToolDefinition() as unknown as ToolDefinition);
+
+  catalog.push(
+    createDiscoveryAnalyzeToolDefinition() as unknown as ToolDefinition,
+  );
 
   if (context.organizationResolver) {
     catalog.push(
@@ -173,4 +184,6 @@ export type {
   KnowledgeSearchOutput,
   SystemHealthInput,
   SystemHealthOutput,
+  DiscoveryAnalyzeInput,
+  DiscoveryAnalyzeOutput,
 };

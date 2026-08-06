@@ -4,6 +4,7 @@
 
 ### Added
 
+- Business Discovery in the runtime flow in Sprint 29. Adds `discovery.analyze` to `packages/tool-catalog` — the first Tool that exposes the deterministic Business Discovery analysis to Digital Employees through the existing Tool Runtime pipeline. The Tool receives a `CompanyDNA` (and an optional `FounderBrain`) and returns the typed `GapAnalysisResult`, generated `DiscoveryQuestion[]`, the completeness summary (`companyDna`, `founderBrain`, `overall`) and `meetsMinimumRequirements`. It delegates entirely to the public contracts of `packages/business-discovery` (`analyzeGaps`, `generateQuestions`, `getCompletenessSummary`, `meetsMinimumRequirements`) — no duplicated logic, no AI, no LLM Router, no HTTP, no SDKs. Registered through the single composition point `registerAllCoreTools`; `CORE_CATALOG_IDS` now ships 6 Tools. 8 new tests (7 unit + 1 integration through AgentToolBridge → Tool Runtime). Existing public contracts of every other package are untouched.
 - ROSA adoption.
 - Golden Image foundation with Docker backend image, compose file, Railway config, Netlify portal config, Supabase CLI config, centralized typed configuration, and environment variable contract.
 - Provisioning Engine foundation with public contracts, pipeline phase definitions, explicit state model, validation primitives, adapter ports, and unit tests.

@@ -47,3 +47,9 @@ export {
   type SystemHealthOutput,
   type SystemHealthToolOptions,
 } from "./tools/system-health-tool.js";
+
+export {
+  createDiscoveryAnalyzeToolDefinition,
+  type DiscoveryAnalyzeInput,
+  type DiscoveryAnalyzeOutput,
+} from "./tools/discovery-analyze-tool.js";
