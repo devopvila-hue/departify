@@ -62,6 +62,17 @@ export type DiscoveryCompletionHandler = (
   event: BusinessEvent,
 ) => Promise<BusinessEventHandlerOutcome>;
 
+/**
+ * Host-supplied creator that turns a qualified lead into an organization.
+ * Sprint 39: the `lead.created` handler runs the qualification workflow and,
+ * when this port is wired, creates the organization automatically — closing
+ * the first step of the end-to-end Empresa Digital flow. The catalog never
+ * executes business logic; the host provides the implementation.
+ */
+export type OrganizationCreator = (
+  event: BusinessEvent,
+) => Promise<BusinessEventHandlerOutcome>;
+
 export const DEFAULT_LEAD_QUALIFICATION_WORKFLOW_ID = "wf_lead_qualification";
 
 /**
@@ -87,6 +98,10 @@ export function buildDefaultCatalogHandlers(options: {
   // non-archived Departments (Sprint 34 capability). Without either, the
   // event is rejected in a controlled way.
   departmentService?: DepartmentService;
+  // The organization creator is optional — when wired, `lead.created` turns
+  // a qualified lead into an organization automatically (Sprint 39). Without
+  // it, only the qualification workflow runs (retro-compatible).
+  organizationCreator?: OrganizationCreator;
 }): {
   readonly "lead.created": BusinessEventHandler;
   readonly "organization.created": BusinessEventHandler;
@@ -98,8 +113,7 @@ export function buildDefaultCatalogHandlers(options: {
     "lead.created": createLeadCreatedHandler(options),
     "organization.created": createOrganizationCreatedHandler(
       options.provisioningHandler,
-    ),
-    "organization.provisioned": createOrganizationProvisionedHandler(
+    ),    "organization.provisioned": createOrganizationProvisionedHandler(
       options.provisioningHandler,
       options.discoveryWorkflow,
     ),
@@ -115,6 +129,7 @@ export function buildDefaultCatalogHandlers(options: {
 
 function createLeadCreatedHandler(options: {
   workflowExecutor: WorkflowExecution;
+  organizationCreator?: OrganizationCreator;
 }): BusinessEventHandler {
   return async (event) => {
     if (event.type !== "lead.created") {
@@ -122,7 +137,7 @@ function createLeadCreatedHandler(options: {
     }
     const workflow = buildLeadQualificationWorkflow();
     const result: WorkflowResult = await options.workflowExecutor.run(workflow);
-    return {
+    const qualification: BusinessEventHandlerOutcome = {
       status: result.status === "completed" ? "completed" : "failed",
       output: result,
       errors: result.error
@@ -136,6 +151,30 @@ function createLeadCreatedHandler(options: {
         : [],
       workflowId: workflow.id,
       executionId: result.executionId,
+    };
+
+    // Sprint 39 — when the qualification completes and an organization
+    // creator is wired, turn the qualified lead into an organization.
+    if (result.status !== "completed" || !options.organizationCreator) {
+      return qualification;
+    }
+
+    const organization = await options.organizationCreator(event);
+    return {
+      ...qualification,
+      output: { qualification: result, organization: organization.output },
+      errors: [
+        ...qualification.errors,
+        ...organization.errors,
+      ],
+      ...(organization.workflowId
+        ? { workflowId: organization.workflowId }
+        : {}),
+      ...(organization.executionId
+        ? { executionId: organization.executionId }
+        : {}),
+      status:
+        organization.status === "completed" ? "completed" : "failed",
     };
   };
 }

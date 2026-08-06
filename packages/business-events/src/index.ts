@@ -32,6 +32,7 @@ export {
   type BusinessEventHandlerOutcome,
   type BusinessEventPhase,
   type DiscoveryCompletionHandler,
+  type OrganizationCreator,
 } from "./catalog/business-event-catalog.js";
 
 export {

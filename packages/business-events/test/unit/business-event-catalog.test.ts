@@ -14,6 +14,7 @@ import {
   DEFAULT_LEAD_QUALIFICATION_WORKFLOW_ID,
   type BusinessEvent,
   type BusinessEventHandlerOutcome,
+  type OrganizationCreator,
 } from "../../src/index.js";
 
 class SuccessAgentToolPort implements AgentToolPort {
@@ -542,5 +543,137 @@ describe("BusinessEventCatalog", () => {
 
     expect(outcome.status).toBe("failed");
     expect(outcome.errors[0]?.code).toBe("provisioning_failed");
+  });
+
+  it("creates the organization after a qualified lead when a creator is wired", async () => {
+    const port = new SuccessAgentToolPort();
+    const executor = new WorkflowExecution({ port });
+    const organizationCreator: OrganizationCreator = async (event) => ({
+      status: "completed",
+      output: {
+        organizationId: event.organizationId ?? "org_from_lead",
+        workspaceId: "wsp_from_lead",
+      },
+      errors: [],
+      provisioningId: "prv_from_lead",
+    });
+
+    const handlers = buildDefaultCatalogHandlers({
+      port,
+      workflowExecutor: executor,
+      organizationCreator,
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_lead_qualified_auto",
+      type: "lead.created",
+      occurredAt: new Date(),
+      organizationId: "org_from_lead",
+      departmentId: "dep_comercial",
+      leadId: "lead_qualified_001",
+      contactEmail: "qualified@example.com",
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers["lead.created"](
+      event,
+      {
+        now: () => new Date(),
+        eventId: () => "evt",
+        workflowId: () => "wf",
+        executionId: () => "wf_exec",
+      },
+    );
+
+    expect(outcome.status).toBe("completed");
+    const output = outcome.output as {
+      qualification: { workflowId: string };
+      organization: { organizationId: string };
+    };
+    expect(output.qualification.workflowId).toBe("wf_lead_qualification");
+    expect(output.organization.organizationId).toBe("org_from_lead");
+  });
+
+  it("only qualifies the lead when no organization creator is wired", async () => {
+    const port = new SuccessAgentToolPort();
+    const executor = new WorkflowExecution({ port });
+    const handlers = buildDefaultCatalogHandlers({
+      port,
+      workflowExecutor: executor,
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_lead_manual",
+      type: "lead.created",
+      occurredAt: new Date(),
+      organizationId: "org_manual",
+      departmentId: "dep_comercial",
+      leadId: "lead_manual_001",
+      contactEmail: "manual@example.com",
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers["lead.created"](
+      event,
+      {
+        now: () => new Date(),
+        eventId: () => "evt",
+        workflowId: () => "wf",
+        executionId: () => "wf_exec",
+      },
+    );
+
+    expect(outcome.status).toBe("completed");
+    // Retro-compatible shape: the qualification result only.
+    const output = outcome.output as { workflowId: string };
+    expect(output.workflowId).toBe("wf_lead_qualification");
+  });
+
+  it("does not create the organization when qualification fails", async () => {
+    const failingPort: AgentToolPort = {
+      executeAction: async () => {
+        throw new Error("qualification exploded");
+      },
+    };
+    const executor = new WorkflowExecution({ port: failingPort });
+    let creatorInvoked = false;
+    const organizationCreator: OrganizationCreator = async () => {
+      creatorInvoked = true;
+      return {
+        status: "completed",
+        output: null,
+        errors: [],
+      };
+    };
+
+    const handlers = buildDefaultCatalogHandlers({
+      port: failingPort,
+      workflowExecutor: executor,
+      organizationCreator,
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_lead_fail",
+      type: "lead.created",
+      occurredAt: new Date(),
+      organizationId: "org_fail",
+      departmentId: "dep_comercial",
+      leadId: "lead_fail_001",
+      contactEmail: "fail@example.com",
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers["lead.created"](
+      event,
+      {
+        now: () => new Date(),
+        eventId: () => "evt",
+        workflowId: () => "wf",
+        executionId: () => "wf_exec",
+      },
+    );
+
+    expect(outcome.status).toBe("failed");
+    expect(creatorInvoked).toBe(false);
   });
 });
