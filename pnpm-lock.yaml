@@ -276,6 +276,12 @@ importers:
         specifier: workspace:*
         version: link:../workflows
     devDependencies:
+      '@departify/business-discovery':
+        specifier: workspace:*
+        version: link:../business-discovery
+      '@departify/executive-director':
+        specifier: workspace:*
+        version: link:../executive-director
       '@eslint/js':
         specifier: ^9.17.0
         version: 9.39.5

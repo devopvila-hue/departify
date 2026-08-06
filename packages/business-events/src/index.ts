@@ -7,6 +7,7 @@ export {
   type LeadCreatedEvent,
   type OrganizationCreatedEvent,
   type OrganizationProvisionedEvent,
+  type OrganizationDiscoveryRequestedEvent,
   businessEventTypes,
   validateBusinessEvent,
   BusinessEventValidationError,

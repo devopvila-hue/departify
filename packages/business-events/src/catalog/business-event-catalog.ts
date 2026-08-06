@@ -1,5 +1,9 @@
 import type { AgentToolPort } from "@departify/agent-tool-bridge";
 import {
+  ExecutiveDiscoveryWorkflow,
+  type ExecutiveDiscoveryWorkflowResult,
+} from "@departify/executive-orchestrator";
+import {
   buildLeadQualificationWorkflow,
   type WorkflowExecution,
   type WorkflowResult,
@@ -51,7 +55,7 @@ export interface BusinessEventHandlerOutcome {
 export const DEFAULT_LEAD_QUALIFICATION_WORKFLOW_ID = "wf_lead_qualification";
 
 /**
- * Default catalog handler factory. Returns the three handlers wired to
+ * Default catalog handler factory. Returns the handlers wired to
  * the existing runtimes.
  */
 export function buildDefaultCatalogHandlers(options: {
@@ -62,10 +66,14 @@ export function buildDefaultCatalogHandlers(options: {
   provisioningHandler?: (
     event: BusinessEvent,
   ) => Promise<BusinessEventHandlerOutcome>;
+  // The discovery workflow is optional — hosts that don't wire the
+  // Executive Discovery Workflow (Sprint 31) get a controlled rejection.
+  discoveryWorkflow?: ExecutiveDiscoveryWorkflow;
 }): {
   readonly "lead.created": BusinessEventHandler;
   readonly "organization.created": BusinessEventHandler;
   readonly "organization.provisioned": BusinessEventHandler;
+  readonly "organization.discovery_requested": BusinessEventHandler;
 } {
   return {
     "lead.created": createLeadCreatedHandler(options),
@@ -74,6 +82,9 @@ export function buildDefaultCatalogHandlers(options: {
     ),
     "organization.provisioned": createOrganizationProvisionedHandler(
       options.provisioningHandler,
+    ),
+    "organization.discovery_requested": createOrganizationDiscoveryRequestedHandler(
+      options.discoveryWorkflow,
     ),
   };
 }
@@ -132,6 +143,68 @@ function createOrganizationProvisionedHandler(
       );
     }
     return provisioningHandler(event);
+  };
+}
+
+/**
+ * Handler for `organization.discovery_requested`. Delegates to the existing
+ * `ExecutiveDiscoveryWorkflow` (Sprint 31) — the first official Executive
+ * workflow — which composes Business Discovery initiation (Sprint 28) with
+ * the official `discovery.analyze` dispatch (Sprint 30). The workflow is
+ * injected by the host; without it the event is rejected in a controlled
+ * way. No business logic lives here.
+ */
+function createOrganizationDiscoveryRequestedHandler(
+  discoveryWorkflow: ExecutiveDiscoveryWorkflow | undefined,
+): BusinessEventHandler {
+  return async (event) => {
+    if (event.type !== "organization.discovery_requested") {
+      return rejected(
+        "organization.discovery_requested handler invoked for non discovery event",
+      );
+    }
+    if (!discoveryWorkflow) {
+      return rejected(
+        "organization.discovery_requested requires an ExecutiveDiscoveryWorkflow. No discovery workflow was supplied to the catalog.",
+      );
+    }
+
+    const result: ExecutiveDiscoveryWorkflowResult =
+      await discoveryWorkflow.run({
+        organizationId: event.organizationId,
+        requestedBy: event.requestedBy,
+        options: {
+          includeFounderBrain: event.includeFounderBrain ?? false,
+          includeCompetitorAnalysis: event.includeCompetitorAnalysis ?? false,
+          includeMarketAnalysis: event.includeMarketAnalysis ?? false,
+          depth: event.depth ?? "standard",
+        },
+        ...(event.priority ? { priority: event.priority } : {}),
+      });
+
+    if (result.status === "failed") {
+      return {
+        status: "failed",
+        output: result,
+        errors: [
+          {
+            code: result.error.code,
+            message: result.error.message,
+            phase: "execution",
+          },
+        ],
+        workflowId: result.workflowId,
+        executionId: result.executionId,
+      };
+    }
+
+    return {
+      status: "completed",
+      output: result,
+      errors: [],
+      workflowId: result.workflowId,
+      executionId: result.executionId,
+    };
   };
 }
 
@@ -200,6 +273,7 @@ export function createBusinessEventCatalog(
     readonly "lead.created": BusinessEventHandler;
     readonly "organization.created": BusinessEventHandler;
     readonly "organization.provisioned": BusinessEventHandler;
+    readonly "organization.discovery_requested": BusinessEventHandler;
   }>,
 ): BusinessEventCatalog {
   const catalog = new BusinessEventCatalog();
@@ -213,6 +287,12 @@ export function createBusinessEventCatalog(
     catalog.register(
       "organization.provisioned",
       handlers["organization.provisioned"],
+    );
+  }
+  if (handlers?.["organization.discovery_requested"]) {
+    catalog.register(
+      "organization.discovery_requested",
+      handlers["organization.discovery_requested"],
     );
   }
   return catalog;
@@ -236,6 +316,10 @@ export function buildCanonicalCatalog(
   const catalog = new BusinessEventCatalog()
     .register("lead.created", handlers["lead.created"])
     .register("organization.created", handlers["organization.created"])
-    .register("organization.provisioned", handlers["organization.provisioned"]);
+    .register("organization.provisioned", handlers["organization.provisioned"])
+    .register(
+      "organization.discovery_requested",
+      handlers["organization.discovery_requested"],
+    );
   return { catalog, handlers };
 }

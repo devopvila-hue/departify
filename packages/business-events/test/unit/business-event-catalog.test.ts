@@ -34,7 +34,7 @@ class SuccessAgentToolPort implements AgentToolPort {
 }
 
 describe("BusinessEventCatalog", () => {
-  it("builds the canonical catalog with the three default handlers", () => {
+  it("builds the canonical catalog with the four default handlers", () => {
     const port = new SuccessAgentToolPort();
     const executor = new WorkflowExecution({ port });
     const { catalog, handlers } = buildCanonicalCatalog({
@@ -42,21 +42,24 @@ describe("BusinessEventCatalog", () => {
       workflowExecutor: executor,
     });
 
-    expect(catalog.size()).toBe(3);
+    expect(catalog.size()).toBe(4);
     expect(catalog.has("lead.created")).toBe(true);
     expect(catalog.has("organization.created")).toBe(true);
     expect(catalog.has("organization.provisioned")).toBe(true);
+    expect(catalog.has("organization.discovery_requested")).toBe(true);
     expect([...catalog.list()].sort()).toEqual(
       [
         "lead.created",
         "organization.created",
         "organization.provisioned",
+        "organization.discovery_requested",
       ].sort(),
     );
 
     expect(typeof handlers["lead.created"]).toBe("function");
     expect(typeof handlers["organization.created"]).toBe("function");
     expect(typeof handlers["organization.provisioned"]).toBe("function");
+    expect(typeof handlers["organization.discovery_requested"]).toBe("function");
   });
 
   it("rejects duplicate registrations", () => {
@@ -132,5 +135,36 @@ describe("BusinessEventCatalog", () => {
     const catalog = createBusinessEventCatalog();
     expect(catalog.size()).toBe(0);
     expect(catalog.list()).toEqual([]);
+  });
+
+  it("returns a controlled rejection when the discovery workflow is missing", async () => {
+    const port = new SuccessAgentToolPort();
+    const executor = new WorkflowExecution({ port });
+    const handlers = buildDefaultCatalogHandlers({
+      port,
+      workflowExecutor: executor,
+    });
+
+    const event: BusinessEvent = {
+      eventId: "evt_disc_001",
+      type: "organization.discovery_requested",
+      occurredAt: new Date(),
+      organizationId: "org_demo",
+      requestedBy: "tester",
+      payload: {},
+    };
+
+    const outcome: BusinessEventHandlerOutcome = await handlers[
+      "organization.discovery_requested"
+    ](event, {
+      now: () => new Date(),
+      eventId: () => "evt",
+      workflowId: () => "wf",
+      executionId: () => "wf_exec",
+    });
+
+    expect(outcome.status).toBe("rejected");
+    expect(outcome.errors[0]?.code).toBe("BUSINESS_EVENT_REJECTED");
+    expect(outcome.errors[0]?.message).toMatch(/discovery workflow/i);
   });
 });

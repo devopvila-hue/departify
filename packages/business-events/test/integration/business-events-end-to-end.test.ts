@@ -9,6 +9,12 @@ import {
 } from "@departify/tool-runtime";
 import { registerAllCoreTools } from "@departify/tool-catalog";
 import { WorkflowExecution } from "@departify/workflows";
+import { BusinessDiscoveryService } from "@departify/business-discovery";
+import { ExecutiveDirector } from "@departify/executive-director";
+import {
+  createExecutiveDiscoveryWorkflow,
+  createExecutiveOrchestrator,
+} from "@departify/executive-orchestrator";
 import {
   BusinessEventService,
   buildCanonicalCatalog,
@@ -149,5 +155,81 @@ describe("BusinessEvent end-to-end integration", () => {
     expect(result.status).toBe("completed");
     expect(result.provisioningId).toBe("prv_integration_001");
     expect(result.errors).toEqual([]);
+  });
+
+  it("publishes organization.discovery_requested through the Executive Discovery Workflow", async () => {
+    // Real composition: AgentToolBridge → Tool Runtime → Core Tool Catalog
+    // with the discovery.analyze Tool, driven by the real
+    // ExecutiveDiscoveryWorkflow (Sprint 31).
+    const toolRegistry = new ToolRuntimeRegistry();
+    registerAllCoreTools(toolRegistry, {});
+    const runtime = createToolRuntime({
+      grantedScopes: ["read.public", "read.private"],
+    });
+    for (const entry of toolRegistry.list()) {
+      runtime.registry.register(entry.definition);
+      runtime.registry.setStatus(entry.definition.id, "active");
+    }
+
+    const port: AgentToolPort = new AgentToolRuntimeAdapter({
+      runtime,
+      fetchPermissionSet: buildAgentPermissionSetResolver(
+        new Map([
+          [
+            "agent.executive",
+            [
+              {
+                scope: "runtime" as const,
+                action: "manage" as const,
+                resource: "*",
+              },
+            ],
+          ],
+        ]),
+      ),
+    });
+
+    const orchestrator = createExecutiveOrchestrator({
+      director: new ExecutiveDirector(),
+      bridge: port,
+    });
+
+    const discoveryWorkflow = createExecutiveDiscoveryWorkflow({
+      discoveryService: new BusinessDiscoveryService({
+        sessionIdGenerator: () => "session_evt_e2e",
+      }),
+      orchestrator,
+      executionIdFactory: () => "exe_disc_evt_e2e",
+    });
+
+    const executor = new WorkflowExecution({ port });
+    const { catalog } = buildCanonicalCatalog({
+      port,
+      workflowExecutor: executor,
+      discoveryWorkflow,
+    });
+    const service = new BusinessEventService({ catalog });
+
+    const event: BusinessEvent = {
+      eventId: "evt_e2e_discovery",
+      type: "organization.discovery_requested",
+      occurredAt: new Date(),
+      organizationId: "org_departify",
+      requestedBy: "tester",
+      includeFounderBrain: true,
+      payload: {},
+    };
+
+    const result = await service.publish(event);
+
+    expect(result.status).toBe("completed");
+    expect(result.workflowId).toBe("wf_executive_discovery");
+    expect(result.executionId).toBe("exe_disc_evt_e2e");
+    expect(result.errors).toEqual([]);
+    const output = result.output as {
+      report: { gaps: unknown[]; questions: unknown[] };
+    };
+    expect(output.report.gaps.length).toBeGreaterThan(0);
+    expect(output.report.questions.length).toBeGreaterThan(0);
   });
 });

@@ -15,6 +15,7 @@ export const businessEventTypes = [
   "lead.created",
   "organization.created",
   "organization.provisioned",
+  "organization.discovery_requested",
 ] as const;
 
 export type BusinessEventType = (typeof businessEventTypes)[number];
@@ -60,8 +61,28 @@ export interface OrganizationProvisionedEvent extends BusinessEventBase {
   readonly provisioningId: string;
 }
 
+/**
+ * Request to run the Executive Business Discovery Workflow (Sprint 31) for
+ * an organization. Dispatched through the BusinessEventCatalog to the
+ * existing `ExecutiveDiscoveryWorkflow`; the payload mirrors the workflow
+ * input (Sprint 28 options).
+ */
+export interface OrganizationDiscoveryRequestedEvent extends BusinessEventBase {
+  readonly type: "organization.discovery_requested";
+  readonly organizationId: BusinessOrganizationId;
+  readonly requestedBy: string;
+  readonly includeFounderBrain?: boolean;
+  readonly includeCompetitorAnalysis?: boolean;
+  readonly includeMarketAnalysis?: boolean;
+  readonly depth?: "basic" | "standard" | "comprehensive";
+  readonly priority?: "low" | "normal" | "high";
+}
+
 export type BusinessEvent =
-  LeadCreatedEvent | OrganizationCreatedEvent | OrganizationProvisionedEvent;
+  | LeadCreatedEvent
+  | OrganizationCreatedEvent
+  | OrganizationProvisionedEvent
+  | OrganizationDiscoveryRequestedEvent;
 
 export class BusinessEventValidationError extends Error {
   constructor(message: string) {
@@ -147,6 +168,37 @@ export function validateBusinessEvent(event: unknown): BusinessEvent {
     if (typeof candidate.provisioningId !== "string") {
       throw new BusinessEventValidationError(
         "organization.provisioned requires a provisioningId.",
+      );
+    }
+  } else if (type === "organization.discovery_requested") {
+    if (typeof candidate.organizationId !== "string") {
+      throw new BusinessEventValidationError(
+        "organization.discovery_requested requires an organizationId.",
+      );
+    }
+    if (typeof candidate.requestedBy !== "string") {
+      throw new BusinessEventValidationError(
+        "organization.discovery_requested requires a requestedBy.",
+      );
+    }
+    const depth = candidate.depth;
+    if (
+      depth !== undefined &&
+      (typeof depth !== "string" ||
+        !["basic", "standard", "comprehensive"].includes(depth))
+    ) {
+      throw new BusinessEventValidationError(
+        "organization.discovery_requested has an invalid depth.",
+      );
+    }
+    const priority = candidate.priority;
+    if (
+      priority !== undefined &&
+      (typeof priority !== "string" ||
+        !["low", "normal", "high"].includes(priority))
+    ) {
+      throw new BusinessEventValidationError(
+        "organization.discovery_requested has an invalid priority.",
       );
     }
   }
