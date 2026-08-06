@@ -23,3 +23,9 @@ export {
   LEAD_QUALIFICATION_WORKFLOW,
   LEAD_QUALIFICATION_WORKFLOW_ID,
 } from "./workflows/lead-qualification.workflow.js";
+
+export {
+  buildBusinessBriefingWorkflow,
+  BUSINESS_BRIEFING_WORKFLOW,
+  BUSINESS_BRIEFING_WORKFLOW_ID,
+} from "./workflows/business-briefing.workflow.js";
