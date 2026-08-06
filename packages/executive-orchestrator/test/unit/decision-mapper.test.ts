@@ -56,6 +56,61 @@ describe("ExecutiveDecisionMapper", () => {
     expect(executiveIntent.metadata?.["orchestrator_tool"]).toBe("system.uuid");
   });
 
+  it("adapts a discovery_analyze intent to discovery.analyze", () => {
+    const mapper = createExecutiveDecisionMapper();
+    const intent: OrchestratorIntent = {
+      type: "discovery_analyze",
+      intentId: "intent_discovery_001",
+      requestedBy: "tester",
+      organizationId: "org_departify",
+      toolArgs: { companyDna: { organizationId: "org_departify" } },
+    };
+
+    const executiveIntent = mapper.toExecutiveIntent(intent);
+    expect(executiveIntent.type).toBe("assign_task");
+    expect(executiveIntent.taskId).toBe("tool:discovery.analyze");
+    expect(executiveIntent.metadata?.["orchestrator_intent"]).toBe(
+      "discovery_analyze",
+    );
+    expect(executiveIntent.metadata?.["orchestrator_tool"]).toBe(
+      "discovery.analyze",
+    );
+    expect(executiveIntent.organizationId).toBe("org_departify");
+  });
+
+  it("forwards dynamic toolArgs into the AgentToolAction", () => {
+    const mapper = createExecutiveDecisionMapper();
+    const intent: OrchestratorIntent = {
+      type: "discovery_analyze",
+      intentId: "intent_discovery_args_001",
+      requestedBy: "tester",
+      toolArgs: {
+        companyDna: { organizationId: "org_departify" },
+        options: { maxTotalQuestions: 5 },
+      },
+    };
+    const decision = {
+      decisionId: "dec_discovery_001",
+      intentId: intent.intentId,
+      intentType: "assign_task" as const,
+      type: "coordinate_agent_runtime" as const,
+      target: "agent_runtime" as const,
+      action: "prepare_task_assignment",
+      status: "created" as const,
+      rationale: "test",
+      createdAt: new Date(),
+    };
+
+    const action = mapper.toAgentToolAction(decision, intent, "agent.executive");
+
+    expect(action.toolId).toBe("discovery.analyze");
+    expect(action.args).toEqual({
+      companyDna: { organizationId: "org_departify" },
+      options: { maxTotalQuestions: 5 },
+    });
+    expect(action.metadata?.["orchestrator_intent"]).toBe("discovery_analyze");
+  });
+
   it("produces AgentToolAction with correlation IDs from the decision", () => {
     const mapper = createExecutiveDecisionMapper();
     const intent: OrchestratorIntent = {

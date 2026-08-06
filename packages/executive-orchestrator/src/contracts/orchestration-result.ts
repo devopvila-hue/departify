@@ -4,14 +4,7 @@ import type {
   AgentToolOutcomeError,
 } from "@departify/agent-tool-bridge";
 import type { ExecutiveDecision } from "@departify/executive-director";
-import type {
-  HealthCheckIntent,
-  OrganizationSummaryIntent,
-  GenerateIdentifierIntent,
-} from "./orchestrator-contracts.js";
-
-export type OrchestratorIntentSummary =
-  HealthCheckIntent | OrganizationSummaryIntent | GenerateIdentifierIntent;
+import type { OrchestratorIntentSummary } from "./orchestrator-contracts.js";
 
 /**
  * Envelope returned by the orchestrator after every run. Preserves the full

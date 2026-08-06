@@ -1,4 +1,5 @@
 export {
+  type DiscoveryAnalyzeIntent,
   type GenerateIdentifierIntent,
   type HealthCheckIntent,
   type OrganizationSummaryIntent,

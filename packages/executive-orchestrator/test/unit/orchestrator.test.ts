@@ -148,6 +148,56 @@ describe("ExecutiveOrchestrator", () => {
     );
   });
 
+  it("orchestrates a discovery_analyze intent through discovery.analyze", async () => {
+    const bridge = successBridge(
+      {
+        gaps: { gaps: [{ id: "gap_mission_001" }] },
+        questions: [{ id: "q_mission_001" }],
+      },
+      "discovery.analyze",
+    );
+    const orchestrator = buildOrchestrator(bridge);
+
+    const result = await orchestrator.orchestrateDiscoveryAnalyze({
+      type: "discovery_analyze",
+      intentId: "intent_discovery_e2e_001",
+      requestedBy: "tester",
+      organizationId: "org_departify",
+      toolArgs: { companyDna: { organizationId: "org_departify" } },
+    });
+
+    expect(result.tool.toolId).toBe("discovery.analyze");
+    expect(result.tool.status).toBe("completed");
+    expect(result.intentId).toBe("intent_discovery_e2e_001");
+    expect(result.decisionId).toMatch(/^dec_/);
+    expect(result.actionId).toMatch(/^act_dec_/);
+    expect(result.error).toBeNull();
+    expect(
+      (result.output as { gaps: { gaps: unknown[] } }).gaps.gaps.length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("surfaces discovery.analyze rejections as a rejected OrchestrationResult", async () => {
+    const bridge = rejectedBridge(
+      "Tool not authorized for agent.",
+      "execution_denied",
+      "discovery.analyze",
+    );
+    const orchestrator = buildOrchestrator(bridge);
+
+    const result = await orchestrator.orchestrateDiscoveryAnalyze({
+      type: "discovery_analyze",
+      intentId: "intent_discovery_rej_001",
+      requestedBy: "tester",
+      organizationId: "org_departify",
+      toolArgs: { companyDna: { organizationId: "org_departify" } },
+    });
+
+    expect(result.tool.status).toBe("rejected");
+    expect(result.error?.phase).toBe("bridge");
+    expect(result.error?.code).toBe("execution_denied");
+  });
+
   it("surfaces agent rejections as a rejected OrchestrationResult", async () => {
     const bridge = rejectedBridge(
       "Agent not registered.",

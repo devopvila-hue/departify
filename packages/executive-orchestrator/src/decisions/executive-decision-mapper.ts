@@ -75,7 +75,8 @@ export class ExecutiveDecisionMapper {
    * Translates an ExecutiveDecision into the AgentToolAction consumed by the
    * AgentToolBridge. The mapper looks up the originating OrchestratorIntent
    * through the intent metadata so it can resolve the Tool and args
-   * deterministically.
+   * deterministically. Dynamic `intent.toolArgs` (e.g. CompanyDNA for
+   * `discovery_analyze`) are merged over the static mapping args.
    */
   toAgentToolAction(
     decision: ExecutiveDecision,
@@ -91,7 +92,7 @@ export class ExecutiveDecisionMapper {
         ? { organizationId: intent.organizationId }
         : {}),
       toolId: mapping.toolId,
-      args: { ...mapping.toolArgs },
+      args: { ...mapping.toolArgs, ...(intent.toolArgs ?? {}) },
       metadata: {
         intent_id: intent.intentId,
         decision_id: decision.decisionId,

@@ -3,6 +3,7 @@ import {
   AgentToolRuntimeAdapter,
   buildAgentPermissionSetResolver,
 } from "@departify/agent-tool-bridge";
+import { buildEmptyCompanyDNA } from "@departify/business-discovery";
 import { ExecutiveDirector } from "@departify/executive-director";
 import { Organization } from "@departify/organization-domain";
 import {
@@ -215,6 +216,76 @@ describe("Executive Director ↔ Tool Runtime end-to-end orchestration", () => {
     expect(result.decisionId).toBe("dec_intent_uuid_integration_001");
   });
 
+  it("dispatches discovery_analyze through discovery.analyze end-to-end", async () => {
+    const catalogContext: CoreCatalogContext = {};
+    const toolRegistry = new ToolRuntimeRegistry();
+    registerAllCoreTools(toolRegistry, catalogContext);
+
+    const runtime = createToolRuntime({
+      grantedScopes: ["read.public", "read.private"],
+    });
+    for (const entry of toolRegistry.list()) {
+      runtime.registry.register(entry.definition);
+      runtime.registry.setStatus(entry.definition.id, "active");
+    }
+
+    const agentRegistry = new AgentRegistry();
+    agentRegistry.register({
+      id: "agent.executive",
+      organizationId: "org_departify",
+      displayName: "Executive Agent",
+      role: "orchestrator",
+    });
+
+    const permissions = new Map([
+      [
+        "agent.executive",
+        [
+          {
+            scope: "runtime" as const,
+            action: "manage" as const,
+            resource: "*",
+          },
+        ],
+      ],
+    ]);
+
+    const bridge = new AgentToolRuntimeAdapter({
+      runtime,
+      fetchPermissionSet: buildAgentPermissionSetResolver(permissions),
+    });
+
+    const orchestrator = createExecutiveOrchestrator({
+      director: new ExecutiveDirector(),
+      bridge,
+    });
+
+    const result = await orchestrator.orchestrateDiscoveryAnalyze({
+      type: "discovery_analyze",
+      intentId: "intent_discovery_integration_001",
+      requestedBy: "tester",
+      organizationId: "org_departify",
+      toolArgs: { companyDna: buildEmptyCompanyDNA("org_departify") },
+    });
+
+    expect(result.tool.toolId).toBe("discovery.analyze");
+    expect(result.tool.status).toBe("completed");
+    expect(result.intentId).toBe("intent_discovery_integration_001");
+    expect(result.decisionId).toBe("dec_intent_discovery_integration_001");
+    expect(result.actionId).toBe(
+      "act_dec_intent_discovery_integration_001",
+    );
+    expect(result.error).toBeNull();
+    const output = result.output as {
+      gaps: { gaps: unknown[] };
+      questions: unknown[];
+      completeness: { overall: number };
+    };
+    expect(output.gaps.gaps.length).toBeGreaterThan(0);
+    expect(output.questions.length).toBeGreaterThan(0);
+    expect(output.completeness.overall).toBe(0);
+  });
+
   it("supports permission denial through the orchestrator", async () => {
     const toolRegistry = new ToolRuntimeRegistry();
     registerAllCoreTools(toolRegistry, {});
@@ -264,5 +335,6 @@ describe("Executive Director ↔ Tool Runtime end-to-end orchestration", () => {
     expect(CORE_CATALOG_IDS).toContain("system.health");
     expect(CORE_CATALOG_IDS).toContain("organization.get");
     expect(CORE_CATALOG_IDS).toContain("system.uuid");
+    expect(CORE_CATALOG_IDS).toContain("discovery.analyze");
   });
 });

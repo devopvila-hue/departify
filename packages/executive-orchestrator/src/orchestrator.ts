@@ -4,6 +4,7 @@ import type {
   ExecutiveDirectorResult,
 } from "@departify/executive-director";
 import type {
+  DiscoveryAnalyzeIntent,
   HealthCheckIntent,
   OrganizationSummaryIntent,
   GenerateIdentifierIntent,
@@ -69,6 +70,12 @@ export class ExecutiveOrchestrator {
 
   async orchestrateGenerateIdentifier(
     intent: GenerateIdentifierIntent,
+  ): Promise<OrchestrationResult> {
+    return this.orchestrate(intent);
+  }
+
+  async orchestrateDiscoveryAnalyze(
+    intent: DiscoveryAnalyzeIntent,
   ): Promise<OrchestrationResult> {
     return this.orchestrate(intent);
   }
