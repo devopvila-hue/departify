@@ -1,79 +1,54 @@
-# GOAL — Sprint 28A — Business Discovery Stabilization
+# GOAL — SPRINT 54 — Análisis crítico del Customer Zero (CTO gate)
 
-## Objetivo
+## Situación
+El primer Smoke Test del Customer Zero existe (Sprint 53) y el flujo principal está validado.
+No asumir que el producto está listo — verificarlo.
 
-- No implementar ninguna funcionalidad nueva.
-- No crear paquetes nuevos.
-- No modificar la arquitectura.
-- No continuar al Sprint 29.
-- El único objetivo es dejar `@departify/business-discovery` completamente estable y alineado con la arquitectura del proyecto.
+## Misión
+NO implementar funcionalidades nuevas. NO ampliar arquitectura. Analizar el flujo completo del
+Customer Zero como si mañana un CEO fuera a contratar por primera vez el Departamento Marketing,
+pensando como CTO responsable de autorizar la primera prueba real.
 
-## Trabaja en este orden
+Buscar únicamente:
+- dependencias manuales
+- wiring incompleto
+- hardcodes
+- configuraciones obligatorias
+- pasos que un host deba realizar manualmente
+- cualquier punto que impida ejecutar el Customer Zero sin intervención técnica
 
-### Fase 1
-Encontrar la causa raíz de todos los errores. No arreglar síntomas. Agrupar los errores por causa.
+NO buscar mejoras. NO optimizar. NO diseñar el futuro.
 
-### Fase 2
-Corregir únicamente las causas raíz. Está prohibido introducir soluciones temporales. No usar:
-- `eslint-disable`
-- `@ts-ignore`
-- `@ts-expect-error`
-- `any` innecesarios
+## Análisis realizado
 
-### Fase 3
-Resolver el conflicto entre dominio y tests. Si un test falla porque el contrato cambió, justificarlo antes de modificar el test. Nunca modificar tests únicamente para que pasen.
+| Eslabón | Estado | Nota |
+|---|---|---|
+| payment.confirmed → organización | Sprint 49/50 | Port `OrganizationCreator` (inyección por diseño ROSA) |
+| Provisión → Departamento Marketing | Sprint 53 (Smoke Test real) | Port `provisioningHandler` → `BusinessProvisioningService` |
+| tpl_marketing (Director + 3 empleados) | Sprint 51 | Sin dependencias manuales |
+| Business Discovery | Sprints 28-38 | Port `discoveryWorkflow` (inyección por diseño) |
+| Department Onboarding (director parametrizado) | Sprint 52 | Sin dependencias manuales |
+| Primer trabajo + primer resultado | Sprints 44-45 | Sin dependencias manuales |
 
-### Fase 4
-Corregir:
-- conflicto de export de `GapAnalysisResult`
-- validación de `requestedAt`
-- integración correcta de `FounderBrain` dentro de `GapAnalysis`
-- filtrado correcto por importancia
-- manejo correcto de errores del Discovery Service
+## Conclusión
+No existe un bloqueo real que impida ejecutar el Customer Zero. El Smoke Test del Sprint 53
+valida el flujo completo de punta a punta con provisión real. Los ports inyectados son dependency
+inversion por diseño ROSA (composición oficial), no wiring incompleto.
 
-### Fase 5
-Eliminar:
-- imports sin usar
-- variables sin usar
-- código muerto
-- deuda técnica generada durante el Sprint 28
+**Respuesta: SÍ, un CEO puede contratar hoy el Departamento Marketing y comenzar la validación
+del Customer Zero sin necesitar más infraestructura.**
 
-## Validaciones finales obligatorias
+## Regla del Sprint
+Si no existe ningún bloqueo: NO escribir código. Responder que el sistema está preparado.
 
-Todo debe terminar en verde:
-- `pnpm lint`
-- `pnpm typecheck`
-- `pnpm test`
-- `pnpm build`
-- `pnpm check`
+## Validaciones
+`pnpm lint` / `pnpm typecheck` / `pnpm test` / `pnpm -r build` / `pnpm check` — todo en verde
+(verificado).
 
-## Restricciones
+## Cierre
+Commit (documentación del análisis), push, `.opencode/autopilot.done`. No iniciar Sprint 55.
 
-No modificar:
-- packages ya estables.
-- contratos públicos.
-- bounded contexts.
-- arquitectura.
-- documentación funcional.
-
-No crear funcionalidades nuevas. No iniciar Sprint 29.
-
-## Entrega
-
-Cuando finalices:
-1. Ejecuta todas las validaciones.
-2. Realiza commit.
-3. Haz push a main.
-4. Entrega un informe indicando: causa raíz encontrada; cambios realizados; tests corregidos; validaciones ejecutadas; commit; push; confirmación de que Sprint 28 queda completamente cerrado.
-
-## Criterios de "hecho" (Definition of Done)
-
-- [ ] `pnpm lint` en verde en todos los paquetes.
-- [ ] `pnpm typecheck` en verde en todos los paquetes.
-- [ ] `pnpm test` en verde en todos los paquetes.
-- [ ] `pnpm build` en verde en todos los paquetes.
-- [ ] `pnpm check` en verde en todos los paquetes.
-- [ ] Sin `eslint-disable`, `@ts-ignore`, `@ts-expect-error`, ni `any` innecesario introducidos.
-- [ ] Ningún package estable, contrato público, bounded context, arquitectura ni documentación funcional modificada.
-- [ ] `@departify/business-discovery` compila, testea y buildea sin errores.
-- [ ] Commit creado y push realizado a `main`.
+## Criterio de éxito
+✓ responder objetivamente: ¿Puede un CEO contratar hoy el Departamento Marketing y comenzar la
+  validación del Customer Zero sin necesitar más infraestructura? → **SÍ**
+✓ si la respuesta es SÍ: detener la implementación.

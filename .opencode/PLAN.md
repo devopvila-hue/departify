@@ -1,29 +1,29 @@
-# PLAN — Sprint 28A — Business Discovery Stabilization
+# PLAN — Sprint 54 — Análisis crítico del Customer Zero (sin implementación)
 
-## Fase 1 — Diagnóstico de causas raíz
-- [ ] T1. Recopilar todos los errores de `lint`, `typecheck`, `test` y `build` de `packages/business-discovery`.
-- [ ] T2. Agrupar errores por causa raíz (export conflict, readonly contract, validación, gap analysis logic, service error handling, unused imports).
+## Fase 1 — Análisis del flujo
+- [x] T0. Recorrer el flujo completo: payment.confirmed → Organization → Provisioning →
+  Department → Marketing Template → Business Discovery → Department Onboarding → Primer Trabajo
+  → Primer Resultado.
+- [x] T1. Verificar cada eslabón contra el estado real del repositorio.
 
-## Fase 2 — Corrección de causas raíz (dominio)
-- [ ] T3. Corregir conflicto de export de `GapAnalysisResult` en `src/analysis/gap-analysis.ts`.
-- [ ] T4. Corregir validación de `requestedAt` en `src/contracts/discovery-types.ts`.
-- [ ] T5. Corregir integración de `FounderBrain` dentro de `GapAnalysis`.
-- [ ] T6. Corregir filtrado correcto por importancia (`getGapsByImportance`).
-- [ ] T7. Corregir manejo de errores del Discovery Service.
+## Fase 2 — Detección de bloqueos
+- [x] T2. Buscar dependencias manuales, wiring incompleto, hardcodes, configuraciones
+  obligatorias, pasos técnicos pendientes.
+- [x] T3. Conclusión: NO existe un bloqueo real. El Smoke Test del Sprint 53 valida el flujo
+  completo con provisión real. Los ports inyectados son dependency inversion por diseño ROSA.
 
-## Fase 3 — Alineación dominio ↔ tests
-- [ ] T8. Revisar los 95 errores TS2540/TS2532 de los tests: decidir si es contrato cambiado (justificar) o test desalineado (corregir test contra la API real).
-- [ ] T9. Revisar los 7 tests de comportamiento que fallan y alinearlos al dominio corregido.
+## Fase 3 — Decisión
+- [x] T4. Respuesta al criterio de éxito: **SÍ** — un CEO puede contratar hoy el Departamento
+  Marketing y comenzar la validación del Customer Zero sin más infraestructura.
+- [x] T5. Según la regla del Sprint: NO escribir código.
 
-## Fase 4 — Limpieza
-- [ ] T10. Eliminar imports sin usar (6 errores lint + `eslint-disable` de pipeline).
-- [ ] T11. Eliminar variables/código muerto.
+## Fase 4 — Validaciones
+- [x] T6. pnpm lint — exit 0.
+- [x] T7. pnpm typecheck — exit 0.
+- [x] T8. pnpm test — exit 0.
+- [x] T9. pnpm -r build — exit 0.
+- [x] T10. pnpm check — exit 0 (164 Done/✓).
 
-## Fase 5 — Validaciones
-- [ ] T12. `pnpm lint` verde.
-- [ ] T13. `pnpm typecheck` verde.
-- [ ] T14. `pnpm test` verde.
-- [ ] T15. `pnpm build` verde.
-- [ ] T16. `pnpm check` verde.
-- [ ] T17. Commit + push a main.
-- [ ] T18. Informe final y `.opencode/autopilot.done`.
+## Fase 5 — Cierre
+- [ ] T11. Commit (documentación del análisis) + push.
+- [ ] T12. `.opencode/autopilot.done` + informe final. No iniciar Sprint 55.
