@@ -169,3 +169,12 @@ export {
   defaultDiscoveryService,
   type BusinessDiscoveryServiceConfig,
 } from "./service/discovery-service.js";
+
+// Persistence
+export {
+  InMemoryDiscoveryReportRepository,
+  createInMemoryDiscoveryReportRepository,
+  type DiscoveryExecutionId,
+  type DiscoveryReportRecord,
+  type DiscoveryReportRepository,
+} from "./persistence/discovery-report-repository.js";

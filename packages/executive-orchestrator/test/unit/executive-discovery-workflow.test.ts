@@ -7,6 +7,7 @@ import type {
 import {
   buildEmptyCompanyDNA,
   buildEmptyFounderBrain,
+  createInMemoryDiscoveryReportRepository,
   createMinimalConfidence,
 } from "@departify/business-discovery";
 import type { OrchestrationResult } from "../../src/contracts/orchestration-result.js";
@@ -243,5 +244,54 @@ describe("ExecutiveDiscoveryWorkflow", () => {
     expect(result.orchestration?.tool.status).toBe("rejected");
     expect(result.error?.phase).toBe("orchestration");
     expect(result.error?.code).toBe("execution_denied");
+  });
+
+  it("persists the completed report when a repository is wired", async () => {
+    const discoveryService: BusinessDiscoveryService = {
+      initiateDiscovery: async () => buildDiscoverySuccess(),
+    } as unknown as BusinessDiscoveryService;
+    const orchestrator: ExecutiveOrchestrator = {
+      orchestrateDiscoveryAnalyze: async () => buildOrchestrationSuccess(),
+    } as unknown as ExecutiveOrchestrator;
+    const reportRepository = createInMemoryDiscoveryReportRepository();
+
+    const workflow = createExecutiveDiscoveryWorkflow({
+      discoveryService,
+      orchestrator,
+      clock: () => new Date("2026-08-06T10:00:00Z"),
+      executionIdFactory: () => "exe_disc_persist_001",
+      reportRepository,
+    });
+
+    const result = await workflow.run(input);
+
+    expect(result.status).toBe("completed");
+    if (result.status !== "completed") return;
+    const stored = reportRepository.findById("exe_disc_persist_001");
+    expect(stored).not.toBeNull();
+    expect(stored?.organizationId).toBe("org_departify");
+    expect(stored?.sessionId).toBe("session_001");
+    expect(stored?.report.organizationId).toBe("org_departify");
+    expect(stored?.report.gaps).toHaveLength(1);
+  });
+
+  it("does not fail when no report repository is wired", async () => {
+    const discoveryService: BusinessDiscoveryService = {
+      initiateDiscovery: async () => buildDiscoverySuccess(),
+    } as unknown as BusinessDiscoveryService;
+    const orchestrator: ExecutiveOrchestrator = {
+      orchestrateDiscoveryAnalyze: async () => buildOrchestrationSuccess(),
+    } as unknown as ExecutiveOrchestrator;
+
+    const workflow = createExecutiveDiscoveryWorkflow({
+      discoveryService,
+      orchestrator,
+      clock: () => new Date("2026-08-06T10:00:00Z"),
+      executionIdFactory: () => "exe_disc_norepo_001",
+    });
+
+    const result = await workflow.run(input);
+
+    expect(result.status).toBe("completed");
   });
 });

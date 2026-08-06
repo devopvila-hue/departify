@@ -2,6 +2,7 @@ import type {
   BusinessDiscoveryResult,
   BusinessDiscoveryService,
   CompanyDiscoveryReport,
+  DiscoveryReportRepository,
 } from "@departify/business-discovery";
 import type { OrchestrationResult } from "../contracts/orchestration-result.js";
 import type { ExecutiveOrchestrator } from "../orchestrator.js";
@@ -95,6 +96,12 @@ export interface ExecutiveDiscoveryWorkflowOptions {
   readonly orchestrator: ExecutiveOrchestrator;
   readonly clock?: () => Date;
   readonly executionIdFactory?: () => string;
+  /**
+   * Optional repository that stores the completed `CompanyDiscoveryReport`
+   * (Sprint 36). Without it the workflow still completes — the report is
+   * simply not persisted.
+   */
+  readonly reportRepository?: DiscoveryReportRepository;
 }
 
 const DEFAULT_EXECUTION_ID_PREFIX = "exe_disc";
@@ -109,6 +116,7 @@ export class ExecutiveDiscoveryWorkflow {
   private readonly orchestrator: ExecutiveOrchestrator;
   private readonly clock: () => Date;
   private readonly executionIdFactory: () => string;
+  private readonly reportRepository: DiscoveryReportRepository | undefined;
 
   constructor(options: ExecutiveDiscoveryWorkflowOptions) {
     this.discoveryService = options.discoveryService;
@@ -120,6 +128,7 @@ export class ExecutiveDiscoveryWorkflow {
         `${DEFAULT_EXECUTION_ID_PREFIX}_${Date.now().toString(36)}_${Math.random()
           .toString(36)
           .slice(2, 8)}`);
+    this.reportRepository = options.reportRepository;
   }
 
   /**
@@ -196,6 +205,17 @@ export class ExecutiveDiscoveryWorkflow {
       questions: this.extractQuestions(orchestration.output),
       generatedAt: this.clock(),
     };
+
+    // Sprint 36 — persist the completed report when a repository is wired.
+    if (this.reportRepository) {
+      this.reportRepository.save({
+        executionId,
+        sessionId: discovery.report.sessionId,
+        organizationId: discovery.report.organizationId,
+        report,
+        savedAt: this.clock(),
+      });
+    }
 
     const completedAt = this.clock();
     return {
