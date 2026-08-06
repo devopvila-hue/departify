@@ -442,14 +442,16 @@ describe("BusinessEventCatalog", () => {
     });
 
     expect(outcome.status).toBe("completed");
-    expect(outcome.workflowId).toBe("wf_executive_discovery");
-    expect(outcome.executionId).toBe("exe_disc_auto_001");
+    expect(outcome.workflowId).toBe("wf_department_onboarding");
+    expect(outcome.executionId).toMatch(/^wfe_/);
     const output = outcome.output as {
       activation: { organizationId: string };
       discovery: { workflowId: string };
+      onboarding: { workflowId: string };
     };
     expect(output.activation.organizationId).toBe("org_demo");
     expect(output.discovery.workflowId).toBe("wf_executive_discovery");
+    expect(output.onboarding.workflowId).toBe("wf_department_onboarding");
   });
 
   it("does not run discovery when no discovery workflow is wired", async () => {

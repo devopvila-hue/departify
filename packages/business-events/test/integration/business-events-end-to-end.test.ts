@@ -349,7 +349,9 @@ describe("BusinessEvent end-to-end integration", () => {
     const reportRepository = createInMemoryDiscoveryReportRepository();
 
     const toolRegistry = new ToolRuntimeRegistry();
-    registerAllCoreTools(toolRegistry, {});
+    registerAllCoreTools(toolRegistry, {
+      discoveryRepository: reportRepository,
+    });
     const runtime = createToolRuntime({
       grantedScopes: ["read.public", "read.private"],
     });
@@ -364,6 +366,26 @@ describe("BusinessEvent end-to-end integration", () => {
         new Map([
           [
             "agent.executive",
+            [
+              {
+                scope: "runtime" as const,
+                action: "manage" as const,
+                resource: "*",
+              },
+            ],
+          ],
+          [
+            "agent_sales_director",
+            [
+              {
+                scope: "runtime" as const,
+                action: "manage" as const,
+                resource: "*",
+              },
+            ],
+          ],
+          [
+            "agent_lead_qualifier",
             [
               {
                 scope: "runtime" as const,
@@ -420,11 +442,17 @@ describe("BusinessEvent end-to-end integration", () => {
     const result = await service.publish(event);
 
     expect(result.status).toBe("completed");
-    expect(result.workflowId).toBe("wf_executive_discovery");
-    expect(result.executionId).toBe("exe_disc_provisioned_auto");
+    // The final workflow reported is the Department Onboarding (Sprint 48).
+    expect(result.workflowId).toBe("wf_department_onboarding");
     const stored = reportRepository.findById("exe_disc_provisioned_auto");
     expect(stored).not.toBeNull();
     expect(stored?.organizationId).toBe("org_departify");
     expect(stored?.report.gaps.length).toBeGreaterThan(0);
+    // The first value was delivered: the onboarding result carries the
+    // executive summary produced by the delegated employee.
+    const output = result.output as {
+      onboarding?: { finalOutput?: { gapCount?: number } };
+    };
+    expect(output.onboarding?.finalOutput?.gapCount).toBeGreaterThan(0);
   });
 });

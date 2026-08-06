@@ -5,6 +5,7 @@ import {
   type ExecutiveDiscoveryWorkflowResult,
 } from "@departify/executive-orchestrator";
 import {
+  buildDepartmentOnboardingWorkflow,
   buildLeadQualificationWorkflow,
   type WorkflowExecution,
   type WorkflowResult,
@@ -76,6 +77,12 @@ export type OrganizationCreator = (
 export const DEFAULT_LEAD_QUALIFICATION_WORKFLOW_ID = "wf_lead_qualification";
 
 /**
+ * Default Digital Employee that executes the last two steps of the
+ * Department Onboarding workflow when the host does not specify one.
+ */
+export const DEFAULT_ONBOARDING_EMPLOYEE_AGENT_ID = "agent_lead_qualifier";
+
+/**
  * Default catalog handler factory. Returns the handlers wired to
  * the existing runtimes.
  */
@@ -102,6 +109,11 @@ export function buildDefaultCatalogHandlers(options: {
   // a qualified lead into an organization automatically (Sprint 39). Without
   // it, only the qualification workflow runs (retro-compatible).
   organizationCreator?: OrganizationCreator;
+  // The onboarding employee is optional — when wired, `organization.provisioned`
+  // runs the Department Onboarding workflow (Sprint 47/48) automatically after
+  // activation + discovery, delivering the first value without a manual trigger.
+  // Defaults to the Comercial lead qualifier.
+  onboardingEmployeeAgentId?: string;
 }): {
   readonly "lead.created": BusinessEventHandler;
   readonly "organization.created": BusinessEventHandler;
@@ -113,9 +125,12 @@ export function buildDefaultCatalogHandlers(options: {
     "lead.created": createLeadCreatedHandler(options),
     "organization.created": createOrganizationCreatedHandler(
       options.provisioningHandler,
-    ),    "organization.provisioned": createOrganizationProvisionedHandler(
+    ),
+    "organization.provisioned": createOrganizationProvisionedHandler(
       options.provisioningHandler,
       options.discoveryWorkflow,
+      options.workflowExecutor,
+      options.onboardingEmployeeAgentId ?? DEFAULT_ONBOARDING_EMPLOYEE_AGENT_ID,
     ),
     "organization.discovery_requested": createOrganizationDiscoveryRequestedHandler(
       options.discoveryWorkflow,
@@ -199,6 +214,8 @@ function createOrganizationProvisionedHandler(
     | ((event: BusinessEvent) => Promise<BusinessEventHandlerOutcome>)
     | undefined,
   discoveryWorkflow: ExecutiveDiscoveryWorkflow | undefined,
+  workflowExecutor: WorkflowExecution,
+  onboardingEmployeeAgentId: string,
 ): BusinessEventHandler {
   return async (event) => {
     if (event.type !== "organization.provisioned") {
@@ -256,11 +273,44 @@ function createOrganizationProvisionedHandler(
       };
     }
 
+    // Sprint 48 — automatic Department Onboarding: once the Empresa Digital
+    // is discovered, run the Department Onboarding workflow (Sprint 47) so
+    // the Department starts working and delivers its first value without a
+    // manual trigger. The onboarding result is appended to the output.
+    const onboardingWorkflow = buildDepartmentOnboardingWorkflow(
+      event.organizationId,
+      onboardingEmployeeAgentId,
+    );
+    const onboardingResult: WorkflowResult = await workflowExecutor.run(
+      onboardingWorkflow,
+    );
+
+    if (onboardingResult.status !== "completed") {
+      return {
+        status: "failed",
+        output: { activation: activation.output, discovery, onboarding: onboardingResult },
+        errors: [
+          {
+            code: onboardingResult.error?.code ?? "ONBOARDING_FAILED",
+            message:
+              onboardingResult.error?.message ?? "Department onboarding failed.",
+            phase: "execution",
+          },
+        ],
+        workflowId: onboardingWorkflow.id,
+        executionId: onboardingResult.executionId,
+      };
+    }
+
     return {
       ...activation,
-      output: { activation: activation.output, discovery },
-      workflowId: discovery.workflowId,
-      executionId: discovery.executionId,
+      output: {
+        activation: activation.output,
+        discovery,
+        onboarding: onboardingResult,
+      },
+      workflowId: onboardingWorkflow.id,
+      executionId: onboardingResult.executionId,
     };
   };
 }
