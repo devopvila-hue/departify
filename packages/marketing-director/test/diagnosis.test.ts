@@ -68,7 +68,7 @@ describe("produceMarketingDiagnosis", () => {
     expect(diagnosis.whereTheyAreNow).toContain("presencia web");
 
     expect(diagnosis.opportunities.length).toBeGreaterThan(0);
-    const firstOpp = diagnosis.opportunities[0];
+    const firstOpp = diagnosis.opportunities[0]!;
     expect(firstOpp.title).toBeTruthy();
     expect(firstOpp.description).toBeTruthy();
     expect(firstOpp.priority).toBeGreaterThan(0);
@@ -406,8 +406,8 @@ describe("anti-hardcode", () => {
     expect(moonDiag.companyName).not.toBe(spotifyDiag.companyName);
     expect(moonDiag.whatTheCeoWants).not.toBe(spotifyDiag.whatTheCeoWants);
 
-    const moonRoles = moonDiag.neededSpecialistRoles.sort();
-    const spotifyRoles = spotifyDiag.neededSpecialistRoles.sort();
+    const moonRoles = [...moonDiag.neededSpecialistRoles].sort();
+    const spotifyRoles = [...spotifyDiag.neededSpecialistRoles].sort();
     expect(moonRoles).not.toEqual(spotifyRoles);
 
     const moonBlocked = moonDiag.whatIsBlocked.length;
