@@ -57,6 +57,10 @@ export interface CeoOverview {
   connections: { toolId: string; label: string; status: string; category: string }[];
   working: number;
   done: number;
+  team?: {
+    director: { name: string; role: string; initials: string };
+    specialists: { id: string; name: string; role: string; status: string }[];
+  };
 }
 
 export interface MarketingWorkItem {

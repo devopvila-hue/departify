@@ -40,6 +40,12 @@ import {
 import { BusinessProvisioningService } from "@departify/platform-composition";
 import { registerAllCoreTools } from "@departify/tool-catalog";
 import {
+  produceMarketingDiagnosis,
+  formTeam,
+  type MarketingDiagnosis,
+  type TeamFormationResult,
+} from "@departify/marketing-director";
+import {
   createToolRuntime,
   ToolRegistry as ToolRuntimeRegistry,
 } from "@departify/tool-runtime";
@@ -86,6 +92,10 @@ export interface CustomerZeroSessionState {
   unmappedTools: string[];
   /** What the research really understood about the business. */
   understood?: Readonly<Record<string, unknown>>;
+  /** Marketing Director's diagnosis of the business. */
+  marketingDiagnosis?: MarketingDiagnosis;
+  /** The team Elvira formed for the current goal. */
+  marketingTeam?: TeamFormationResult;
 }
 
 export interface DiscoveryTurn {
@@ -574,7 +584,84 @@ export function buildSessionExtraContext(session: CustomerZeroSession): string {
       `Herramientas mencionadas sin conector disponible: ${session.state.unmappedTools.join(", ")}`,
     );
   }
-  return parts.join("\n");
+  return parts.join("\\n");
+}
+
+function mostRecentReport(session: {
+  reports: readonly CompanyDiscoveryReport[];
+}): CompanyDiscoveryReport | null {
+  const reports = [...session.reports].sort(
+    (a, b) => b.generatedAt.getTime() - a.generatedAt.getTime(),
+  );
+  return reports[0] ?? null;
+}
+
+/**
+ * Produces Elvira's marketing diagnosis from the session's accumulated
+ * knowledge: the Company DNA, onboarding data, discovered facts, CEO's
+ * answers, and connected tools. Deterministic — no AI needed.
+ */
+export function produceDiagnosisForSession(
+  session: CustomerZeroSession,
+): MarketingDiagnosis {
+  const onboarding = session.state.onboarding;
+  const report = mostRecentReport(session);
+
+  const products: { name: string; description?: string }[] = [];
+  if (report?.companyDna.products) {
+    for (const p of report.companyDna.products) {
+      products.push({
+        name: typeof p.name === "string" ? p.name : String(p),
+        ...(typeof p.description === "string"
+          ? { description: p.description }
+          : {}),
+      });
+    }
+  }
+
+  const connectedTools = [...session.state.connections.values()]
+    .filter((c) => c.status === "connected")
+    .map((c) => c.toolId);
+
+  const declaredTools = [...session.state.connections.keys()];
+
+  return produceMarketingDiagnosis(
+    {
+      companyName: onboarding?.companyName ?? session.state.companyName ?? "Tu empresa",
+      goal: onboarding?.goal ?? "",
+      locale: session.state.locale,
+      ...(onboarding?.country ? { country: onboarding.country } : {}),
+      ...(onboarding?.companySize ? { companySize: onboarding.companySize } : {}),
+      hasWebsite: onboarding?.hasWebsite ?? false,
+      ...(onboarding?.description ? { description: onboarding.description } : {}),
+      ...(products.length > 0 ? { products } : {}),
+      connectedTools,
+      declaredTools,
+      unmappedTools: session.state.unmappedTools,
+      discoveryGaps: report?.gaps.map((g: { description: string }) => g.description) ?? [],
+    },
+    report,
+  );
+}
+
+/**
+ * Forms Elvira's team based on the diagnosis. Which specialists are needed
+ * depends on the CEO's goal and the business context — never hardcoded.
+ */
+export function produceTeamForSession(
+  session: CustomerZeroSession,
+  diagnosis: MarketingDiagnosis,
+): TeamFormationResult {
+  const connectedTools = [...session.state.connections.values()]
+    .filter((c) => c.status === "connected")
+    .map((c) => c.toolId);
+
+  return formTeam(
+    diagnosis.goal,
+    diagnosis.neededSpecialistRoles,
+    session.state.locale,
+    connectedTools,
+  );
 }
 
 function buildSimulatedPaymentEvent(

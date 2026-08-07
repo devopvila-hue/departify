@@ -110,3 +110,16 @@ export {
   type MarketingWorkItem,
   type MarketingWorkToolOptions,
 } from "./tools/marketing-work-tool.js";
+
+export {
+  createMarketingDiagnosisToolDefinition,
+  type MarketingDiagnosis,
+  type MarketingDiagnosisInput,
+} from "./tools/marketing-diagnosis-tool.js";
+
+export {
+  createMarketingFormTeamToolDefinition,
+  type MarketingFormTeamInput,
+  type TeamFormationResult,
+} from "./tools/marketing-team-tool.js";
+

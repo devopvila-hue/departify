@@ -22,6 +22,8 @@ import {
   getCustomerZeroSession,
   getOrCreateCustomerZeroSession,
   runDiscoveryForSession,
+  produceDiagnosisForSession,
+  produceTeamForSession,
   type CustomerZeroSession,
 } from "../../customer-zero/customer-zero-session.js";
 import { buildAnswersRawData } from "../../customer-zero/answers.js";
@@ -511,6 +513,8 @@ export async function registerCustomerZeroV2Routes(
         goal: session.state.onboarding?.goal ?? "",
         head: buildHeadView(getMarketingHead(), session.state.locale),
         connections: [...session.state.connections.values()],
+        diagnosis: session.state.marketingDiagnosis ?? null,
+        team: session.state.marketingTeam ?? null,
       });
     },
   );
@@ -700,47 +704,71 @@ function buildDiscoveryIntro(session: CustomerZeroSession): string {
   );
 }
 
-/** Marketing's first message: continuity, never "Discovery completed". */
+/** Marketing's first message: Elvira diagnoses the business and explains her plan. */
 function buildHandoffMessage(session: CustomerZeroSession): string {
   const locale = session.state.locale;
-  const goal = session.state.onboarding?.goal?.trim();
-  const connected = [...session.state.connections.values()].filter(
-    (connection) => connection.status === "connected",
-  );
+  const diagnosis = produceDiagnosisForSession(session);
+  session.state.marketingDiagnosis = diagnosis;
+
+  const team = produceTeamForSession(session, diagnosis);
+  session.state.marketingTeam = team;
 
   const head = getMarketingHead();
   const parts: string[] = [
     t(
       locale,
-      `Soy ${head.name}, tu Jefa de Marketing. Ya tengo suficiente para empezar.`,
-      `I am ${head.name}, your Head of Marketing. I have enough to get started.`,
+      `Soy ${head.name}, tu Jefa de Marketing. Ya tengo una imagen bastante clara de ${diagnosis.companyName}.`,
+      `I am ${head.name}, your Head of Marketing. I have a pretty clear picture of ${diagnosis.companyName}.`,
     ),
   ];
-  if (goal) {
+
+  if (diagnosis.goal) {
     parts.push(
       t(
         locale,
-        `Me has dicho: «${goal}». Ya entiendo cómo funciona tu negocio.`,
-        `You told me: “${goal}”. I now understand how your business works.`,
+        `Quieres ${diagnosis.goal.toLowerCase()}.`,
+        `You want to ${diagnosis.goal.toLowerCase()}.`,
       ),
     );
   }
-  if (connected.length > 0) {
+
+  if (diagnosis.whereTheyAreNow) {
+    parts.push(diagnosis.whereTheyAreNow);
+  }
+
+  if (diagnosis.whatToDoFirst) {
     parts.push(
       t(
         locale,
-        `Puedo trabajar con ${connected.map((c) => c.label).join(", ")}.`,
-        `I can work with ${connected.map((c) => c.label).join(", ")}.`,
+        `Por lo que he aprendido, empezaría por ${diagnosis.whatToDoFirst.toLowerCase()}.`,
+        `From what I have learned, I would start with ${diagnosis.whatToDoFirst.toLowerCase()}.`,
       ),
     );
   }
+
+  if (diagnosis.whatCanBeDoneNow.length > 1) {
+    const items = diagnosis.whatCanBeDoneNow.slice(0, 3)
+      .map((item, i) => `${i + 1}. ${item}`)
+      .join(". ");
+    parts.push(
+      t(
+        locale,
+        `Para hacerlo bien necesito resolver: ${items}.`,
+        `To do this well I need to sort out: ${items}.`,
+      ),
+    );
+  }
+
+  parts.push(team.message);
+
   parts.push(
     t(
       locale,
-      "Voy a empezar por identificar las oportunidades más rápidas para Marketing.",
-      "I will start by identifying the fastest Marketing opportunities.",
+      "Solo te pediré ayuda cuando necesite una decisión o acceso.",
+      "I will only ask for your help when I need a decision or access.",
     ),
   );
+
   return parts.join(" ");
 }
 

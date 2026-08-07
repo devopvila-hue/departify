@@ -53,6 +53,9 @@ importers:
       '@departify/llm-router':
         specifier: workspace:^
         version: link:../../packages/llm-router
+      '@departify/marketing-director':
+        specifier: workspace:*
+        version: link:../../packages/marketing-director
       '@departify/platform-composition':
         specifier: workspace:^
         version: link:../../packages/platform-composition
@@ -670,6 +673,34 @@ importers:
 
   packages/logging: {}
 
+  packages/marketing-director:
+    dependencies:
+      '@departify/business-discovery':
+        specifier: workspace:*
+        version: link:../business-discovery
+    devDependencies:
+      '@eslint/js':
+        specifier: ^9.17.0
+        version: 9.39.5
+      '@types/node':
+        specifier: ^22.10.2
+        version: 22.20.1
+      eslint:
+        specifier: ^9.17.0
+        version: 9.39.5(jiti@2.7.0)
+      globals:
+        specifier: ^15.14.0
+        version: 15.15.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      typescript-eslint:
+        specifier: ^8.18.0
+        version: 8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.32.0)(tsx@4.23.8)(yaml@2.9.0)
+
   packages/memory: {}
 
   packages/memory-engine:
@@ -869,6 +900,9 @@ importers:
       '@departify/llm-router':
         specifier: workspace:*
         version: link:../llm-router
+      '@departify/marketing-director':
+        specifier: workspace:*
+        version: link:../marketing-director
       '@departify/memory-engine':
         specifier: workspace:*
         version: link:../memory-engine

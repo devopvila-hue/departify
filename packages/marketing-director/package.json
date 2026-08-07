@@ -1,5 +1,5 @@
 {
-  "name": "@departify/tool-catalog",
+  "name": "@departify/marketing-director",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -17,15 +17,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@departify/agent-runtime": "workspace:*",
-    "@departify/agent-tool-bridge": "workspace:*",
-    "@departify/business-discovery": "workspace:*",
-    "@departify/knowledge-engine": "workspace:*",
-    "@departify/llm-router": "workspace:*",
-    "@departify/marketing-director": "workspace:*",
-    "@departify/memory-engine": "workspace:*",
-    "@departify/organization-domain": "workspace:*",
-    "@departify/tool-runtime": "workspace:*"
+    "@departify/business-discovery": "workspace:*"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

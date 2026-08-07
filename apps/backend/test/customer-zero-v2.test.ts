@@ -216,7 +216,7 @@ describe("Customer Zero UX v2 routes", () => {
     expect(handoff.statusCode).toBe(200);
     const body = handoff.json() as { message: string; goal: string };
     expect(body.goal).toContain("primeros 20 clientes");
-    expect(body.message).toContain("Ya tengo suficiente para empezar");
+    expect(body.message).toContain("tengo una imagen");
     expect(body.message).not.toContain("Discovery completed");
   });
 

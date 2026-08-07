@@ -1398,4 +1398,39 @@ select {
 
 .dfy-head__text {
   min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* Marketing team grid — Elvira's specialists */
+.dfy-team-grid {
+  display: grid;
+  gap: var(--sz-xs);
+}
+
+.dfy-team-director {
+  margin-bottom: var(--sz-xs);
+  padding-bottom: var(--sz-xs);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.dfy-team-member {
+  display: flex;
+  align-items: center;
+  gap: var(--sz-xs);
+  padding: var(--sz-xs) 0;
+}
+
+.dfy-team-member__name {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: var(--sz-step-0);
+  color: var(--color-fg);
+  flex: 0 0 auto;
+}
+
+.dfy-team-member__role {
+  font-family: var(--font-sans);
+  font-size: var(--sz-step--1);
+  color: var(--color-muted);
+  flex: 1 1 auto;
 }

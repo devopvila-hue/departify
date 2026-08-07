@@ -60,6 +60,15 @@ export interface CeoOverview {
   }[];
   readonly working: number;
   readonly done: number;
+  readonly team?: {
+    readonly director: { readonly name: string; readonly role: string; readonly initials: string };
+    readonly specialists: readonly {
+      readonly id: string;
+      readonly name: string;
+      readonly role: string;
+      readonly status: string;
+    }[];
+  };
 }
 
 export function buildCeoOverview(session: CustomerZeroSession): CeoOverview {
@@ -136,6 +145,19 @@ export function buildCeoOverview(session: CustomerZeroSession): CeoOverview {
       (item) => item.status === "pending" || item.status === "running",
     ).length,
     done: items.filter((item) => item.status === "completed").length,
+    ...(session.state.marketingTeam
+      ? {
+          team: {
+            director: session.state.marketingTeam.director,
+            specialists: session.state.marketingTeam.specialists.map((s) => ({
+              id: s.id,
+              name: s.name,
+              role: s.role,
+              status: s.status,
+            })),
+          },
+        }
+      : {}),
   };
 }
 

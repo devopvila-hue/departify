@@ -116,6 +116,47 @@ export function HomeRoute() {
           </p>
         </Card>
 
+        {overview?.team && overview.team.specialists.length > 0 && (
+          <Card title="Equipo de Elvira">
+            <div className="dfy-team-grid">
+              <div className="dfy-team-director">
+                <HeadBadge
+                  head={{
+                    departmentId: "marketing",
+                    department: "Marketing",
+                    name: overview.team.director.name,
+                    initials: overview.team.director.initials,
+                    role: overview.team.director.role,
+                  }}
+                />
+              </div>
+              {overview.team.specialists.map((spec) => (
+                <div key={spec.id} className="dfy-team-member">
+                  <div className="dfy-team-member__name">{spec.name}</div>
+                  <div className="dfy-team-member__role">{spec.role}</div>
+                  <Badge
+                    tone={
+                      spec.status === "preparando" || spec.status === "trabajando"
+                        ? "accent"
+                        : spec.status === "completado"
+                          ? "success"
+                          : "neutral"
+                    }
+                  >
+                    {spec.status === "preparando"
+                      ? "Preparando"
+                      : spec.status === "trabajando"
+                        ? "Trabajando"
+                        : spec.status === "esperando"
+                          ? "Esperando conexión"
+                          : spec.status}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+
         <Card title="Necesita tu decisión">
           {pending.length === 0 ? (
             <EmptyState

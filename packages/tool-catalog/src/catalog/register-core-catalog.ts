@@ -34,6 +34,12 @@ import {
   createMarketingChatToolDefinition,
 } from "../tools/marketing-chat-tool.js";
 import {
+  createMarketingDiagnosisToolDefinition,
+} from "../tools/marketing-diagnosis-tool.js";
+import {
+  createMarketingFormTeamToolDefinition,
+} from "../tools/marketing-team-tool.js";
+import {
   createMarketingExecuteToolDefinition,
   createMarketingPlanToolDefinition,
 } from "../tools/marketing-work-tool.js";
@@ -98,6 +104,8 @@ export const CORE_CATALOG_IDS = [
   "marketing.chat",
   "marketing.plan",
   "marketing.execute",
+  "marketing.diagnosis",
+  "marketing.form_team",
 ] as const;
 
 export type CoreCatalogId = (typeof CORE_CATALOG_IDS)[number];
@@ -144,7 +152,16 @@ export function buildCoreCatalog(
         repository: context.discoveryRepository,
       }) as unknown as ToolDefinition,
     );
+    catalog.push(
+      createMarketingDiagnosisToolDefinition(
+        context.discoveryRepository,
+      ) as unknown as ToolDefinition,
+    );
   }
+
+  catalog.push(
+    createMarketingFormTeamToolDefinition() as unknown as ToolDefinition,
+  );
 
   if (context.organizationResolver) {
     catalog.push(

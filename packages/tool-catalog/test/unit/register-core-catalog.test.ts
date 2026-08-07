@@ -136,6 +136,7 @@ describe("registerAllCoreTools", () => {
     const tools = buildCoreCatalog({});
     expect(tools.map((tool) => tool.id).sort()).toEqual([
       "discovery.analyze",
+      "marketing.form_team",
       "system.health",
       "system.uuid",
     ]);
