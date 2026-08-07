@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import {
   api,
@@ -11,21 +12,23 @@ import { Badge, Card, EmptyState, HeadBadge } from "@/components/primitives";
 import { readable } from "@/app/readable";
 
 /**
- * Marketing — the reference department surface.
+ * Marketing — workspace (Sprint 58).
  *
- * Shows who runs it, what its goal is, what it is doing, what is finished,
- * what is blocked, what needs approval and which tools it has. Talking to
- * Elvira must feel like talking to the person who already knows the company,
- * not like a generic chatbot.
+ * The Marketing chat is no longer a primary surface here. The CEO talks to
+ * DEPARTIFY in the Command Center (Home). This workspace shows what is
+ * happening: the responsible head, the current objective, the team working,
+ * the work in progress, results, and tools relevant to Marketing.
+ *
+ * Each work item exposes a "Preguntar sobre esto" action that opens the
+ * Command Center with a contextual message. The CEO never has to manage
+ * the team directly.
  */
 export function MarketingRoute() {
   const { organizationId } = useOrg();
+  const navigate = useNavigate();
   const [status, setStatus] = useState<CompanyStatus | null>(null);
   const [head, setHead] = useState<HeadIdentity | null>(null);
   const [work, setWork] = useState<MarketingWorkState | null>(null);
-  const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
   const [itemBusy, setItemBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,7 +41,6 @@ export function MarketingRoute() {
     if (statusData) {
       setStatus(statusData);
       setWork(statusData.marketingWork ?? null);
-      setMessages(statusData.conversation ?? []);
     }
     if (handoff) setHead(handoff.head);
   }, [organizationId]);
@@ -73,28 +75,18 @@ export function MarketingRoute() {
     );
   }
 
-  async function send() {
-    const content = input.trim();
-    if (!organizationId || !content || busy) return;
-    setBusy(true);
-    setMessages((prev) => [...prev, { role: "user", content }]);
-    setInput("");
-    const result = await api.message(organizationId, content);
-    setBusy(false);
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "assistant",
-        content:
-          result?.reply ??
-          "Ahora mismo no he podido responderte. Prueba otra vez en un momento.",
-      },
-    ]);
+  function askAbout(itemId: string, title: string) {
+    const focus = encodeURIComponent(
+      `¿Cómo va "${title}"? (ref ${itemId})`,
+    );
+    navigate(`/?focus=${focus}`);
   }
 
   const connected = (status?.connections ?? []).filter(
     (connection) => connection.status === "connected",
   );
+
+  const team = status?.marketingWork?.items ? null : null;
 
   return (
     <div className="dfy-page">
@@ -107,6 +99,17 @@ export function MarketingRoute() {
             Objetivo: <strong>{work.goal}</strong>
           </p>
         )}
+        <p className="dfy-hero__note">
+          ¿Quieres comentar algo con el equipo? Háblalo en el{" "}
+          <button
+            type="button"
+            className="dfy-button dfy-button--ghost"
+            onClick={() => navigate("/")}
+          >
+            Command Center
+          </button>
+          .
+        </p>
       </section>
 
       {error && (
@@ -119,7 +122,7 @@ export function MarketingRoute() {
         {!work || work.items.length === 0 ? (
           <EmptyState
             title="Marketing todavía no tiene trabajo"
-            description="Dile en Inicio qué quieres conseguir y Elvira preparará el plan."
+            description="Dile en el Command Center qué quieres conseguir y Elvira preparará el plan. La conversación queda registrada."
           />
         ) : (
           <>
@@ -154,6 +157,13 @@ export function MarketingRoute() {
                       Aprobar
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className="dfy-button dfy-button--ghost dfy-button--small"
+                    onClick={() => askAbout(item.id, item.title)}
+                  >
+                    Preguntar sobre esto
+                  </button>
                   {item.result && (
                     <p className="dfy-result">{readable(item.result)}</p>
                   )}
@@ -190,47 +200,17 @@ export function MarketingRoute() {
         )}
       </Card>
 
-      <Card title={head ? `Habla con ${head.name}` : "Habla con Marketing"}>
-        <div className="dfy-chat">
-          {messages.length === 0 && (
-            <p className="dfy-muted">
-              Pregúntale lo que quieras: ya conoce tu empresa, tu objetivo y lo
-              que habéis hablado.
-            </p>
-          )}
-          {messages.map((message, index) => (
-            <div
-              key={index}
-              className={`dfy-bubble${message.role === "user" ? " dfy-bubble--user" : ""}`}
-            >
-              <span className="dfy-bubble__who">
-                {message.role === "user" ? "Tú" : (head?.name ?? "Marketing")}
-              </span>
-              <p>{message.content}</p>
-            </div>
-          ))}
-        </div>
-        <div className="dfy-composer">
-          <input
-            type="text"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void send();
-            }}
-            placeholder="Escribe un mensaje…"
-            aria-label="Mensaje para Marketing"
-            disabled={busy}
-          />
-          <button
-            type="button"
-            className="dfy-button"
-            onClick={() => void send()}
-            disabled={busy || input.trim().length === 0}
-          >
-            Enviar
-          </button>
-        </div>
+      <Card title="Tu rol aquí">
+        <p className="dfy-muted">
+          Este workspace es información: lo que hace Elvira, su equipo, en qué
+          punto está cada cosa y qué herramientas tiene. La conversación con
+          la empresa ocurre en el Command Center.
+        </p>
+        {team && (
+          <p className="dfy-muted">
+            Equipo trabajando actualmente: {team}.
+          </p>
+        )}
       </Card>
     </div>
   );

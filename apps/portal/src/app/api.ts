@@ -101,6 +101,90 @@ export interface CompanyStatus {
   conversation: { role: string; content: string }[];
 }
 
+/* -------------------------------------------------------------------------
+ * Command Center — Sprint 58.
+ *
+ * The CEO's single chat. The transcript is a stream of `CommandCenterEvent`
+ * items: free-form messages, business events (approval requests, results,
+ * work updates, connection needs), and team visibility cards. The portal
+ * renders business events as cards; the chat continues to feel like a chat.
+ * -------------------------------------------------------------------------*/
+
+export interface CommandCenterWorkItemView {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  kind: string;
+  capability?: string;
+  result?: string;
+}
+
+export interface CommandCenterConnectionSuggestion {
+  toolId: string | null;
+  label: string;
+  capability: string;
+  why: string;
+  connectable: boolean;
+  requiredCredentials: readonly string[];
+  rawInput: string;
+}
+
+export type CommandCenterEvent =
+  | { kind: "transcript"; role: "user" | "assistant"; content: string }
+  | { kind: "intent_proactive"; intent: string; title: string; message: string }
+  | {
+      kind: "department_active";
+      departmentId: string;
+      departmentName: string;
+      directorName: string;
+      directorRole: string;
+      directorInitials: string;
+      team?: {
+        director: { name: string; role: string; initials: string };
+        specialists: { id: string; name: string; role: string; status: string }[];
+      };
+    }
+  | { kind: "connection_need"; suggestion: CommandCenterConnectionSuggestion }
+  | { kind: "work_update"; item: CommandCenterWorkItemView }
+  | {
+      kind: "approval_request";
+      item: CommandCenterWorkItemView;
+      proposal: string;
+      detail: string;
+    }
+  | { kind: "result"; item: CommandCenterWorkItemView }
+  | {
+      kind: "multiple_departments_note";
+      departments: { id: string; name: string; status: "active" | "future" }[];
+    }
+  | {
+      kind: "process_event";
+      stage: string;
+      status: "started" | "done" | "blocked";
+      message: string;
+    };
+
+export interface CommandCenterRouting {
+  intent: string;
+  departments: readonly string[];
+  rationale: string;
+}
+
+export interface CommandCenterOpening {
+  organizationId: string;
+  events: readonly CommandCenterEvent[];
+}
+
+export interface CommandCenterMessageResult {
+  organizationId: string;
+  reply: string;
+  events: readonly CommandCenterEvent[];
+  routing: CommandCenterRouting;
+  connectionSuggestion: CommandCenterConnectionSuggestion | null;
+  pendingToolId: string | null;
+}
+
 async function getJson<T>(url: string): Promise<T | null> {
   try {
     const response = await fetch(url);
@@ -154,5 +238,15 @@ export const api = {
   handoff: (org: string) =>
     getJson<{ message: string; goal: string; head: HeadIdentity }>(
       `/api/customer-zero/${org}/handoff`,
+    ),
+  // Command Center — the single chat. The Home route hosts this.
+  commandCenterOpening: (org: string) =>
+    getJson<CommandCenterOpening>(
+      `/api/customer-zero/${org}/command-center/opening`,
+    ),
+  commandCenterMessage: (org: string, message: string) =>
+    postJson<CommandCenterMessageResult>(
+      `/api/customer-zero/${org}/command-center/message`,
+      { message },
     ),
 };

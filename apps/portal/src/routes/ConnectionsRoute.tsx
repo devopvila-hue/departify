@@ -100,11 +100,12 @@ export function ConnectionsRoute() {
       )}
 
       {unmapped.length > 0 && (
-        <Card title="Herramientas que usas y todavía no soportamos">
+        <Card title="También utilizas estas herramientas">
           <p className="dfy-muted">{unmapped.join(", ")}</p>
           <p className="dfy-muted dfy-muted--small">
-            Tu equipo lo tiene en cuenta al trabajar, aunque aún no pueda
-            entrar en ellas.
+            Tu equipo lo tiene en cuenta. Si alguna es razonablemente integrable
+            la añadiremos; si no, te diremos qué necesitas sin cambiar de
+            CRM por capricho.
           </p>
         </Card>
       )}

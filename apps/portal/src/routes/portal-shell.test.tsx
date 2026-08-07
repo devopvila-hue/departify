@@ -44,6 +44,35 @@ const overview = {
   done: 1,
 };
 
+const openCommandCenter = {
+  organizationId: "org_moon",
+  events: [
+    {
+      kind: "intent_proactive",
+      intent: "open",
+      title: "Elvira toma la iniciativa",
+      message:
+        "Para conseguir tu objetivo, Elvira ha preparado un equipo y propone empezar por lo que más impacto tiene.",
+    },
+    {
+      kind: "department_active",
+      departmentId: "marketing",
+      departmentName: "Marketing",
+      directorName: "Elvira",
+      directorRole: "Jefa de Marketing",
+      directorInitials: "EL",
+    },
+  ],
+};
+
+const baseStatus = {
+  organizationId: "org_moon",
+  companyName: "MOON Shared Living",
+  department: { id: "d", name: "Marketing", status: "active", employeeAgentIds: [] },
+  connections: [],
+  conversation: [],
+};
+
 function mount(ui: ReactElement) {
   return render(
     <MemoryRouter>
@@ -95,13 +124,24 @@ describe("portal shell", () => {
     expect(screen.queryByText(/workflow/i)).not.toBeInTheDocument();
   });
 
-  it("asks the CEO what he wants to achieve and speaks in business terms", async () => {
-    mockFetch(() => overview);
+  it("homes the Command Center single chat and speaks in business terms", async () => {
+    mockFetch((url) => {
+      if (url.includes("/command-center/opening")) return openCommandCenter;
+      if (url.includes("/overview")) return overview;
+      if (url.endsWith(`/org_moon`)) return baseStatus;
+      return overview;
+    });
     mount(<HomeRoute />);
 
+    // Command Center is the single chat surface.
     expect(
-      screen.getByRole("heading", { name: /¿qué quieres conseguir\?/i }),
+      screen.getByRole("heading", { name: /dile a departify/i }),
     ).toBeInTheDocument();
+    // Proactive opening card from the Marketing Director.
+    expect(
+      await screen.findByText(/elvira toma la iniciativa/i),
+    ).toBeInTheDocument();
+    // Activity is rendered as a contextual card, with the same source of truth.
     expect(
       await screen.findByText(/elvira y su equipo han terminado/i),
     ).toBeInTheDocument();
@@ -109,7 +149,12 @@ describe("portal shell", () => {
   });
 
   it("presents approvals as business decisions from a named head", async () => {
-    mockFetch(() => overview);
+    mockFetch((url) => {
+      if (url.includes("/command-center/opening")) return openCommandCenter;
+      if (url.includes("/overview")) return overview;
+      if (url.endsWith(`/org_moon`)) return baseStatus;
+      return overview;
+    });
     mount(<DecisionsRoute />);
 
     expect(await screen.findByText("Elvira")).toBeInTheDocument();
@@ -122,31 +167,36 @@ describe("portal shell", () => {
     expect(screen.queryByText(/approve tool execution|permission/i)).not.toBeInTheDocument();
   });
 
-  it("shows Marketing led by its head, with honest tool state", async () => {
+  it("shows Marketing as a workspace, not a primary chat", async () => {
     mockFetch((url) => {
       if (url.endsWith("/handoff")) {
         return { message: "Ya tengo suficiente.", goal: overview.goal, head };
       }
-      return {
-        organizationId: "org_moon",
-        companyName: "MOON Shared Living",
-        department: { id: "d", name: "Marketing", status: "active", employeeAgentIds: [] },
-        connections: [],
-        conversation: [],
-        marketingWork: {
-          goal: overview.goal,
-          summary: "Plan para captar los primeros clientes.",
-          items: [
-            {
-              id: "item_1",
-              title: "Analizar el mercado",
-              description: "Buscar las oportunidades más rápidas.",
-              kind: "analysis",
-              status: "pending",
-            },
-          ],
-        },
-      };
+      if (url.includes("/command-center/opening")) return openCommandCenter;
+      if (url.includes("/overview")) return overview;
+      if (url.endsWith(`/org_moon`)) {
+        return {
+          organizationId: "org_moon",
+          companyName: "MOON Shared Living",
+          department: { id: "d", name: "Marketing", status: "active", employeeAgentIds: [] },
+          connections: [],
+          conversation: [],
+          marketingWork: {
+            goal: overview.goal,
+            summary: "Plan para captar los primeros clientes.",
+            items: [
+              {
+                id: "item_1",
+                title: "Analizar el mercado",
+                description: "Buscar las oportunidades más rápidas.",
+                kind: "analysis",
+                status: "pending",
+              },
+            ],
+          },
+        };
+      }
+      return overview;
     });
 
     mount(<MarketingRoute />);
@@ -157,6 +207,14 @@ describe("portal shell", () => {
     expect(
       screen.getByText(/sin conexiones activas, marketing no puede enviar/i),
     ).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /habla con elvira/i })).toBeInTheDocument();
+    // Marketing is no longer a primary chat — the workspace guides the CEO
+    // back to the Command Center.
+    expect(
+      screen.queryByRole("heading", { name: /habla con elvira/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /command center/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /preguntar sobre esto/i }),
+    ).toBeInTheDocument();
   });
 });
