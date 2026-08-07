@@ -115,7 +115,7 @@ export function createMarketingPlanToolDefinition(
       },
       additionalProperties: false,
     },
-    limits: { timeoutMs: 60_000 },
+    limits: { timeoutMs: 120_000 },
     executor: async (
       _context: ToolExecutionContext,
       args: MarketingPlanInput,
@@ -252,10 +252,11 @@ function buildPlanSystemPrompt(context: string): string {
     "Crea un plan de trabajo CONCRETO y priorizado, basándote ÚNICAMENTE en el contexto real del negocio.",
     "No inventes hechos de la empresa. Usa el contexto proporcionado.",
     "",
-    "Responde ÚNICAMENTE con JSON válido con esta forma:",
+    "Responde ÚNICAMENTE con JSON válido y EXACTAMENTE esta estructura (sin etiquetas adicionales):",
     '{ "summary": "resumen breve del plan", "items": [',
     '  { "id": "item_1", "title": "título corto", "description": "qué se hará y por qué", "kind": "analysis|creation|external_action", "capability": "qué capacidad/efecto necesita" }',
     "] }",
+    "El JSON debe tener las claves raíz \"summary\" y \"items\". No uses claves como \"plan\" o \"plan_de_trabajo\".",
     "",
     "Reglas de clasificación:",
     "- analysis: análisis, investigación o planificación interna SIN efectos externos (no requiere aprobación).",
@@ -284,7 +285,9 @@ function buildExecuteSystemPrompt(context: string): string {
 
 /**
  * Tolerant JSON parse: strips fences / leading text and extracts the first
- * JSON object, mirroring the pattern already used by web analysis.
+ * JSON object, mirroring the pattern already used by web analysis. Accepts
+ * several model-produced shapes: { summary, items }, { plan: { items } },
+ * { plan_de_trabajo: { items } }.
  */
 function parsePlanJson(text: string): { summary?: string; items?: MarketingWorkItem[] } | null {
   const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
@@ -298,11 +301,47 @@ function parsePlanJson(text: string): { summary?: string; items?: MarketingWorkI
     if (typeof parsed !== "object" || parsed === null) {
       return null;
     }
-    const candidate = parsed as Record<string, unknown>;
-    if (!Array.isArray(candidate.items)) {
+    const root = parsed as Record<string, unknown>;
+
+    // Normalise the container: { summary, items } | { plan: {...} } |
+    // { plan_de_trabajo: {...} }.
+    let summary = typeof root.summary === "string" ? root.summary : "";
+    let itemsRaw: unknown[] = [];
+    if (Array.isArray(root.items)) {
+      itemsRaw = root.items;
+    } else {
+      const nested = root.plan ?? root.plan_de_trabajo ?? root.trabajo;
+      if (typeof nested === "object" && nested !== null) {
+        const plan = nested as Record<string, unknown>;
+        if (typeof plan.summary === "string" && !summary) {
+          summary = plan.summary;
+        }
+        if (Array.isArray(plan.items)) {
+          itemsRaw = plan.items;
+        } else if (Array.isArray(plan.etapas)) {
+          // Flatten etapas → items (acciones under each etapa).
+          itemsRaw = (plan.etapas as unknown[]).flatMap((etapa, index) => {
+            const e = etapa as Record<string, unknown>;
+            const actions = Array.isArray(e.acciones)
+              ? (e.acciones as unknown[]).map((a) => String(a))
+              : [];
+            if (actions.length === 0) {
+              return [{ id: `item_${index + 1}`, title: String(e.etapa ?? "Etapa"), description: "", kind: "analysis" }];
+            }
+            return actions.map((action, actionIndex) => ({
+              id: `item_${index + 1}_${actionIndex + 1}`,
+              title: action.slice(0, 60),
+              description: action,
+              kind: "analysis",
+            }));
+          });
+        }
+      }
+    }
+    if (itemsRaw.length === 0) {
       return null;
     }
-    const items: MarketingWorkItem[] = (candidate.items as unknown[])
+    const items: MarketingWorkItem[] = itemsRaw
       .filter((item) => typeof item === "object" && item !== null)
       .map((item, index) => {
         const it = item as Record<string, unknown>;
@@ -322,7 +361,7 @@ function parsePlanJson(text: string): { summary?: string; items?: MarketingWorkI
         };
       });
     return {
-      summary: typeof candidate.summary === "string" ? candidate.summary : "",
+      summary,
       items,
     };
   } catch {
