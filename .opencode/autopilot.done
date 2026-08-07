@@ -1,47 +1,43 @@
-# AUTOPILOT DONE — Goal Autónomo Customer Zero — URL → WOW → ADN → MARKETING → CONVERSACIÓN REAL
+# AUTOPILOT DONE — Marketing Customer Zero Flow
 
 ## Resumen
 
-El Customer Zero ahora demuestra la rebanada vertical completa y REAL:
+El flow completo del Customer Zero queda funcional de extremo a extremo:
 
-URL → "Conociendo tu negocio" → investigación web real → "Esto hemos entendido"
-→ confirmar/corregir → gaps/preguntas imprescindibles → Company DNA real →
-contexto disponible → Marketing preparado → conversación contextualizada con
-hechos concretos.
+DESCUBRIR → COMPLETAR GAPS CON EL CEO → COMPANY DNA → PEDIR OBJETIVO →
+MARKETING TRABAJA → APROBACIÓN CUANDO PROCEDA → EJECUCIÓN → RESULTADO,
+con persistencia tras reload y comportamiento adaptado a cada empresa.
 
-## Capacidades que quedaron DEMOSTRADAS (por uso real)
-- **Descubrir una empresa por sí mismo**: fetch real de la web + extracción HTML
-  + interpretación LLM real → rawData (sin fixtures).
-- **Company DNA real**: se construye desde los datos descubiertos + correcciones
-  del CEO; reduce gaps de forma medible.
-- **Contexto → Marketing**: el `CompanyDiscoveryReport` (DNA+gaps+preguntas) se
-  persiste en el `DiscoveryReportRepository`; `marketing.chat` lo lee y lo
-  inyecta al LLM como sistema prompt. Brain = report real (sin paquete nuevo).
-- **Marketing como Departamento**: instanciado de `tpl_marketing` (director +
-  3 empleados + tools + conexiones), superficie real, estado active.
-- **Conversación real**: tool `marketing.chat` ejecutado como
-  `agent_marketing_director` vía AgentToolPort → ToolRuntime → CoreToolCatalog →
-  LlmRouter → provider real (OpenAI-compatible local). No fixtures, no echo.
+## Hotfix (corregido y validado primero)
+1. Preguntas de discovery en el idioma de la UI (es) sin tocar business-discovery.
+2. Preguntas obligatorias derivadas de gaps reales (critical+high, deduplicadas).
+3. Respuestas persistidas en Company DNA con provenance user_input.
+4. Transición correcta a Marketing tras responder.
 
-## Proveedor LLM
-- Bloqueo demostrado: MiniMax no operativo (placeholder + 401).
-- Reutilizado: provider OpenAI-compatible con `OPENAI_BASE_URL` → gateway local
-  (Ollama, `qwen3:1.7b`, descargado localmente). Modelo real, respuestas reales.
+## Goal original
+- Marketing interpreta el objetivo del CEO en un plan de trabajo estructurado
+  (marketing.plan), ejecuta lo que realmente puede (marketing.execute) y solicita
+  aprobación para acciones externas, reportando de forma honesta las capacidades
+  no conectadas (nunca resultados ficticios).
+- El portal permite al CEO pedir, ver el plan, ejecutar, aprobar y ver estados;
+  localStorage + GET /:org permiten retomar tras reload.
 
 ## Validaciones
-- `pnpm lint` / `typecheck` / `test` / `-r build` / `check` → todo verde (33 paquetes).
-- Navegador real (Mailchimp): flow completo → PASS.
-- Segunda empresa real (Spotify): análisis real, Marketing activo, hechos
-  específicos, continuidad → PASS.
-- Métricas: gaps 22→15 (críticos 13→7); preguntas 20 (cap del generador).
+- Monorepo: lint / typecheck / test / -r build / check → verde (33 paquetes).
+- Navegador real (Spotify): recorrido completo incl. reload → PASS.
+- Anti-hardcode (Mailchimp vs Spotify): entregables distintos y específicos → PASS.
 
-## Commits (en orden)
-1. e989683 feat(llm): OPENAI_BASE_URL
-2. 74160f2 feat(tool-catalog): marketing.chat tool
-3. ba6480e feat(customer-zero): web analysis + session + rutas
-4. 550334f feat(portal): wizard URL-first
-5. 6c25a14 fix(customer-zero): .env + sanitización
+## Commits
+- f5fd5bb fix: localized mandatory questions + answers→DNA + transition
+- bc1f0a8 test: fix test report typing
+- 2441db0 feat(tool-catalog): marketing.plan + marketing.execute
+- 09f2fd3 feat(backend): work flow + approvals + status
+- e1a4df1 test: remove unused import
+- 4893f64 feat(portal): work surface + reload resume
+- 66d478a fix: disable reasoning output on qwen3
+- 2cd1c7c fix: tolerant plan JSON + longer plan timeout
+- e2025eb fix: raise execute timeout + concise deliverables
 
 ## Estado
-Servidores corriendo: backend 3210, portal 5173, Ollama 11434.
-Goal completado. AUTOPILOT DETENIDO. No se inicia el siguiente goal.
+Goal completado y validado. AUTOPILOT DETENIDO a la espera de revisión humana.
+No se inicia otro departamento ni otro goal.
