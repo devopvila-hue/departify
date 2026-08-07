@@ -1,39 +1,46 @@
-# PLAN — Sprint 56 — Customer Zero Vertical Slice (MOON → Marketing → resultado visible)
+# PLAN — Goal Autónomo — Customer Zero (URL → Marketing → conversación)
 
-## Fase 1 — Auditoría (Architecture Completion Gate)
-- [x] T0. Recorrer `apps/backend`, `apps/portal`, `platform-composition`,
-  `business-events`, `departments`, `workflows` + contratos públicos necesarios.
-- [x] T1. Confirmar cómo reutilizar el pipeline existente (smoke test Marketing Customer Zero).
-- [x] T2. Detectar el bloqueo: sin superficie HTTP+UI y `rawData` no llega a
-  discovery desde el flujo real.
+## Fase 1 — Auditoría (paralela, antes de programar)
+- [x] T0. Subagente Discovery/DNA: schema CompanyDNA, pipeline, gaps, repository.
+- [x] T1. Subagente LLM/agent: MiniMax dead, LlmRouter existe, ningún tool llama al LLM,
+  no hay chat. Ollama local funciona (OpenAI-compatible).
+- [x] T2. Subagente Marketing/dept/backend/portal: tpl_marketing, DepartmentService,
+  onboarding workflow, superficie actual, no hay chat.
 
-## Fase 2 — Decisión (Architecture Confidence Gate)
-- [x] T3. Opción A: UN endpoint HTTP + pantalla mínima. La ruta es adapter.
+## Fase 2 — Decisiones
+- [x] T3. Provider real: OPENAI_BASE_URL → gateway local (Ollama). Bloqueo MiniMax demostrado.
+- [x] T4. Contexto/Brain: reutilizar CompanyDiscoveryReport + DiscoveryReportRepository.
+- [x] T5. Conversación: tool `marketing.chat` + runtime real como agent_marketing_director.
 
 ## Fase 3 — Implementación
-- [x] T4. `executive-orchestrator`: `ExecutiveDiscoveryWorkflowInput.rawData?` → `initiateDiscovery`.
-- [x] T5. `business-events`: `runProvisioningPipeline` propaga `payload.rawData`.
-- [x] T6. `apps/backend`: composición Customer Zero + ruta `POST /api/customer-zero/marketing`.
-- [x] T7. `apps/portal`: `CustomerZeroRoute` (formulario + estado + resultado), router, proxy dev.
+- [x] T6. `packages/config`: OPENAI_BASE_URL opcional + OpenAIProviderConfig.baseUrl.
+- [x] T7. `packages/llm-provider-openai`: client acepta baseURL.
+- [x] T8. Verificación real: LlmRouter → Ollama (qwen3:0.6b y qwen3:1.7b) responde.
+- [x] T9. `packages/tool-catalog`: `marketing.chat` (LLM-backed, contexto real, historial).
+- [x] T10. `apps/backend`: web-analysis real (fetch + extracción + interpretación LLM).
+- [x] T11. `apps/backend`: session composition persistente por organización.
+- [x] T12. `apps/backend`: rutas analyze/correct/marketing(+prepare)/marketing/messages.
+- [x] T13. `apps/backend/main.ts`: carga `.env` local (process.loadEnvFile).
+- [x] T14. `apps/portal`: wizard URL-first (URL → working → review → correcciones →
+  preparar → departamento → chat).
 
-## Fase 4 — Tests (solo frontera nueva)
-- [x] T8. Backend: input válido → resultado; sin rawData → completo; sin companyName → 400.
-- [x] T9. Portal: formulario, ejecución, estado de carga, resultado, error.
-- [x] T10. Thread de rawData: unit workflow + e2e payment.confirmed.
+## Fase 4 — Tests (frontera nueva)
+- [x] T15. tool-catalog: marketing.chat (3 tests: contexto real, historial, error).
+- [x] T16. backend: web-analysis (5 tests), session composition (2 tests).
+- [x] T17. portal: wizard (7 tests).
 
-## Fase 5 — Validación monorepo
-- [x] T11. `pnpm lint`
-- [x] T12. `pnpm typecheck`
-- [x] T13. `pnpm test`
-- [x] T14. `pnpm -r build`
-- [x] T15. `pnpm check`
+## Fase 5 — Validaciones
+- [x] T18. `pnpm lint` / `typecheck` / `test` / `-r build` / `check` (33 paquetes, todo verde).
 
-## Fase 6 — Validación manual obligatoria (DoD)
-- [x] T16. Backend real en local (3210). Portal real en local (5173).
-- [x] T17. Navegador: MOON → información real → "Poner Marketing a trabajar" → resultado visible.
-- [x] T18. Headless Chrome CDP: PASS.
+## Fase 6 — Validación real obligatoria (DoD)
+- [x] T19. Backend real 3210 + portal real 5173 + Ollama 11434.
+- [x] T20. Navegador real (headless Chrome CDP): URL → working → review → correcciones →
+  preparar → departamento → mensaje → respuesta → segundo mensaje. **PASS** (Mailchimp).
+- [x] T21. Segunda empresa real (Spotify) vía proxy del navegador: análisis real,
+  Marketing activo, hechos específicos, continuidad. **PASS**.
+- [x] T22. Métricas: gaps 22 → 15 (−7, críticos 13 → 7); preguntas 20 (cap).
 
 ## Fase 7 — Cierre
-- [ ] T19. Informe final en WORKLOG.
-- [ ] T20. Commit + push.
-- [ ] T21. `.opencode/autopilot.done`. No iniciar Sprint 57.
+- [ ] T23. Informe final en WORKLOG.
+- [ ] T24. Commits pequeños + push.
+- [ ] T25. `.opencode/autopilot.done`. DETENER.
