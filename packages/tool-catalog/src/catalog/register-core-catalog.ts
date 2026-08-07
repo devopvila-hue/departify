@@ -34,6 +34,10 @@ import {
   createMarketingChatToolDefinition,
 } from "../tools/marketing-chat-tool.js";
 import {
+  createMarketingExecuteToolDefinition,
+  createMarketingPlanToolDefinition,
+} from "../tools/marketing-work-tool.js";
+import {
   createKnowledgeSearchToolDefinition,
   type KnowledgeSearchInput,
   type KnowledgeSearchOutput,
@@ -92,6 +96,8 @@ export const CORE_CATALOG_IDS = [
   "discovery.delegate",
   "discovery.summary",
   "marketing.chat",
+  "marketing.plan",
+  "marketing.execute",
 ] as const;
 
 export type CoreCatalogId = (typeof CORE_CATALOG_IDS)[number];
@@ -191,6 +197,23 @@ export function buildCoreCatalog(
   if (context.llmRouter && context.discoveryRepository) {
     catalog.push(
       createMarketingChatToolDefinition({
+        llmRouter: context.llmRouter,
+        repository: context.discoveryRepository,
+        ...(context.clock ? { clock: context.clock } : {}),
+      }) as unknown as ToolDefinition,
+    );
+    // Marketing work: the Director turns the CEO's goal into a structured
+    // plan and executes the items that are really executable. Registered
+    // together with the chat tool, on the same real runtime.
+    catalog.push(
+      createMarketingPlanToolDefinition({
+        llmRouter: context.llmRouter,
+        repository: context.discoveryRepository,
+        ...(context.clock ? { clock: context.clock } : {}),
+      }) as unknown as ToolDefinition,
+    );
+    catalog.push(
+      createMarketingExecuteToolDefinition({
         llmRouter: context.llmRouter,
         repository: context.discoveryRepository,
         ...(context.clock ? { clock: context.clock } : {}),

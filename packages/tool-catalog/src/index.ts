@@ -93,8 +93,20 @@ export {
 
 export {
   createMarketingChatToolDefinition,
+  buildBusinessContext,
   type MarketingChatInput,
   type MarketingChatMessage,
   type MarketingChatOutput,
   type MarketingChatToolOptions,
 } from "./tools/marketing-chat-tool.js";
+
+export {
+  createMarketingPlanToolDefinition,
+  createMarketingExecuteToolDefinition,
+  type MarketingPlanInput,
+  type MarketingPlanOutput,
+  type MarketingExecuteInput,
+  type MarketingExecuteOutput,
+  type MarketingWorkItem,
+  type MarketingWorkToolOptions,
+} from "./tools/marketing-work-tool.js";

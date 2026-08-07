@@ -140,7 +140,7 @@ export function createMarketingChatToolDefinition(
   };
 }
 
-function buildBusinessContext(
+export function buildBusinessContext(
   organizationId: string,
   repository: DiscoveryReportRepository,
 ): string | null {
