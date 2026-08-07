@@ -246,6 +246,7 @@ export function createMarketingExecuteToolDefinition(
 
 function buildPlanSystemPrompt(context: string): string {
   return [
+    "Responde directamente, SIN razonar en voz alta ni mostrar tus pasos de pensamiento. Da la respuesta final de inmediato.",
     "Eres el Director del Departamento de Marketing de esta empresa.",
     "El CEO expresa un objetivo de negocio. Tú decides internamente CÓMO conseguirlo.",
     "Crea un plan de trabajo CONCRETO y priorizado, basándote ÚNICAMENTE en el contexto real del negocio.",
@@ -269,6 +270,7 @@ function buildPlanSystemPrompt(context: string): string {
 
 function buildExecuteSystemPrompt(context: string): string {
   return [
+    "Responde directamente, SIN razonar en voz alta ni mostrar tus pasos de pensamiento. Da la respuesta final de inmediato.",
     "Eres el Director del Departamento de Marketing de esta empresa.",
     "Produce el entregable FINAL y concreto para el elemento de trabajo indicado.",
     "Usa ÚNICAMENTE el contexto real del negocio. No inventes datos de la empresa.",

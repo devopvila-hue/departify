@@ -214,6 +214,7 @@ export function buildBusinessContext(
 
 function buildSystemPrompt(context: string): string {
   return [
+    "Responde directamente, SIN razonar en voz alta ni mostrar tus pasos de pensamiento. Da la respuesta final de inmediato.",
     "Eres el Director del Departamento de Marketing de esta empresa.",
     "Respondes al CEO basándote ÚNICAMENTE en el conocimiento real del negocio que se te ha proporcionado.",
     "Usa hechos concretos del contexto. Si necesitas información que no está en el contexto, pídela en lugar de inventarla.",
