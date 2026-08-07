@@ -41,6 +41,10 @@ export interface MarketingPlanInput {
   readonly organizationId: string;
   /** The CEO's business intention, e.g. "Necesito conseguir más clientes." */
   readonly goal: string;
+  /** UI/session locale: every visible text must be produced in it. */
+  readonly locale?: string;
+  /** Extra real context (onboarding goal, tools, connections). */
+  readonly extraContext?: string;
 }
 
 export interface MarketingPlanOutput {
@@ -51,6 +55,8 @@ export interface MarketingPlanOutput {
 export interface MarketingExecuteInput {
   readonly organizationId: string;
   readonly item: MarketingWorkItem;
+  readonly locale?: string;
+  readonly extraContext?: string;
 }
 
 export interface MarketingExecuteOutput {
@@ -103,6 +109,8 @@ export function createMarketingPlanToolDefinition(
       properties: {
         organizationId: { type: "string", minLength: 1 },
         goal: { type: "string", minLength: 1 },
+        locale: { type: "string" },
+        extraContext: { type: "string" },
       },
       additionalProperties: false,
     },
@@ -133,7 +141,10 @@ export function createMarketingPlanToolDefinition(
       const messages: LlmMessage[] = [
         {
           role: "system",
-          content: buildPlanSystemPrompt(businessContext),
+          content: buildPlanSystemPrompt(
+            joinContext(businessContext, args.extraContext),
+            args.locale,
+          ),
         },
         {
           role: "user",
@@ -191,6 +202,8 @@ export function createMarketingExecuteToolDefinition(
       properties: {
         organizationId: { type: "string", minLength: 1 },
         item: { type: "object", additionalProperties: true },
+        locale: { type: "string" },
+        extraContext: { type: "string" },
       },
       additionalProperties: false,
     },
@@ -220,7 +233,10 @@ export function createMarketingExecuteToolDefinition(
       const messages: LlmMessage[] = [
         {
           role: "system",
-          content: buildExecuteSystemPrompt(businessContext),
+          content: buildExecuteSystemPrompt(
+            joinContext(businessContext, args.extraContext),
+            args.locale,
+          ),
         },
         {
           role: "user",
@@ -244,8 +260,13 @@ export function createMarketingExecuteToolDefinition(
   };
 }
 
-function buildPlanSystemPrompt(context: string): string {
+function joinContext(context: string, extra?: string): string {
+  return extra && extra.trim().length > 0 ? `${context}\n${extra.trim()}` : context;
+}
+
+function buildPlanSystemPrompt(context: string, locale?: string): string {
   return [
+    languageRule(locale),
     "Responde directamente, SIN razonar en voz alta ni mostrar tus pasos de pensamiento. Da la respuesta final de inmediato.",
     "Eres el Director del Departamento de Marketing de esta empresa.",
     "El CEO expresa un objetivo de negocio. Tú decides internamente CÓMO conseguirlo.",
@@ -269,8 +290,9 @@ function buildPlanSystemPrompt(context: string): string {
   ].join("\n");
 }
 
-function buildExecuteSystemPrompt(context: string): string {
+function buildExecuteSystemPrompt(context: string, locale?: string): string {
   return [
+    languageRule(locale),
     "Responde directamente, SIN razonar en voz alta ni mostrar tus pasos de pensamiento. Da la respuesta final de inmediato.",
     "Eres el Director del Departamento de Marketing de esta empresa.",
     "Produce el entregable FINAL y concreto para el elemento de trabajo indicado.",
@@ -290,6 +312,18 @@ function buildExecuteSystemPrompt(context: string): string {
  * several model-produced shapes: { summary, items }, { plan: { items } },
  * { plan_de_trabajo: { items } }.
  */
+/**
+ * Language rule: the CEO reads the plan and the deliverables, so every
+ * visible value must be written in the session locale.
+ */
+function languageRule(locale?: string): string {
+  const language = locale === "en" ? "English" : "Spanish (español)";
+  return (
+    `Write EVERY human-readable text (summary, title, description, capability) in ${language}. ` +
+    "JSON keys stay in English. Never mix languages."
+  );
+}
+
 function parsePlanJson(text: string): { summary?: string; items?: MarketingWorkItem[] } | null {
   const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
   const start = cleaned.indexOf("{");

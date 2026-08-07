@@ -673,6 +673,11 @@ export async function registerCustomerZeroRoutes(
               companyName: { type: "string" },
               gapCount: { type: "number" },
               mandatoryQuestions: { type: "array" },
+              locale: { type: "string" },
+              onboarding: { type: "object", additionalProperties: true },
+              discoveryTranscript: { type: "array" },
+              connections: { type: "array" },
+              unmappedTools: { type: "array" },
               department: { type: ["object", "null"], additionalProperties: true },
               marketingWork: { type: ["object", "null"], additionalProperties: true },
               conversation: { type: "array" },
@@ -696,6 +701,15 @@ export async function registerCustomerZeroRoutes(
         ...(session.state.companyName ? { companyName: session.state.companyName } : {}),
         gapCount: report?.gaps.length ?? 0,
         mandatoryQuestions: report ? curateMandatoryQuestions(report) : [],
+        // UX v2 state so a reload restores objetivo, respuestas, herramientas
+        // y estado de conexión, no solo el Departamento.
+        locale: session.state.locale,
+        ...(session.state.onboarding
+          ? { onboarding: session.state.onboarding }
+          : {}),
+        discoveryTranscript: session.state.discoveryTranscript,
+        connections: [...session.state.connections.values()],
+        unmappedTools: session.state.unmappedTools,
         department: findMarketingDepartment(session),
         ...(session.state.marketingWork
           ? { marketingWork: session.state.marketingWork }

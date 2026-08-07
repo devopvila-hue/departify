@@ -19,12 +19,46 @@ export interface LlmRuntime {
  * no mocked replies — this is the real inference stack.
  */
 export function buildLlmRuntime(): LlmRuntime {
-  const config: LlmRouterConfig = loadLlmRouterConfig();
-  const provider = createOpenAIProviderFromConfig();
-  const { router } = bootstrapLlmRouter({
-    config,
-    providers: [provider],
+  // The router is built lazily: a session (and therefore the whole product
+  // flow) must not fail to exist just because the provider is not configured
+  // in this environment. When it is missing, the calls fail honestly at call
+  // time and the analysis degrades to the deterministic facts.
+  let cached: LlmRouter | null = null;
+  const resolve = (): LlmRouter => {
+    if (!cached) {
+      const config: LlmRouterConfig = loadLlmRouterConfig();
+      const provider = createOpenAIProviderFromConfig();
+      cached = bootstrapLlmRouter({ config, providers: [provider] }).router;
+    }
+    return cached;
+  };
+
+  const router = new Proxy({} as LlmRouter, {
+    get(_target, property) {
+      // Never resolve the provider just because a property is READ (the tool
+      // catalog inspects the router at registration time). Resolution happens
+      // when the method is actually called.
+      return (...args: unknown[]) => {
+        let target: Record<string, unknown>;
+        try {
+          target = resolve() as unknown as Record<string, unknown>;
+        } catch (cause) {
+          // Registration-time metadata reads must not break the product flow
+          // when the provider is not configured in this environment.
+          if (property === "getDefaultProviderId") {
+            return "unconfigured";
+          }
+          throw cause;
+        }
+        const method = target[property as string];
+        if (typeof method !== "function") {
+          throw new Error(`LLM router has no method '${String(property)}'.`);
+        }
+        return (method as (...inner: unknown[]) => unknown).apply(target, args);
+      };
+    },
   });
+
   return { router };
 }
 

@@ -49,6 +49,13 @@ import {
 } from "@departify/workflows";
 import { randomUUID } from "node:crypto";
 import { buildLlmRuntime, type LlmRuntime } from "./llm-runtime.js";
+import type { SupportedLocale } from "./locale.js";
+import type { ResearchProgress } from "./research-progress.js";
+import {
+  createConversationState,
+  type DiscoveryConversationState,
+} from "./progressive-discovery.js";
+import type { ConnectionState } from "./connections.js";
 
 const ONBOARDING_DIRECTOR_AGENT_ID = "agent_marketing_director";
 const ONBOARDING_EMPLOYEE_AGENT_ID = "agent_content_strategist";
@@ -63,6 +70,39 @@ export interface CustomerZeroSessionState {
   conversation: readonly { role: "user" | "assistant"; content: string }[];
   /** The Marketing department's structured work for this organization. */
   marketingWork?: MarketingWorkState;
+  /** UI/session locale — every generated visible text respects it. */
+  locale: SupportedLocale;
+  /** Onboarding intake (Fase 2). */
+  onboarding?: OnboardingIntake;
+  /** Live research state for the "Conociendo tu negocio…" screen (Fase 3). */
+  progress?: ResearchProgress;
+  /** Progressive discovery conversation state (Fase 6). */
+  discovery: DiscoveryConversationState;
+  /** Transcript of the progressive discovery conversation. */
+  discoveryTranscript: DiscoveryTurn[];
+  /** Tools the CEO told us about, mapped to internal connectors. */
+  connections: Map<string, ConnectionState>;
+  /** Tools mentioned that Departify has no capability for (honest). */
+  unmappedTools: string[];
+  /** What the research really understood about the business. */
+  understood?: Readonly<Record<string, unknown>>;
+}
+
+export interface DiscoveryTurn {
+  readonly questionId: string;
+  readonly question: string;
+  readonly answer: string;
+}
+
+export interface OnboardingIntake {
+  readonly companyName: string;
+  readonly hasWebsite: boolean;
+  readonly url?: string;
+  readonly description?: string;
+  readonly country?: string;
+  readonly companySize?: string;
+  /** What the CEO wants to achieve now — travels all the way to Marketing. */
+  readonly goal: string;
 }
 
 export type MarketingWorkItemStatus =
@@ -115,6 +155,7 @@ const sessions = new Map<string, CustomerZeroSession>();
 
 export interface CustomerZeroSessionOptions {
   readonly llm?: LlmRuntime;
+  readonly locale?: SupportedLocale;
 }
 
 /**
@@ -266,6 +307,11 @@ export function getOrCreateCustomerZeroSession(
       organizationId,
       rawData: {},
       conversation: [],
+      locale: options.locale ?? "es",
+      discovery: createConversationState(),
+      discoveryTranscript: [],
+      connections: new Map(),
+      unmappedTools: [],
     },
     reports: [],
   };
@@ -347,7 +393,12 @@ export async function runMarketingPlanForSession(
     agentId: "agent_marketing_director",
     organizationId: session.organizationId,
     toolId: "marketing.plan",
-    args: { organizationId: session.organizationId, goal },
+    args: {
+      organizationId: session.organizationId,
+      goal,
+      locale: session.state.locale,
+      extraContext: buildSessionExtraContext(session),
+    },
   });
 
   if (outcome.status !== "completed") {
@@ -420,6 +471,8 @@ export async function executeMarketingWorkItemForSession(
     toolId: "marketing.execute",
     args: {
       organizationId: session.organizationId,
+      locale: session.state.locale,
+      extraContext: buildSessionExtraContext(session),
       item: {
         id: item.id,
         title: item.title,
@@ -472,6 +525,53 @@ export function approveMarketingWorkItemForSession(
     ".";
   item.status = "unavailable";
   return item;
+}
+
+/**
+ * The real extra context Marketing receives: the CEO's initial goal from the
+ * onboarding, the answers of the progressive discovery conversation, the
+ * tools the company uses and which of them are really connected.
+ */
+export function buildSessionExtraContext(session: CustomerZeroSession): string {
+  const parts: string[] = [];
+  const onboarding = session.state.onboarding;
+  if (onboarding) {
+    parts.push(`Empresa: ${onboarding.companyName}`);
+    if (onboarding.country) parts.push(`País principal: ${onboarding.country}`);
+    if (onboarding.companySize) parts.push(`Tamaño: ${onboarding.companySize}`);
+    if (onboarding.description) {
+      parts.push(`Lo que está creando: ${onboarding.description}`);
+    }
+    if (onboarding.goal) {
+      parts.push(`Objetivo inicial del CEO: ${onboarding.goal}`);
+    }
+  }
+  for (const turn of session.state.discoveryTranscript) {
+    parts.push(`${turn.question} → ${turn.answer}`);
+  }
+  const connections = [...session.state.connections.values()];
+  if (connections.length > 0) {
+    parts.push(
+      `Herramientas de la empresa: ${connections
+        .map((connection) => `${connection.label} (${connection.status})`)
+        .join(", ")}`,
+    );
+    const connected = connections.filter((c) => c.status === "connected");
+    parts.push(
+      connected.length > 0
+        ? `Capacidades conectadas y usables: ${connected
+            .map((c) => c.capability)
+            .join(", ")}`
+        : "Todavía no hay ninguna herramienta externa conectada: no puedes " +
+          "ejecutar acciones externas, dilo con honestidad.",
+    );
+  }
+  if (session.state.unmappedTools.length > 0) {
+    parts.push(
+      `Herramientas mencionadas sin conector disponible: ${session.state.unmappedTools.join(", ")}`,
+    );
+  }
+  return parts.join("\n");
 }
 
 function buildSimulatedPaymentEvent(

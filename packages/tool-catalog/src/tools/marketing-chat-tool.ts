@@ -21,6 +21,10 @@ export interface MarketingChatInput {
   readonly message: string;
   /** Conversation history carried by the host so the Director keeps context. */
   readonly history?: readonly MarketingChatMessage[];
+  /** UI/session locale: every visible text must be produced in it. */
+  readonly locale?: string;
+  /** Extra real context (onboarding goal, tools, connections). */
+  readonly extraContext?: string;
 }
 
 export interface MarketingChatOutput {
@@ -77,6 +81,8 @@ export function createMarketingChatToolDefinition(
       properties: {
         organizationId: { type: "string", minLength: 1 },
         message: { type: "string", minLength: 1 },
+        locale: { type: "string" },
+        extraContext: { type: "string" },
         history: {
           type: "array",
           items: {
@@ -118,7 +124,12 @@ export function createMarketingChatToolDefinition(
       const messages: LlmMessage[] = [
         {
           role: "system",
-          content: buildSystemPrompt(businessContext),
+          content: buildSystemPrompt(
+            args.extraContext && args.extraContext.trim().length > 0
+              ? `${businessContext}\n${args.extraContext.trim()}`
+              : businessContext,
+            args.locale,
+          ),
         },
         ...history.map((entry) => ({
           role: entry.role as LlmMessage["role"],
@@ -212,8 +223,10 @@ export function buildBusinessContext(
   return parts.join("\n");
 }
 
-function buildSystemPrompt(context: string): string {
+function buildSystemPrompt(context: string, locale?: string): string {
+  const language = locale === "en" ? "English" : "Spanish (español)";
   return [
+    `Answer ALWAYS in ${language}. Never mix languages.`,
     "Responde directamente, SIN razonar en voz alta ni mostrar tus pasos de pensamiento. Da la respuesta final de inmediato.",
     "Eres el Director del Departamento de Marketing de esta empresa.",
     "Respondes al CEO basándote ÚNICAMENTE en el conocimiento real del negocio que se te ha proporcionado.",
