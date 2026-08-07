@@ -1,31 +1,90 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
+import {
+  ApprovalsIcon,
+  ChatIcon,
+  CompanyIcon,
+  ConnectionsIcon,
+  DepartmentsIcon,
+  MenuIcon,
+  ResultsIcon,
+  SettingsIcon,
+  TasksIcon,
+  type IconProps,
+} from "@/components/icons";
+
 /**
- * The Departify shell — sidebar + topbar + content, adapted from the
- * historical portal's shell (240px rail, 64px sticky header, mobile drawer
- * with scrim) and reduced to what this product really has.
+ * Sprint 59 — the conversational application shell.
  *
- * There is no "Agents" entry: the CEO directs department heads, not agents.
+ * ChatGPT / OpenClaw information architecture: the sidebar is a flat
+ * list of primary destinations. Chat is the home. There is no
+ * "Command Center" inside a dashboard — the conversation IS the
+ * application.
+ *
+ * The sidebar collapses to a drawer on mobile. The icon style is
+ * restrained, premium line icons sized to the 16px grid; no emoji,
+ * no decorative fills.
  */
 
-const NAV = [
-  { to: "/inicio", label: "Inicio", hint: "Dirección" },
-  { to: "/marketing", label: "Marketing", hint: "Departamento" },
-  { to: "/decisiones", label: "Decisiones", hint: "Aprobaciones" },
-  { to: "/resultados", label: "Resultados", hint: "Entregado" },
-  { to: "/conexiones", label: "Conexiones", hint: "Herramientas" },
-  { to: "/empresa", label: "Empresa", hint: "Lo que sabemos" },
+type IconEntry = { to: string; label: string; icon: (props: IconProps) => ReactElement };
+type IconEntryWithBadge = IconEntry & { badgeKey?: "approvals" };
+
+const PRIMARY: IconEntry[] = [
+  { to: "/chat", label: "Chat", icon: ChatIcon },
+  { to: "/tareas", label: "Tareas", icon: TasksIcon },
 ];
 
-export function AppShell(props: { companyName?: string; pending?: number }) {
+const SECONDARY: IconEntry[] = [
+  { to: "/departamentos", label: "Departamentos", icon: DepartmentsIcon },
+  { to: "/conexiones", label: "Conexiones", icon: ConnectionsIcon },
+];
+
+const TERTIARY: IconEntryWithBadge[] = [
+  { to: "/aprobaciones", label: "Aprobaciones", icon: ApprovalsIcon, badgeKey: "approvals" },
+  { to: "/resultados", label: "Resultados", icon: ResultsIcon },
+];
+
+const FOOT: IconEntry[] = [
+  { to: "/empresa", label: "Empresa", icon: CompanyIcon },
+  { to: "/configuracion", label: "Configuración", icon: SettingsIcon },
+];
+
+export function AppShell(props: { companyName?: string; pendingApprovals?: number }) {
   const [open, setOpen] = useState(false);
   const location = useLocation();
 
-  // Close the mobile drawer on navigation.
   useEffect(() => {
     setOpen(false);
   }, [location.pathname]);
+
+  const renderItem = (item: IconEntryWithBadge) => {
+    const Icon = item.icon;
+    const badge =
+      item.badgeKey === "approvals" && (props.pendingApprovals ?? 0) > 0
+        ? props.pendingApprovals
+        : null;
+    return (
+      <li key={item.to}>
+        <NavLink
+          to={item.to}
+          className={({ isActive }) =>
+            `dfy-navitem${isActive ? " dfy-navitem--active" : ""}`
+          }
+        >
+          <span className="dfy-navitem__row">
+            <Icon className="dfy-navitem__icon" />
+            <span>{item.label}</span>
+          </span>
+          {badge != null && (
+            <span className="dfy-navitem__count" aria-label={`${badge} pendientes`}>
+              {badge}
+            </span>
+          )}
+        </NavLink>
+      </li>
+    );
+  };
 
   return (
     <div className="dfy-shell">
@@ -45,29 +104,19 @@ export function AppShell(props: { companyName?: string; pending?: number }) {
           <span className="dfy-sidebar__mark" aria-hidden="true">
             D
           </span>
-          <span>
+          <span className="dfy-sidebar__brandlabel">
             <strong>Departify</strong>
             <span className="dfy-sidebar__product">Tu empresa</span>
           </span>
         </div>
 
-        <ul className="dfy-sidebar__nav">
-          {NAV.map((item) => (
-            <li key={item.to}>
-              <NavLink
-                to={item.to}
-                className={({ isActive }) =>
-                  `dfy-navitem${isActive ? " dfy-navitem--active" : ""}`
-                }
-              >
-                <span>{item.label}</span>
-                {item.to === "/decisiones" && (props.pending ?? 0) > 0 && (
-                  <span className="dfy-navitem__count">{props.pending}</span>
-                )}
-              </NavLink>
-            </li>
-          ))}
-        </ul>
+        <ul className="dfy-sidebar__nav">{PRIMARY.map(renderItem)}</ul>
+
+        <ul className="dfy-sidebar__nav dfy-sidebar__nav--sub">{SECONDARY.map(renderItem)}</ul>
+
+        <ul className="dfy-sidebar__nav dfy-sidebar__nav--sub">{TERTIARY.map(renderItem)}</ul>
+
+        <ul className="dfy-sidebar__nav dfy-sidebar__nav--foot">{FOOT.map(renderItem)}</ul>
 
         <p className="dfy-sidebar__foot">
           Marketing es el departamento activo. Los demás se activarán cuando
@@ -84,7 +133,7 @@ export function AppShell(props: { companyName?: string; pending?: number }) {
             aria-expanded={open}
             onClick={() => setOpen((value) => !value)}
           >
-            ☰
+            <MenuIcon />
           </button>
           <span className="dfy-topbar__company">
             {props.companyName || "Tu empresa"}

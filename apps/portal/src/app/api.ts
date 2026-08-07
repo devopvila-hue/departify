@@ -163,6 +163,21 @@ export type CommandCenterEvent =
       stage: string;
       status: "started" | "done" | "blocked";
       message: string;
+    }
+  | {
+      kind: "department_memory";
+      departmentId: string;
+      departmentName: string;
+      entries: { id: string; title: string; kind: string; importance: number }[];
+    }
+  | {
+      kind: "dna_suggestion";
+      suggestion: {
+        title: string;
+        content: string;
+        fromDepartment: string;
+        confidence: number;
+      };
     };
 
 export interface CommandCenterRouting {

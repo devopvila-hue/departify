@@ -13,7 +13,7 @@ export function ShellGate() {
   const { organizationId } = useOrg();
   const location = useLocation();
   const [state, setState] = useState<
-    { status: "loading" } | { status: "ready"; companyName: string; pending: number } | { status: "missing" }
+    { status: "loading" } | { status: "ready"; companyName: string; pendingApprovals: number } | { status: "missing" }
   >({ status: "loading" });
 
   useEffect(() => {
@@ -32,7 +32,7 @@ export function ShellGate() {
       setState({
         status: "ready",
         companyName: overview.companyName,
-        pending: overview.decisions.filter((d) => d.status === "pending").length,
+        pendingApprovals: overview.decisions.filter((d) => d.status === "pending").length,
       });
     })();
     return () => {
@@ -51,5 +51,5 @@ export function ShellGate() {
       </div>
     );
   }
-  return <AppShell companyName={state.companyName} pending={state.pending} />;
+  return <AppShell companyName={state.companyName} pendingApprovals={state.pendingApprovals} />;
 }

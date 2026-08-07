@@ -107,15 +107,16 @@ describe("portal shell", () => {
     window.localStorage.clear();
   });
 
-  it("navigates by business area and never offers 'Agentes'", () => {
-    mount(<AppShell companyName="MOON Shared Living" pending={1} />);
+  it("navigates by primary conversational surface and never offers 'Agentes'", () => {
+    mount(<AppShell companyName="MOON Shared Living" pendingApprovals={1} />);
 
     for (const label of [
-      "Inicio",
-      "Marketing",
-      "Decisiones",
-      "Resultados",
+      "Chat",
+      "Tareas",
+      "Departamentos",
       "Conexiones",
+      "Aprobaciones",
+      "Resultados",
       "Empresa",
     ]) {
       expect(screen.getByRole("link", { name: new RegExp(label, "i") })).toBeInTheDocument();

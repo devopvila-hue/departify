@@ -154,9 +154,9 @@ export function CustomerZeroRoute() {
         };
         if (cancelled) return;
         if (status.department) {
-          // The company already has its department: go straight to the portal.
+          // The company already has its department: go straight to the chat.
           setOrganizationId(status.organizationId);
-          navigate("/inicio", { replace: true });
+          navigate("/chat", { replace: true });
           return;
         }
         const next = await fetch(
@@ -277,7 +277,7 @@ export function CustomerZeroRoute() {
 
   /**
    * Handover: the company gets its Marketing department and the CEO enters
-   * the portal, where Elvira and her team are already working.
+   * the central chat, where Elvira and her team are already working.
    */
   async function enterCompany(org: string) {
     if (entering) return;
@@ -293,7 +293,7 @@ export function CustomerZeroRoute() {
         return;
       }
       setOrganizationId(org);
-      navigate("/inicio");
+      navigate("/chat");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setEntering(false);

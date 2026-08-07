@@ -45,6 +45,11 @@ import {
   getMarketingHead,
   headRole,
 } from "./department-identity.js";
+import {
+  buildDnaSuggestion,
+  listDepartmentMemory,
+  type DnaSuggestion,
+} from "./department-memory.js";
 import type {
   CustomerZeroSession,
   MarketingWorkItemState,
@@ -84,6 +89,16 @@ export type CommandCenterEvent =
       stage: string;
       status: "started" | "done" | "blocked";
       message: string;
+    }
+  | {
+      kind: "department_memory";
+      departmentId: string;
+      departmentName: string;
+      entries: { id: string; title: string; kind: string; importance: number }[];
+    }
+  | {
+      kind: "dna_suggestion";
+      suggestion: { title: string; content: string; fromDepartment: string; confidence: number };
     };
 
 /** A work item projected for the CEO. */
@@ -678,11 +693,7 @@ export function buildProactiveOpening(
       "Elvira takes the initiative",
     ),
     message: objective
-      ? t(
-          session.state.locale,
-          `Para conseguir tu objetivo (${objective}), Elvira ha preparado un equipo y propone empezar por lo que más impacto tiene.`,
-          `To achieve your goal (${objective}), Elvira has prepared a team and proposes to start with what has the most impact.`,
-        )
+      ? buildProactiveStrategyMessage(session.state.locale, objective, work)
       : t(
           session.state.locale,
           "Elvira ya está lista para ponerse a trabajar. Dile qué quieres conseguir.",
@@ -797,7 +808,52 @@ export function buildProactiveOpening(
     ],
   });
 
+  // Department memory summary — subtle. Only surfaced if there are entries.
+  const marketingMem = listDepartmentMemory(session, "marketing", { limit: 5 });
+  if (marketingMem.length > 0) {
+    events.push({
+      kind: "department_memory",
+      departmentId: "marketing",
+      departmentName: "Marketing",
+      entries: marketingMem.map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        kind: entry.kind,
+        importance: entry.importance,
+      })),
+    });
+  }
+
+  // DNA suggestion — only surfaced when Marketing has discovered something
+  // that looks like shared truth. Today the heuristic is intentionally
+  // minimal: any department memory tagged "result" with importance >= 0.7
+  // becomes a candidate. Marketing NEVER writes the DNA directly; the CEO
+  // explicitly approves.
+  const suggestions = marketingMem
+    .filter((m) => m.kind === "result" && m.importance >= 0.7)
+    .map((m) =>
+      buildDnaSuggestion({
+        fromDepartment: "marketing",
+        title: m.title,
+        content: m.content,
+        evidence: [m.source ?? m.kind],
+        confidence: m.importance,
+      }),
+    );
+  for (const s of suggestions) {
+    events.push({ kind: "dna_suggestion", suggestion: dnaView(s) });
+  }
+
   return events;
+}
+
+function dnaView(s: DnaSuggestion) {
+  return {
+    title: s.title,
+    content: s.content,
+    fromDepartment: s.fromDepartment,
+    confidence: s.confidence,
+  };
 }
 
 function projectItem(item: MarketingWorkItemState): WorkItemView {
@@ -830,6 +886,64 @@ function projectConnectionSuggestion(
 
 function lowerFirst(value: string): string {
   return value.length > 0 ? `${value[0]?.toLowerCase()}${value.slice(1)}` : value;
+}
+
+/**
+ * Build a substantive, goal-grounded strategy message for the proactive
+ * opening. The CEO must feel "Departify knows my company" — not a generic
+ * chatbot. The message uses the work items, the typed capabilities, and
+ * the company's existing tools to give a concrete first plan.
+ *
+ * Falls back to a shorter statement for early sessions that have no work
+ * yet (the CEO will see the empty state in the chat).
+ */
+function buildProactiveStrategyMessage(
+  locale: SupportedLocale,
+  objective: string,
+  work: import("./customer-zero-session.js").MarketingWorkState | undefined,
+): string {
+  const items = work?.items ?? [];
+  const ready = items.filter((it) => !["unavailable", "failed"].includes(it.status));
+  const blocked = items.filter((it) => it.status === "unavailable");
+
+  if (items.length === 0) {
+    return t(
+      locale,
+      `Para conseguir tu objetivo (${objective}), Elvira está organizando el primer plan. Te aviso en cuanto tenga algo concreto que puedas revisar.`,
+      `To achieve your goal (${objective}), Elvira is organising the first plan. I'll notify you as soon as she has something concrete to review.`,
+    );
+  }
+
+  if (locale === "en") {
+    const readyTitles = ready.slice(0, 3).map((it) => it.title).join("; ");
+    const blockedTitles = blocked.map((it) => it.title).join("; ");
+    let msg = `To achieve your goal (${objective}), here is where we are:`;
+    if (readyTitles) {
+      msg += `\n\nAlready in motion: ${readyTitles}.`;
+    }
+    if (blockedTitles) {
+      msg += `\n\nWaiting on a connection: ${blockedTitles}. I'll keep working on the rest in the meantime.`;
+    }
+    msg += `\n\nTell me what to prioritise or ask me anything about the plan.`;
+    return msg;
+  }
+
+  const readyTitles = ready
+    .slice(0, 3)
+    .map((it) => lowerFirst(it.title))
+    .join("; ");
+  const blockedTitles = blocked
+    .map((it) => lowerFirst(it.title))
+    .join("; ");
+  let msg = `Para conseguir tu objetivo (${objective}), esto es lo que hay ahora mismo:`;
+  if (readyTitles) {
+    msg += `\n\nYa en marcha: ${readyTitles}.`;
+  }
+  if (blockedTitles) {
+    msg += `\n\nEsperando una conexión: ${blockedTitles}. Sigo trabajando en todo lo demás mientras tanto.`;
+  }
+  msg += `\n\nDime qué quieres priorizar o pregúntame cualquier cosa del plan.`;
+  return msg;
 }
 
 /* -------------------------------------------------------------------------
