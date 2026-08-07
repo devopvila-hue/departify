@@ -26,6 +26,8 @@ export interface OpenAIProviderConfig {
   defaultModel: string;
   timeoutMs: number;
   maxRetries: number;
+  /** Optional base URL for OpenAI-compatible endpoints. */
+  baseUrl?: string;
 }
 
 export interface GoogleVertexProviderConfig {
@@ -88,11 +90,13 @@ export const openAIProviderConfigSchema = envSchema.transform(
     if (!apiKey) {
       throw new Error("OPENAI_API_KEY is required for the OpenAI provider.");
     }
+    const baseUrl = normalizeOptional(env.OPENAI_BASE_URL);
     return {
       apiKey,
       defaultModel: env.OPENAI_MODEL,
       timeoutMs: env.OPENAI_TIMEOUT_MS,
       maxRetries: env.OPENAI_MAX_RETRIES,
+      ...(baseUrl ? { baseUrl } : {}),
     };
   },
 );

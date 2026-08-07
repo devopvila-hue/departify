@@ -35,6 +35,8 @@ export const envSchema = z.object({
   OPENAI_MODEL: z.string().min(1).default("gpt-4o-mini"),
   OPENAI_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
   OPENAI_MAX_RETRIES: z.coerce.number().int().min(0).default(2),
+  /** Optional base URL for OpenAI-compatible endpoints (e.g. a local gateway). */
+  OPENAI_BASE_URL: optionalUrl,
 
   GOOGLE_VERTEX_PROJECT_ID: z.string().optional().or(z.literal("")),
   GOOGLE_VERTEX_LOCATION: z.string().optional().or(z.literal("")),

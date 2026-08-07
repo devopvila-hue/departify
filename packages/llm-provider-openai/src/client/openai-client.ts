@@ -48,5 +48,6 @@ export function createOpenAIClient(
     apiKey: config.apiKey,
     timeout: config.timeoutMs,
     maxRetries: config.maxRetries,
+    ...(config.baseUrl ? { baseURL: config.baseUrl } : {}),
   }) as unknown as OpenAIProviderClient;
 }

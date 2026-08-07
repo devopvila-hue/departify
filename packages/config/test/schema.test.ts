@@ -94,6 +94,32 @@ describe("openAIProviderConfigSchema", () => {
     expect(JSON.stringify(config)).not.toContain("other-secret");
   });
 
+  it("includes baseUrl when OPENAI_BASE_URL is supplied", () => {
+    const config = openAIProviderConfigSchema.parse({
+      OPENAI_API_KEY: "test-openai-key",
+      OPENAI_MODEL: "gpt-4o-mini",
+      OPENAI_TIMEOUT_MS: "1000",
+      OPENAI_MAX_RETRIES: "1",
+      OPENAI_BASE_URL: "http://127.0.0.1:11434/v1",
+    });
+
+    expect(config).toEqual({
+      apiKey: "test-openai-key",
+      defaultModel: "gpt-4o-mini",
+      timeoutMs: 1000,
+      maxRetries: 1,
+      baseUrl: "http://127.0.0.1:11434/v1",
+    });
+  });
+
+  it("omits baseUrl when OPENAI_BASE_URL is absent", () => {
+    const config = openAIProviderConfigSchema.parse({
+      OPENAI_API_KEY: "test-openai-key",
+    });
+
+    expect(config.baseUrl).toBeUndefined();
+  });
+
   it("requires an OpenAI API key for provider config", () => {
     expect(() => openAIProviderConfigSchema.parse({})).toThrow(
       "OPENAI_API_KEY is required",

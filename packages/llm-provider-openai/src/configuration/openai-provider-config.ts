@@ -6,6 +6,8 @@ export interface OpenAIProviderRuntimeConfig {
   defaultModel: string;
   timeoutMs: number;
   maxRetries: number;
+  /** Optional base URL for OpenAI-compatible endpoints. */
+  baseUrl?: string;
 }
 
 export function createOpenAIProviderRuntimeConfig(
@@ -16,6 +18,7 @@ export function createOpenAIProviderRuntimeConfig(
     defaultModel: config.defaultModel,
     timeoutMs: config.timeoutMs,
     maxRetries: config.maxRetries,
+    ...(config.baseUrl ? { baseUrl: config.baseUrl } : {}),
   };
   assertOpenAIProviderConfig(runtimeConfig);
   return runtimeConfig;
