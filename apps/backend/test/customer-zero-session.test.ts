@@ -4,6 +4,9 @@ import {
   getOrCreateCustomerZeroSession,
   runDiscoveryForSession,
   runMarketingPreparationForSession,
+  runMarketingPlanForSession,
+  executeMarketingWorkItemForSession,
+  approveMarketingWorkItemForSession,
 } from "../src/customer-zero/customer-zero-session.js";
 import { buildAnswersRawData } from "../src/customer-zero/answers.js";
 import { curateMandatoryQuestions } from "../src/customer-zero/questions.js";
@@ -135,5 +138,68 @@ describe("Customer Zero session composition", () => {
     if (missionAnswer) {
       expect(after.companyDna.mission?.statement).toBe(missionAnswer);
     }
+  });
+
+  it("runs Marketing work with approvals and honest execution", async () => {
+    const organizationId = "org_test_marketing_work";
+    const session = getOrCreateCustomerZeroSession(organizationId, { llm: stubLlm() });
+    session.state.companyName = "MOON Shared Living";
+    session.state.rawData = {
+      mission: {
+        statement: "Co-living compartido en Barcelona y Madrid",
+        confidence: { level: "verified", source: "user_input", lastVerified: new Date().toISOString() },
+      },
+    };
+
+    // The Marketing department is prepared (the marketing tools are executed
+    // through the real runtime later; here we plant a plan state to exercise
+    // the execute/approve state machine deterministically).
+    session.state.marketingWork = {
+      goal: "Necesito conseguir más clientes.",
+      summary: "Plan de crecimiento para MOON",
+      items: [
+        {
+          id: "item_1",
+          title: "Analizar audiencia",
+          description: "Estudio del cliente ideal",
+          kind: "analysis",
+          status: "pending",
+        },
+        {
+          id: "item_2",
+          title: "Borrador de campaña",
+          description: "Copy para redes",
+          kind: "creation",
+          status: "pending",
+        },
+        {
+          id: "item_3",
+          title: "Lanzar campaña de anuncios",
+          description: "Inversión en anuncios",
+          kind: "external_action",
+          capability: "ads_spend",
+          status: "needs_approval",
+        },
+      ],
+    };
+
+    // Executable items (analysis/creation) run through the real runtime; with
+    // the stub LLM the marketing.execute tool cannot produce a usable result,
+    // so the item is marked failed with an honest message — never fabricated.
+    const execResult = await executeMarketingWorkItemForSession(session, "item_1");
+    expect(session.state.marketingWork?.items.find((i) => i.id === "item_1")?.status).toBe(
+      "failed",
+    );
+    expect(execResult.length).toBeGreaterThan(0);
+
+    // Gated item requires approval before execution.
+    await expect(
+      executeMarketingWorkItemForSession(session, "item_3"),
+    ).rejects.toThrow(/requires CEO approval/i);
+
+    // Approving a gated item marks it unavailable (capability not connected).
+    const approved = approveMarketingWorkItemForSession(session, "item_3");
+    expect(approved.status).toBe("unavailable");
+    expect(approved.result).toContain("no está conectada");
   });
 });

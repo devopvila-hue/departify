@@ -8,6 +8,9 @@ import {
   getOrCreateCustomerZeroSession,
   runDiscoveryForSession,
   runMarketingPreparationForSession,
+  runMarketingPlanForSession,
+  executeMarketingWorkItemForSession,
+  approveMarketingWorkItemForSession,
 } from "../../customer-zero/customer-zero-session.js";
 import { curateMandatoryQuestions } from "../../customer-zero/questions.js";
 import { buildAnswersRawData } from "../../customer-zero/answers.js";
@@ -440,6 +443,265 @@ export async function registerCustomerZeroRoutes(
           },
         });
       }
+    },
+  );
+
+  server.post(
+    "/api/customer-zero/:organizationId/marketing/work",
+    {
+      schema: {
+        tags: ["customer-zero"],
+        summary: "Give Marketing a business goal; it creates a structured work plan",
+        params: {
+          type: "object",
+          required: ["organizationId"],
+          properties: {
+            organizationId: { type: "string" },
+          },
+        },
+        body: {
+          type: "object",
+          required: ["goal"],
+          properties: {
+            goal: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["organizationId", "summary", "items"],
+            properties: {
+              organizationId: { type: "string" },
+              summary: { type: "string" },
+              items: { type: "array" },
+            },
+          },
+          404: { type: "object", properties: { error: { type: "string" } } },
+          502: {
+            type: "object",
+            required: ["error"],
+            properties: {
+              error: {
+                type: "object",
+                properties: {
+                  code: { type: "string" },
+                  message: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId } = request.params as { organizationId: string };
+      const { goal } = request.body as { goal: string };
+
+      const session = getCustomerZeroSession(organizationId);
+      if (!session) {
+        return reply.code(404).send({ error: "Session not found." });
+      }
+
+      try {
+        const plan = await runMarketingPlanForSession(session, goal);
+        return reply.code(200).send({
+          organizationId,
+          summary: plan.summary,
+          items: plan.items,
+        });
+      } catch (cause) {
+        return reply.code(502).send({
+          error: {
+            code: "MARKETING_PLAN_FAILED",
+            message: cause instanceof Error ? cause.message : String(cause),
+          },
+        });
+      }
+    },
+  );
+
+  server.post(
+    "/api/customer-zero/:organizationId/marketing/work/:itemId/execute",
+    {
+      schema: {
+        tags: ["customer-zero"],
+        summary: "Execute a Marketing work item that is really executable",
+        params: {
+          type: "object",
+          required: ["organizationId", "itemId"],
+          properties: {
+            organizationId: { type: "string" },
+            itemId: { type: "string" },
+          },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["organizationId", "itemId", "status", "result"],
+            properties: {
+              organizationId: { type: "string" },
+              itemId: { type: "string" },
+              status: { type: "string" },
+              result: { type: "string" },
+            },
+          },
+          404: { type: "object", properties: { error: { type: "string" } } },
+          502: {
+            type: "object",
+            required: ["error"],
+            properties: {
+              error: {
+                type: "object",
+                properties: {
+                  code: { type: "string" },
+                  message: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId, itemId } = request.params as {
+        organizationId: string;
+        itemId: string;
+      };
+
+      const session = getCustomerZeroSession(organizationId);
+      if (!session) {
+        return reply.code(404).send({ error: "Session not found." });
+      }
+
+      try {
+        const result = await executeMarketingWorkItemForSession(session, itemId);
+        const item = session.state.marketingWork?.items.find((i) => i.id === itemId);
+        return reply.code(200).send({
+          organizationId,
+          itemId,
+          status: item?.status ?? "unknown",
+          result,
+        });
+      } catch (cause) {
+        return reply.code(502).send({
+          error: {
+            code: "MARKETING_EXECUTE_FAILED",
+            message: cause instanceof Error ? cause.message : String(cause),
+          },
+        });
+      }
+    },
+  );
+
+  server.post(
+    "/api/customer-zero/:organizationId/marketing/work/:itemId/approve",
+    {
+      schema: {
+        tags: ["customer-zero"],
+        summary: "CEO approves a gated Marketing action",
+        params: {
+          type: "object",
+          required: ["organizationId", "itemId"],
+          properties: {
+            organizationId: { type: "string" },
+            itemId: { type: "string" },
+          },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["organizationId", "itemId", "status", "result"],
+            properties: {
+              organizationId: { type: "string" },
+              itemId: { type: "string" },
+              status: { type: "string" },
+              result: { type: "string" },
+            },
+          },
+          404: { type: "object", properties: { error: { type: "string" } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId, itemId } = request.params as {
+        organizationId: string;
+        itemId: string;
+      };
+
+      const session = getCustomerZeroSession(organizationId);
+      if (!session) {
+        return reply.code(404).send({ error: "Session not found." });
+      }
+
+      try {
+        const item = approveMarketingWorkItemForSession(session, itemId);
+        return reply.code(200).send({
+          organizationId,
+          itemId,
+          status: item.status,
+          result: item.result ?? "",
+        });
+      } catch (cause) {
+        return reply.code(404).send({
+          error: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
+    },
+  );
+
+  server.get(
+    "/api/customer-zero/:organizationId",
+    {
+      schema: {
+        tags: ["customer-zero"],
+        summary: "Current Customer Zero status (used to resume after reload)",
+        params: {
+          type: "object",
+          required: ["organizationId"],
+          properties: {
+            organizationId: { type: "string" },
+          },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["organizationId"],
+            properties: {
+              organizationId: { type: "string" },
+              url: { type: "string" },
+              companyName: { type: "string" },
+              gapCount: { type: "number" },
+              mandatoryQuestions: { type: "array" },
+              department: { type: ["object", "null"], additionalProperties: true },
+              marketingWork: { type: ["object", "null"], additionalProperties: true },
+              conversation: { type: "array" },
+            },
+          },
+          404: { type: "object", properties: { error: { type: "string" } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId } = request.params as { organizationId: string };
+      const session = getCustomerZeroSession(organizationId);
+      if (!session) {
+        return reply.code(404).send({ error: "Session not found." });
+      }
+
+      const report = mostRecentReport(session);
+      return reply.code(200).send({
+        organizationId,
+        ...(session.state.url ? { url: session.state.url } : {}),
+        ...(session.state.companyName ? { companyName: session.state.companyName } : {}),
+        gapCount: report?.gaps.length ?? 0,
+        mandatoryQuestions: report ? curateMandatoryQuestions(report) : [],
+        department: findMarketingDepartment(session),
+        ...(session.state.marketingWork
+          ? { marketingWork: session.state.marketingWork }
+          : {}),
+        conversation: session.state.conversation,
+      });
     },
   );
 }

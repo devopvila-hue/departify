@@ -61,6 +61,36 @@ export interface CustomerZeroSessionState {
   rawData: Readonly<Record<string, unknown>>;
   companyName?: string;
   conversation: readonly { role: "user" | "assistant"; content: string }[];
+  /** The Marketing department's structured work for this organization. */
+  marketingWork?: MarketingWorkState;
+}
+
+export type MarketingWorkItemStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "needs_approval"
+  | "approved"
+  | "unavailable"
+  | "failed";
+
+export interface MarketingWorkItemState {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly kind: "analysis" | "creation" | "external_action";
+  readonly capability?: string;
+  status: MarketingWorkItemStatus;
+  /** The real deliverable produced by Marketing, once executed. */
+  result?: string;
+}
+
+export interface MarketingWorkState {
+  /** The CEO's original business intention. */
+  readonly goal: string;
+  /** Marketing's interpretation of the goal. */
+  readonly summary: string;
+  items: readonly MarketingWorkItemState[];
 }
 
 /**
@@ -302,6 +332,146 @@ export async function runMarketingPreparationForSession(
 
   const output = result.output as { onboarding?: WorkflowResult };
   return { result, workflowResult: output.onboarding ?? null };
+}
+
+/**
+ * Runs the `marketing.plan` tool as the Marketing Director through the real
+ * runtime and stores the structured work plan in the session.
+ */
+export async function runMarketingPlanForSession(
+  session: CustomerZeroSession,
+  goal: string,
+): Promise<{ summary: string; items: readonly { id: string; title: string; description: string; kind: string; capability?: string }[] }> {
+  const outcome = await session.port.executeAction({
+    actionId: `act_plan_${shortId()}`,
+    agentId: "agent_marketing_director",
+    organizationId: session.organizationId,
+    toolId: "marketing.plan",
+    args: { organizationId: session.organizationId, goal },
+  });
+
+  if (outcome.status !== "completed") {
+    throw new Error(
+      outcome.status === "rejected"
+        ? outcome.reason
+        : outcome.error?.message ?? "Marketing could not create a plan.",
+    );
+  }
+
+  const output = outcome.output as { summary?: string; items?: unknown[] } | undefined;
+  const items = (output?.items ?? []).map((raw, index) => {
+    const item = raw as { id?: string; title?: string; description?: string; kind?: string; capability?: string };
+    const kind =
+      item.kind === "external_action" || item.kind === "creation"
+        ? item.kind
+        : "analysis";
+    return {
+      id: item.id ?? `item_${index + 1}`,
+      title: item.title ?? "Trabajo de Marketing",
+      description: item.description ?? "",
+      kind,
+      ...(item.capability ? { capability: item.capability } : {}),
+    };
+  });
+
+  const workItems: MarketingWorkItemState[] = items.map((item) => ({
+    id: item.id,
+    title: item.title,
+    description: item.description,
+    kind: item.kind as MarketingWorkItemState["kind"],
+    ...(item.capability ? { capability: item.capability } : {}),
+    // External actions are gated behind CEO approval.
+    status: item.kind === "external_action" ? "needs_approval" : "pending",
+  }));
+
+  session.state.marketingWork = {
+    goal,
+    summary: output?.summary ?? "",
+    items: workItems,
+  };
+
+  return {
+    summary: output?.summary ?? "",
+    items,
+  };
+}
+
+/**
+ * Runs the `marketing.execute` tool for one work item as the Marketing
+ * Director, storing the real deliverable and updating the item status.
+ */
+export async function executeMarketingWorkItemForSession(
+  session: CustomerZeroSession,
+  itemId: string,
+): Promise<string> {
+  const work = session.state.marketingWork;
+  const item = work?.items.find((i) => i.id === itemId);
+  if (!work || !item) {
+    throw new Error(`Work item '${itemId}' not found.`);
+  }
+  if (item.status === "needs_approval") {
+    throw new Error("This work item requires CEO approval before execution.");
+  }
+
+  const outcome = await session.port.executeAction({
+    actionId: `act_exec_${shortId()}`,
+    agentId: "agent_marketing_director",
+    organizationId: session.organizationId,
+    toolId: "marketing.execute",
+    args: {
+      organizationId: session.organizationId,
+      item: {
+        id: item.id,
+        title: item.title,
+        description: item.description,
+        kind: item.kind,
+        ...(item.capability ? { capability: item.capability } : {}),
+      },
+    },
+  });
+
+  if (outcome.status !== "completed") {
+    item.status = "failed";
+    return outcome.status === "rejected"
+      ? outcome.reason
+      : outcome.error?.message ?? "Marketing could not execute this item.";
+  }
+
+  const output = outcome.output as { result?: string } | undefined;
+  item.status = "completed";
+  item.result = output?.result ?? "";
+  return item.result;
+}
+
+/**
+ * Approves a gated work item (external action). After approval the item is
+ * marked `approved`; if the underlying capability is not connected, its
+ * status becomes `unavailable` so the CEO sees an honest state.
+ */
+export function approveMarketingWorkItemForSession(
+  session: CustomerZeroSession,
+  itemId: string,
+): MarketingWorkItemState {
+  const work = session.state.marketingWork;
+  const item = work?.items.find((i) => i.id === itemId);
+  if (!work || !item) {
+    throw new Error(`Work item '${itemId}' not found.`);
+  }
+  if (item.status !== "needs_approval" && item.status !== "approved") {
+    throw new Error("Only gated work items require approval.");
+  }
+
+  item.status = "approved";
+  // Honest availability: the capability is not connected in the current
+  // runtime, so the item is not simulated as executed.
+  item.result =
+    "Aprobado por el CEO. Esta capacidad todavía no está conectada en el " +
+    "sistema, por lo que el Departamento no puede ejecutarla aún. " +
+    "Para continuar se necesita conectar: " +
+    (item.capability ?? "la capacidad externa correspondiente") +
+    ".";
+  item.status = "unavailable";
+  return item;
 }
 
 function buildSimulatedPaymentEvent(
