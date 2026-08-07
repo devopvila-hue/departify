@@ -16,8 +16,14 @@ describe("MemoryRecord", () => {
       "semantic",
       "organization",
       "agent",
+      "department",
     ]);
-    expect(memoryScopes).toEqual(["organization", "agent", "session"]);
+    expect(memoryScopes).toEqual([
+      "organization",
+      "department",
+      "agent",
+      "session",
+    ]);
     expect(memoryStatuses).toEqual([
       "active",
       "archived",

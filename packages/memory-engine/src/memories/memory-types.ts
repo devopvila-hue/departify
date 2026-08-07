@@ -4,11 +4,12 @@ export const memoryKinds = [
   "semantic",
   "organization",
   "agent",
+  "department",
 ] as const;
 
 export type MemoryKind = (typeof memoryKinds)[number];
 
-export const memoryScopes = ["organization", "agent", "session"] as const;
+export const memoryScopes = ["organization", "department", "agent", "session"] as const;
 
 export type MemoryScope = (typeof memoryScopes)[number];
 
