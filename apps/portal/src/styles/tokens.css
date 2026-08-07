@@ -272,15 +272,7 @@ select {
   color: var(--dfy-color-muted);
   font-size: 0.92rem;
   line-height: 1.5;
-  padding-left: 20px;
   position: relative;
-}
-
-.customer-zero__stages li::before {
-  content: "→";
-  position: absolute;
-  left: 0;
-  color: var(--dfy-color-accent);
 }
 
 .customer-zero__review {
@@ -476,4 +468,116 @@ select {
   font-size: 0.9rem;
   line-height: 1.6;
   white-space: pre-wrap;
+}
+
+/* Customer Zero UX v2 — one decision at a time, big controls, live stages. */
+.customer-zero__choice-group {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.customer-zero__choice-group legend {
+  padding: 0;
+  color: var(--dfy-color-muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.customer-zero__choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.customer-zero__chip {
+  padding: 12px 18px;
+  border: 1px solid var(--dfy-color-border);
+  border-radius: 999px;
+  background: var(--dfy-color-surface-raised);
+  color: var(--dfy-color-text);
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.customer-zero__chip--selected {
+  border-color: var(--dfy-color-accent);
+  background: var(--dfy-color-accent);
+  color: var(--dfy-color-accent-contrast);
+  font-weight: 700;
+}
+
+.customer-zero__stages {
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 12px;
+}
+
+.customer-zero__stage {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  align-items: start;
+  gap: 10px;
+  color: var(--dfy-color-muted);
+  transition: color 200ms ease;
+}
+
+.customer-zero__stage--running {
+  color: var(--dfy-color-text);
+  font-weight: 600;
+}
+
+.customer-zero__stage--running .customer-zero__stage-icon {
+  animation: customer-zero-pulse 1.1s ease-in-out infinite;
+}
+
+.customer-zero__stage--done {
+  color: var(--dfy-color-text);
+}
+
+.customer-zero__stage-finding {
+  display: block;
+  margin-top: 4px;
+  color: var(--dfy-color-muted);
+  font-size: 0.9rem;
+  font-style: normal;
+}
+
+@keyframes customer-zero-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+.customer-zero__question {
+  margin-top: 28px;
+}
+
+.customer-zero__cards {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.customer-zero__card {
+  display: grid;
+  gap: 8px;
+  padding: 16px 18px;
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-md);
+  background: var(--dfy-color-surface-raised);
+}
+
+.customer-zero__card header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.customer-zero__badge--connected {
+  color: var(--dfy-color-accent);
+  font-weight: 700;
 }
