@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   extractHtml,
+  interpretWebsite,
   buildRawDataFromInterpretation,
 } from "../src/customer-zero/web-analysis.js";
 
@@ -66,5 +67,43 @@ describe("buildRawDataFromInterpretation", () => {
 
   it("returns an empty object when nothing was interpreted", () => {
     expect(buildRawDataFromInterpretation({})).toEqual({});
+  });
+});
+
+describe("interpretWebsite sanitization", () => {
+  it("coerces non-string LLM output into safe DNA shapes", async () => {
+    // The LLM sometimes returns numbers or nested objects for text fields.
+    // Verify interpretWebsite sanitizes them into usable rawData.
+    const rawData = buildRawDataFromInterpretation(
+      await interpretWebsite(
+        {
+          url: "https://x.example",
+          title: "X",
+          description: "desc",
+          headings: [],
+          paragraphs: [],
+          links: [],
+        },
+        {
+          chat: async () => ({
+            type: "chat",
+            message: JSON.stringify({
+              companyName: 42,
+              mission: { statement: "nested object" },
+              market: "real market",
+              products: "single-product-string",
+            }),
+          }),
+        } as unknown as import("@departify/llm-router").LlmRouter,
+      ),
+    );
+
+    // market survives as a string; the nested-object mission is dropped.
+    expect(rawData.market).toMatchObject({ industry: "real market" });
+    expect(rawData.mission).toBeUndefined();
+    // A string "product" is coerced into a one-element array.
+    const products = rawData.products as readonly { name: string }[];
+    expect(products).toHaveLength(1);
+    expect(products[0]?.name).toBe("single-product-string");
   });
 });

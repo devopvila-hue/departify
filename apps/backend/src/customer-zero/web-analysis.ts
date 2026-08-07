@@ -159,10 +159,63 @@ export async function interpretWebsite(
     });
 
     const parsed = parseJsonObject(response.message);
-    return { ...fallback, ...parsed };
+    return sanitizeInterpretation({ ...fallback, ...parsed });
   } catch {
     return fallback;
   }
+}
+
+/**
+ * The LLM sometimes returns numbers or nested objects for text fields. This
+ * coerces every interpreted value to the string / string-array shape the DNA
+ * pipeline expects, ignoring anything unusable.
+ */
+function sanitizeInterpretation(
+  input: Record<string, unknown>,
+): InterpretedBusiness {
+  const out: InterpretedBusiness = {};
+  const single = (value: unknown): string | undefined =>
+    typeof value === "string" && value.trim().length > 0
+      ? value.trim()
+      : typeof value === "number"
+        ? String(value)
+        : undefined;
+  const list = (value: unknown): readonly string[] | undefined => {
+    if (Array.isArray(value)) {
+      const items = value
+        .map((item) => (typeof item === "string" ? item.trim() : String(item)))
+        .filter((item) => item.length > 0);
+      return items.length > 0 ? items : undefined;
+    }
+    const item = single(value);
+    return item ? [item] : undefined;
+  };
+
+  const companyName = single(input.companyName);
+  const activity = single(input.activity);
+  const mission = single(input.mission);
+  const market = single(input.market);
+  const positioning = single(input.positioning);
+  const valueProposition = single(input.valueProposition);
+  const products = list(input.products);
+  const services = list(input.services);
+  const targetAudience = list(input.targetAudience);
+  const tone = list(input.tone);
+  const locations = list(input.locations);
+
+  if (companyName) out.companyName = companyName;
+  if (activity) out.activity = activity;
+  if (mission) out.mission = mission;
+  if (market) out.market = market;
+  if (positioning) out.positioning = positioning;
+  if (valueProposition) out.valueProposition = valueProposition;
+  if (products) out.products = products;
+  if (services) out.services = services;
+  if (targetAudience) out.targetAudience = targetAudience;
+  if (tone) out.tone = tone;
+  if (locations) out.locations = locations;
+
+  return out;
 }
 
 /**
