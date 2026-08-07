@@ -5,6 +5,8 @@ import {
   runDiscoveryForSession,
   runMarketingPreparationForSession,
 } from "../src/customer-zero/customer-zero-session.js";
+import { buildAnswersRawData } from "../src/customer-zero/answers.js";
+import { curateMandatoryQuestions } from "../src/customer-zero/questions.js";
 import type { LlmRuntime } from "../src/customer-zero/llm-runtime.js";
 
 function stubLlm(): LlmRuntime {
@@ -96,5 +98,42 @@ describe("Customer Zero session composition", () => {
     // The first result was delivered by the pipeline.
     expect(workflowResult).not.toBeNull();
     expect(workflowResult?.status).toBe("completed");
+  });
+
+  it("persists the CEO's answers into the Company DNA and reduces gaps", async () => {
+    const organizationId = "org_test_answers_persistence";
+    const session = getOrCreateCustomerZeroSession(organizationId, { llm: stubLlm() });
+    session.state.companyName = "MOON Shared Living";
+
+    // Discovery with an empty rawData → many gaps.
+    const before = await runDiscoveryForSession(session);
+    const questionsBefore = curateMandatoryQuestions(before);
+    expect(questionsBefore.length).toBeGreaterThan(0);
+
+    // The CEO answers the mandatory questions; answers persist into the DNA.
+    const answers: Record<string, string> = {};
+    for (const question of questionsBefore) {
+      answers[question.category] = `Respuesta del CEO para ${question.category}`;
+    }
+    session.state.rawData = {
+      ...session.state.rawData,
+      ...buildAnswersRawData(answers),
+    };
+
+    const after = await runDiscoveryForSession(session);
+
+    // The answered categories are now closed (user_input wins).
+    for (const question of questionsBefore) {
+      expect(after.gaps.some((g) => g.category === question.category)).toBe(false);
+    }
+    // Fewer mandatory questions remain after the CEO answered.
+    const questionsAfter = curateMandatoryQuestions(after);
+    expect(questionsAfter.length).toBeLessThanOrEqual(questionsBefore.length);
+
+    // The DNA retains the CEO's explicit answer with user_input provenance.
+    const missionAnswer = answers.mission;
+    if (missionAnswer) {
+      expect(after.companyDna.mission?.statement).toBe(missionAnswer);
+    }
   });
 });

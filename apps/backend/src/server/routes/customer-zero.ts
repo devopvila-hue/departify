@@ -9,8 +9,11 @@ import {
   runDiscoveryForSession,
   runMarketingPreparationForSession,
 } from "../../customer-zero/customer-zero-session.js";
+import { curateMandatoryQuestions } from "../../customer-zero/questions.js";
+import { buildAnswersRawData } from "../../customer-zero/answers.js";
 import type { FastifyInstance } from "fastify";
 import type { DepartmentSnapshot } from "@departify/departments";
+import type { CompanyDiscoveryReport } from "@departify/business-discovery";
 
 /**
  * Customer Zero routes — the product surface that lets the CEO walk the full
@@ -49,6 +52,7 @@ export async function registerCustomerZeroRoutes(
               understood: { type: "object", additionalProperties: true },
               gaps: { type: "array" },
               questions: { type: "array" },
+              mandatoryQuestions: { type: "array" },
               companyDna: { type: "object", additionalProperties: true },
               gapCount: { type: "number" },
             },
@@ -98,6 +102,7 @@ export async function registerCustomerZeroRoutes(
           understood: interpreted,
           gaps: report.gaps,
           questions: report.questions,
+          mandatoryQuestions: curateMandatoryQuestions(report),
           companyDna: report.companyDna,
           gapCount: report.gaps.length,
         });
@@ -112,12 +117,52 @@ export async function registerCustomerZeroRoutes(
     },
   );
 
-  server.post(
-    "/api/customer-zero/:organizationId/correct",
+  server.get(
+    "/api/customer-zero/:organizationId/questions",
     {
       schema: {
         tags: ["customer-zero"],
-        summary: "Apply the CEO's corrections to the Company DNA",
+        summary: "Mandatory questions derived from the real discovery gaps",
+        params: {
+          type: "object",
+          required: ["organizationId"],
+          properties: {
+            organizationId: { type: "string" },
+          },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["organizationId", "questions"],
+            properties: {
+              organizationId: { type: "string" },
+              questions: { type: "array" },
+            },
+          },
+          404: { type: "object", properties: { error: { type: "string" } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId } = request.params as { organizationId: string };
+      const session = getCustomerZeroSession(organizationId);
+      if (!session) {
+        return reply.code(404).send({ error: "Session not found." });
+      }
+      const mostRecent = mostRecentReport(session);
+      return reply.code(200).send({
+        organizationId,
+        questions: mostRecent ? curateMandatoryQuestions(mostRecent) : [],
+      });
+    },
+  );
+
+  server.post(
+    "/api/customer-zero/:organizationId/answers",
+    {
+      schema: {
+        tags: ["customer-zero"],
+        summary: "Persist the CEO's answers into the Company DNA",
         params: {
           type: "object",
           required: ["organizationId"],
@@ -127,20 +172,21 @@ export async function registerCustomerZeroRoutes(
         },
         body: {
           type: "object",
-          required: ["corrections"],
+          required: ["answers"],
           properties: {
-            corrections: { type: "object", additionalProperties: true },
+            answers: { type: "object", additionalProperties: true },
           },
           additionalProperties: false,
         },
         response: {
           200: {
             type: "object",
-            required: ["organizationId", "gaps", "questions"],
+            required: ["organizationId", "gaps", "questions", "companyDna"],
             properties: {
               organizationId: { type: "string" },
               gaps: { type: "array" },
               questions: { type: "array" },
+              mandatoryQuestions: { type: "array" },
               companyDna: { type: "object", additionalProperties: true },
               gapCount: { type: "number" },
             },
@@ -151,8 +197,8 @@ export async function registerCustomerZeroRoutes(
     },
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
-      const { corrections } = request.body as {
-        corrections: Readonly<Record<string, unknown>>;
+      const { answers } = request.body as {
+        answers: Readonly<Record<string, unknown>>;
       };
 
       const session = getCustomerZeroSession(organizationId);
@@ -160,11 +206,11 @@ export async function registerCustomerZeroRoutes(
         return reply.code(404).send({ error: "Session not found." });
       }
 
-      // Merge the CEO's corrections over the discovered rawData using a
-      // verified user_input source.
+      // Persist the CEO's answers into the Company DNA. Explicit user input
+      // prevails over website inferences.
       session.state.rawData = {
         ...session.state.rawData,
-        ...normaliseCorrections(corrections),
+        ...buildAnswersRawData(answers),
       };
 
       const report = await runDiscoveryForSession(session);
@@ -172,6 +218,7 @@ export async function registerCustomerZeroRoutes(
         organizationId,
         gaps: report.gaps,
         questions: report.questions,
+        mandatoryQuestions: curateMandatoryQuestions(report),
         companyDna: report.companyDna,
         gapCount: report.gaps.length,
       });
@@ -413,54 +460,13 @@ function findMarketingDepartment(
   );
 }
 
-/**
- * Wraps CEO corrections into the DNA-shaped shape the pipeline understands,
- * marking them as verified user input.
- */
-function normaliseCorrections(
-  corrections: Readonly<Record<string, unknown>>,
-): Readonly<Record<string, unknown>> {
-  const confidence = {
-    level: "verified",
-    source: "user_input",
-    lastVerified: new Date().toISOString(),
-  };
-
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(corrections)) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const trimmed = value.trim();
-    if (trimmed.length === 0) {
-      continue;
-    }
-    switch (key) {
-      case "mission":
-        out.mission = { statement: trimmed, confidence };
-        break;
-      case "vision":
-        out.vision = { statement: trimmed, confidence };
-        break;
-      case "market":
-        out.market = {
-          industry: trimmed,
-          competition: "medium",
-          confidence,
-        };
-        break;
-      case "positioning":
-        out.positioning = { statement: trimmed, differentiation: [], confidence };
-        break;
-      case "valueProposition":
-        out.valueProposition = { statement: trimmed, differentiation: [], confidence };
-        break;
-      default:
-        // Unknown corrections are ignored rather than injected blindly.
-        break;
-    }
-  }
-  return out;
+function mostRecentReport(session: {
+  reports: readonly CompanyDiscoveryReport[];
+}): CompanyDiscoveryReport | null {
+  const reports = [...session.reports].sort(
+    (a, b) => b.generatedAt.getTime() - a.generatedAt.getTime(),
+  );
+  return reports[0] ?? null;
 }
 
 function slugify(value: string): string {

@@ -14,20 +14,31 @@ export interface InterpretedBusiness {
   valueProposition?: string;
 }
 
+export interface MandatoryQuestion {
+  category: string;
+  question: string;
+  type: string;
+  options?: string[];
+  importance: string;
+  priority: number;
+}
+
 export interface AnalyzeResponse {
   organizationId: string;
   url: string;
   understood: InterpretedBusiness;
   gaps: unknown[];
   questions: unknown[];
+  mandatoryQuestions: MandatoryQuestion[];
   companyDna: Record<string, unknown>;
   gapCount: number;
 }
 
-export interface CorrectResponse {
+export interface AnswersResponse {
   organizationId: string;
   gaps: unknown[];
   questions: unknown[];
+  mandatoryQuestions: MandatoryQuestion[];
   companyDna: Record<string, unknown>;
   gapCount: number;
 }
@@ -72,7 +83,8 @@ type Step =
   | { name: "url" }
   | { name: "analyzing"; url: string }
   | { name: "review"; analyze: AnalyzeResponse; corrections: Corrections }
-  | { name: "prepare"; org: string; corrected: CorrectResponse }
+  | { name: "questions"; org: string; mandatoryQuestions: MandatoryQuestion[] }
+  | { name: "prepare"; org: string; corrected: AnswersResponse }
   | { name: "marketing"; org: string; surface: PrepareMarketingResponse };
 
 export function CustomerZeroRoute() {
@@ -114,28 +126,59 @@ export function CustomerZeroRoute() {
     }
   }
 
-  async function confirmCorrections(
+  async function persistAnswers(
     org: string,
-    corrections: Corrections,
-  ) {
+    answers: Readonly<Record<string, string>>,
+  ): Promise<AnswersResponse | null> {
     setError(null);
     try {
-      const response = await fetch(`/api/customer-zero/${org}/correct`, {
+      const response = await fetch(`/api/customer-zero/${org}/answers`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ corrections }),
+        body: JSON.stringify({ answers }),
       });
-      const body = (await response.json()) as CorrectResponse & {
+      const body = (await response.json()) as AnswersResponse & {
         error?: string;
       };
       if (!response.ok || body.error) {
         setError(typeof body.error === "string" ? body.error : `Error ${response.status}`);
-        return;
+        return null;
       }
-      setStep({ name: "prepare", org, corrected: body });
+      return body;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+      return null;
     }
+  }
+
+  async function confirmCorrections(
+    org: string,
+    corrections: Corrections,
+  ) {
+    // Corrections are persisted into the Company DNA (user_input provenance).
+    const result = await persistAnswers(org, {
+      mission: corrections.mission,
+      market: corrections.market,
+      positioning: corrections.positioning,
+      value_proposition: corrections.valueProposition,
+    });
+    if (!result) return;
+
+    // Continue with the mandatory questions that still cannot be inferred.
+    if (result.mandatoryQuestions.length > 0) {
+      setStep({ name: "questions", org, mandatoryQuestions: result.mandatoryQuestions });
+    } else {
+      setStep({ name: "prepare", org, corrected: result });
+    }
+  }
+
+  async function submitAnswers(
+    org: string,
+    answers: Readonly<Record<string, string>>,
+  ) {
+    const result = await persistAnswers(org, answers);
+    if (!result) return;
+    setStep({ name: "prepare", org, corrected: result });
   }
 
   async function prepareMarketing(org: string) {
@@ -194,6 +237,7 @@ export function CustomerZeroRoute() {
           {step.name === "url" && "Empieza con la web de tu empresa"}
           {step.name === "analyzing" && "Conociendo tu negocio…"}
           {step.name === "review" && "Esto es lo que hemos entendido"}
+          {step.name === "questions" && "Solo necesitamos algunas cosas que no podemos saber por nuestra cuenta"}
           {step.name === "prepare" && "Confirmando el conocimiento"}
           {step.name === "marketing" && "Departamento de Marketing"}
         </h1>
@@ -240,6 +284,13 @@ export function CustomerZeroRoute() {
             analyze={step.analyze}
             initialCorrections={step.corrections}
             onConfirm={(corrections) => confirmCorrections(step.analyze.organizationId, corrections)}
+          />
+        )}
+
+        {step.name === "questions" && (
+          <QuestionsStep
+            questions={step.mandatoryQuestions}
+            onSubmit={(answers) => submitAnswers(step.org, answers)}
           />
         )}
 
@@ -377,8 +428,75 @@ function CorrectionField(props: {
   );
 }
 
+function QuestionsStep(props: {
+  questions: MandatoryQuestion[];
+  onSubmit: (answers: Readonly<Record<string, string>>) => void;
+}) {
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+
+  function setAnswer(category: string, value: string) {
+    setAnswers((prev) => ({ ...prev, [category]: value }));
+  }
+
+  return (
+    <>
+      <p className="customer-zero__intro">
+        Ya hemos analizado tu empresa. Solo necesitamos algunas cosas que no
+        podemos saber por nuestra cuenta.
+      </p>
+
+      {props.questions.length === 0 ? (
+        <div className="customer-zero__review">
+          <h2>Sin preguntas pendientes</h2>
+          <p className="customer-zero__muted">
+            Hemos podido deducir lo necesario. Puedes continuar.
+          </p>
+        </div>
+      ) : (
+        <div className="customer-zero__form">
+          {props.questions.map((question) => (
+            <label key={question.category} className="customer-zero__field">
+              <span>{question.question}</span>
+              {question.options && question.options.length > 0 ? (
+                <select
+                  value={answers[question.category] ?? ""}
+                  onChange={(event) => setAnswer(question.category, event.target.value)}
+                >
+                  <option value="">Selecciona…</option>
+                  {question.options.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={answers[question.category] ?? ""}
+                  onChange={(event) => setAnswer(question.category, event.target.value)}
+                />
+              )}
+            </label>
+          ))}
+        </div>
+      )}
+
+      <button
+        type="button"
+        className="customer-zero__submit"
+        disabled={busy || props.questions.length === 0}
+        onClick={() => {
+          setBusy(true);
+          props.onSubmit(answers);
+        }}
+      >
+        {busy ? "Guardando…" : "Continuar"}
+      </button>
+    </>
+  );
+}
+
 function PrepareStep(props: {
-  corrected: CorrectResponse;
+  corrected: AnswersResponse;
   onPrepare: () => void;
 }) {
   const [busy, setBusy] = useState(false);

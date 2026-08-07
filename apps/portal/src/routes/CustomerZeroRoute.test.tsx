@@ -16,6 +16,22 @@ const analyzeResponse = {
   },
   gaps: [{ id: "gap_market" }],
   questions: [{ id: "q_vision" }],
+  mandatoryQuestions: [
+    {
+      category: "vision",
+      question: "¿Dónde quieres llevar tu empresa en los próximos años?",
+      type: "open",
+      importance: "critical",
+      priority: 100,
+    },
+    {
+      category: "ideal_customer",
+      question: "¿Quién es tu cliente ideal?",
+      type: "open",
+      importance: "high",
+      priority: 90,
+    },
+  ],
   companyDna: {},
   gapCount: 8,
 };
@@ -74,22 +90,34 @@ describe("CustomerZeroRoute", () => {
     );
   });
 
-  it("submits the URL to the analyze endpoint and allows corrections", async () => {
+  it("persists the corrections and then asks the mandatory questions", async () => {
     mockFetch(async (url, init) => {
       if (url === "/api/customer-zero/analyze") {
         return okJson(analyzeResponse);
       }
-      if (url.endsWith("/correct")) {
+      if (url.endsWith("/answers")) {
         const body = JSON.parse(String(init?.body));
-        expect(body.corrections.mission).toBe(
-          "Misión corregida por el CEO",
-        );
+        // First call: corrections (mission persisted).
+        if (body.answers.mission === "Misión corregida por el CEO") {
+          return okJson({
+            organizationId: "org_moon",
+            gaps: [],
+            questions: [],
+            mandatoryQuestions: analyzeResponse.mandatoryQuestions,
+            companyDna: {},
+            gapCount: 2,
+          });
+        }
+        // Second call: answers to the mandatory questions.
+        expect(body.answers.vision).toBe("Ser el co-living de referencia");
+        expect(body.answers.ideal_customer).toBe("Nómadas digitales en Madrid");
         return okJson({
           organizationId: "org_moon",
           gaps: [],
           questions: [],
+          mandatoryQuestions: [],
           companyDna: {},
-          gapCount: 2,
+          gapCount: 1,
         });
       }
       return okJson({});
@@ -107,25 +135,53 @@ describe("CustomerZeroRoute", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /confirmar y continuar/i }));
 
+    // The mandatory questions step is shown in the UI locale (Spanish).
+    expect(
+      await screen.findByText(/¿Dónde quieres llevar tu empresa en los próximos años?/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/¿Quién es tu cliente ideal?/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/¿Dónde quieres llevar tu empresa/i), {
+      target: { value: "Ser el co-living de referencia" },
+    });
+    fireEvent.change(screen.getByLabelText(/¿Quién es tu cliente ideal?/i), {
+      target: { value: "Nómadas digitales en Madrid" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continuar" }));
+
     expect(
       await screen.findByRole("heading", { name: /confirmando el conocimiento/i }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/2 puntos pendientes/)).toBeInTheDocument();
+    expect(screen.getByText(/1 punto/)).toBeInTheDocument();
   });
 
   it("prepares Marketing and shows the department surface", async () => {
-    mockFetch(async (url) => {
+    mockFetch(async (url, init) => {
       if (url === "/api/customer-zero/analyze") return okJson(analyzeResponse);
-      if (url.endsWith("/correct")) {
+      if (url.endsWith("/answers")) {
+        const body = JSON.parse(String(init?.body));
+        // First call: corrections → questions remain.
+        if (body.answers.mission) {
+          return okJson({
+            organizationId: "org_moon",
+            gaps: [],
+            questions: [],
+            mandatoryQuestions: analyzeResponse.mandatoryQuestions,
+            companyDna: {},
+            gapCount: 2,
+          });
+        }
+        // Second call: mandatory questions answered → none remain.
         return okJson({
           organizationId: "org_moon",
           gaps: [],
           questions: [],
+          mandatoryQuestions: [],
           companyDna: {},
           gapCount: 1,
         });
       }
-      if (url.endsWith("/marketing")) {
+      if (url.endsWith("/marketing") && init?.method === "POST") {
         return okJson({
           organizationId: "org_moon",
           department: {
@@ -153,6 +209,15 @@ describe("CustomerZeroRoute", () => {
     fireEvent.click(screen.getByRole("button", { name: /conocer mi negocio/i }));
     await screen.findByRole("heading", { name: /esto es lo que hemos entendido/i });
     fireEvent.click(screen.getByRole("button", { name: /confirmar y continuar/i }));
+
+    // Answer the mandatory questions.
+    const visionInput = await screen.findByLabelText(/¿Dónde quieres llevar tu empresa/i);
+    fireEvent.change(visionInput, { target: { value: "Ser el co-living de referencia" } });
+    fireEvent.change(screen.getByLabelText(/¿Quién es tu cliente ideal?/i), {
+      target: { value: "Nómadas digitales" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continuar" }));
+
     fireEvent.click(
       await screen.findByRole("button", { name: /poner marketing a trabajar/i }),
     );
@@ -168,11 +233,23 @@ describe("CustomerZeroRoute", () => {
   it("sends a message to Marketing and shows the reply", async () => {
     mockFetch(async (url, init) => {
       if (url === "/api/customer-zero/analyze") return okJson(analyzeResponse);
-      if (url.endsWith("/correct")) {
+      if (url.endsWith("/answers")) {
+        const body = JSON.parse(String(init?.body));
+        if (body.answers.mission) {
+          return okJson({
+            organizationId: "org_moon",
+            gaps: [],
+            questions: [],
+            mandatoryQuestions: analyzeResponse.mandatoryQuestions,
+            companyDna: {},
+            gapCount: 2,
+          });
+        }
         return okJson({
           organizationId: "org_moon",
           gaps: [],
           questions: [],
+          mandatoryQuestions: [],
           companyDna: {},
           gapCount: 1,
         });
@@ -211,6 +288,13 @@ describe("CustomerZeroRoute", () => {
     fireEvent.click(screen.getByRole("button", { name: /conocer mi negocio/i }));
     await screen.findByRole("heading", { name: /esto es lo que hemos entendido/i });
     fireEvent.click(screen.getByRole("button", { name: /confirmar y continuar/i }));
+
+    const visionInput = await screen.findByLabelText(/¿Dónde quieres llevar tu empresa/i);
+    fireEvent.change(visionInput, { target: { value: "Ser el co-living de referencia" } });
+    fireEvent.change(screen.getByLabelText(/¿Quién es tu cliente ideal?/i), {
+      target: { value: "Nómadas digitales" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continuar" }));
     fireEvent.click(
       await screen.findByRole("button", { name: /poner marketing a trabajar/i }),
     );
@@ -222,7 +306,6 @@ describe("CustomerZeroRoute", () => {
     fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
 
     expect(await screen.findByText(/priorizaría la comunidad/i)).toBeInTheDocument();
-    // The user message and the reply are both shown.
     expect(screen.getByText("Tú")).toBeInTheDocument();
     expect(screen.getAllByText(/director de marketing/i).length).toBeGreaterThan(0);
   });
