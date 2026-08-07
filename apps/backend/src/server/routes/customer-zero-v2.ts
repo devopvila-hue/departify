@@ -53,6 +53,11 @@ import {
   selectNextQuestion,
   type ProgressiveQuestion,
 } from "../../customer-zero/progressive-discovery.js";
+import { buildCeoOverview } from "../../customer-zero/ceo-overview.js";
+import {
+  buildHeadView,
+  getMarketingHead,
+} from "../../customer-zero/department-identity.js";
 import type { CompanyDiscoveryReport } from "@departify/business-discovery";
 
 export async function registerCustomerZeroV2Routes(
@@ -504,7 +509,38 @@ export async function registerCustomerZeroV2Routes(
         organizationId,
         message: buildHandoffMessage(session),
         goal: session.state.onboarding?.goal ?? "",
+        head: buildHeadView(getMarketingHead(), session.state.locale),
         connections: [...session.state.connections.values()],
+      });
+    },
+  );
+
+  server.get(
+    "/api/customer-zero/:organizationId/overview",
+    {
+      schema: {
+        tags: ["customer-zero"],
+        summary: "The CEO's business view: decisions, activity and results",
+        params: {
+          type: "object",
+          required: ["organizationId"],
+          properties: { organizationId: { type: "string" } },
+        },
+        response: {
+          200: { type: "object", additionalProperties: true },
+          404: { type: "object", properties: { error: { type: "string" } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId } = request.params as { organizationId: string };
+      const session = getCustomerZeroSession(organizationId);
+      if (!session) {
+        return reply.code(404).send({ error: "Session not found." });
+      }
+      return reply.code(200).send({
+        organizationId,
+        ...buildCeoOverview(session),
       });
     },
   );
@@ -671,11 +707,12 @@ function buildHandoffMessage(session: CustomerZeroSession): string {
     (connection) => connection.status === "connected",
   );
 
+  const head = getMarketingHead();
   const parts: string[] = [
     t(
       locale,
-      "Ya tengo suficiente para empezar.",
-      "I have enough to get started.",
+      `Soy ${head.name}, tu Jefa de Marketing. Ya tengo suficiente para empezar.`,
+      `I am ${head.name}, your Head of Marketing. I have enough to get started.`,
     ),
   ];
   if (goal) {

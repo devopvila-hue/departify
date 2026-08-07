@@ -199,6 +199,10 @@ describe("Customer Zero session composition", () => {
     // Approving a gated item marks it unavailable (capability not connected).
     const approved = approveMarketingWorkItemForSession(session, "item_3");
     expect(approved.status).toBe("unavailable");
-    expect(approved.result).toContain("no está conectada");
+    // Honest, and in the head's own voice: no capability ids, no runtime
+    // vocabulary reaches the CEO.
+    expect(approved.result).toContain("herramientas conectada");
+    expect(approved.result).not.toContain("external_action");
+    expect(approved.result).not.toMatch(/capacidad|runtime|tool/i);
   });
 });

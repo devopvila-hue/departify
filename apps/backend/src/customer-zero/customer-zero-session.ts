@@ -515,14 +515,17 @@ export function approveMarketingWorkItemForSession(
   }
 
   item.status = "approved";
-  // Honest availability: the capability is not connected in the current
-  // runtime, so the item is not simulated as executed.
-  item.result =
-    "Aprobado por el CEO. Esta capacidad todavía no está conectada en el " +
-    "sistema, por lo que el Departamento no puede ejecutarla aún. " +
-    "Para continuar se necesita conectar: " +
-    (item.capability ?? "la capacidad externa correspondiente") +
-    ".";
+  // Honest availability, told the way a department head would tell it: the
+  // work is approved, but nobody can act outside the company until the
+  // right tool is connected. No capability ids, no runtime vocabulary.
+  const english = session.state.locale === "en";
+  item.result = english
+    ? "Approved. I cannot carry this out yet: it needs a tool of yours " +
+      "connected so my team can act outside the company. You can connect " +
+      "it in Connections and I will pick it up from there."
+    : "Aprobado. Todavía no puedo llevarlo a cabo: necesito una de tus " +
+      "herramientas conectada para que mi equipo pueda actuar fuera de la " +
+      "empresa. Puedes conectarla en Conexiones y yo sigo desde ahí.";
   item.status = "unavailable";
   return item;
 }

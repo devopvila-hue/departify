@@ -300,9 +300,12 @@ function buildExecuteSystemPrompt(context: string, locale?: string): string {
     "El entregable debe ser accionable, específico para esta empresa y listo para que el CEO lo revise.",
     "Sé conciso: 3-6 puntos o párrafos breves. No generes un documento extenso.",
     "Si el trabajo requiere una capacidad que NO está disponible, dilo explícitamente en lugar de simularla.",
+    "Escribe en TEXTO PLANO para el CEO: nada de JSON, ni llaves, ni etiquetas, ni bloques de código.",
     "",
     "CONTEXTO REAL DEL NEGOCIO:",
     context,
+    "",
+    languageRule(locale),
   ].join("\n");
 }
 
