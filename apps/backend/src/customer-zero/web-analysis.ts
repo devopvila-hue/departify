@@ -6,6 +6,7 @@
  * research: no fixtures, no hardcoded content, no simulated answers.
  */
 import type { LlmRouter } from "@departify/llm-router";
+import { localeInstruction, type SupportedLocale } from "./locale.js";
 
 export interface ExtractedWebsite {
   readonly url: string;
@@ -123,6 +124,7 @@ export function extractHtml(html: string, url: string): ExtractedWebsite {
 export async function interpretWebsite(
   extracted: ExtractedWebsite,
   llmRouter: LlmRouter,
+  locale: SupportedLocale = "es",
 ): Promise<InterpretedBusiness> {
   const fallback: InterpretedBusiness = {};
   if (extracted.title) {
@@ -151,7 +153,8 @@ export async function interpretWebsite(
             "companyName, activity, mission, products (array of strings), services (array of strings), " +
             "market, positioning, targetAudience (array of strings), tone (array of strings), " +
             "locations (array of strings), valueProposition. " +
-            "Never invent facts that are not on the page. If a field is unknown, omit it.",
+            "Never invent facts that are not on the page. If a field is unknown, omit it. " +
+            localeInstruction(locale),
         },
         { role: "user", content: digest },
       ],
@@ -223,6 +226,56 @@ function sanitizeInterpretation(
  * pipeline understands (Sprint 55). Confidence comes from the website source;
  * the CEO corrections later override with `user_input`.
  */
+/**
+ * Interprets the founder's own description of the business he is creating
+ * (no website yet). Same structured output, same locale rule — the real LLM,
+ * never a simulated web analysis.
+ */
+export async function interpretDescription(
+  description: string,
+  llmRouter: LlmRouter,
+  locale: SupportedLocale = "es",
+  companyName?: string,
+): Promise<InterpretedBusiness> {
+  const fallback: InterpretedBusiness = {};
+  if (companyName) {
+    fallback.companyName = companyName;
+  }
+  const text = description.trim();
+  if (text.length === 0) {
+    return fallback;
+  }
+
+  try {
+    const response = await llmRouter.chat({
+      type: "chat",
+      requestId: `req_idea_${Date.now()}`,
+      requiredCapabilities: ["chat"],
+      messages: [
+        {
+          role: "system",
+          content:
+            "A founder describes the business he is building. Extract the " +
+            "business information. Reply ONLY with a valid JSON object using " +
+            "exactly these keys when present: companyName, activity, mission, " +
+            "products (array of strings), services (array of strings), market, " +
+            "positioning, targetAudience (array of strings), tone (array of " +
+            "strings), locations (array of strings), valueProposition. " +
+            "Never invent facts the founder did not say. Omit unknown fields. " +
+            localeInstruction(locale),
+        },
+        { role: "user", content: text },
+      ],
+      stream: false,
+    });
+
+    const parsed = parseJsonObject(response.message);
+    return sanitizeInterpretation({ ...fallback, ...parsed });
+  } catch {
+    return fallback;
+  }
+}
+
 export function buildRawDataFromInterpretation(
   interpreted: InterpretedBusiness,
 ): Readonly<Record<string, unknown>> {
