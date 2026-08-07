@@ -1,72 +1,188 @@
 import { useState, type FormEvent } from "react";
 
-export interface CustomerZeroMarketingInput {
-  readonly companyName: string;
-  readonly rawData: Readonly<Record<string, unknown>>;
+export interface InterpretedBusiness {
+  companyName?: string;
+  activity?: string;
+  mission?: string;
+  products?: string[];
+  services?: string[];
+  market?: string;
+  positioning?: string;
+  targetAudience?: string[];
+  tone?: string[];
+  locations?: string[];
+  valueProposition?: string;
 }
 
-export interface CustomerZeroMarketingResult {
-  readonly status: "completed" | "failed";
-  readonly organizationId: string;
-  readonly companyName: string;
-  readonly department: "Marketing";
-  readonly firstResult: {
-    readonly confidence: string;
-    readonly gapCount: number;
-    readonly criticalGapCount: number;
-    readonly blockingGapCount: number;
-    readonly questionCount: number;
-  } | null;
-  readonly errors: readonly { readonly code: string; readonly message: string }[];
-  readonly runId: string;
+export interface AnalyzeResponse {
+  organizationId: string;
+  url: string;
+  understood: InterpretedBusiness;
+  gaps: unknown[];
+  questions: unknown[];
+  companyDna: Record<string, unknown>;
+  gapCount: number;
 }
 
-const CUSTOMER_ZERO_ENDPOINT = "/api/customer-zero/marketing";
+export interface CorrectResponse {
+  organizationId: string;
+  gaps: unknown[];
+  questions: unknown[];
+  companyDna: Record<string, unknown>;
+  gapCount: number;
+}
+
+export interface DepartmentSurface {
+  id: string;
+  name: string;
+  description: string;
+  directorAgentId: string | null;
+  employeeAgentIds: string[];
+  status: string;
+  connections: {
+    kind: string;
+    referenceId: string;
+    label?: string;
+  }[];
+  discoveryId?: string;
+}
+
+export interface PrepareMarketingResponse {
+  organizationId: string;
+  department: DepartmentSurface | null;
+  firstResult: Record<string, unknown> | null;
+  gaps: unknown[];
+  questions: unknown[];
+  error: { code: string; message: string } | null;
+}
+
+export interface ChatResponse {
+  organizationId: string;
+  reply: string;
+}
+
+export interface Corrections {
+  mission: string;
+  market: string;
+  positioning: string;
+  valueProposition: string;
+}
+
+type Step =
+  | { name: "url" }
+  | { name: "analyzing"; url: string }
+  | { name: "review"; analyze: AnalyzeResponse; corrections: Corrections }
+  | { name: "prepare"; org: string; corrected: CorrectResponse }
+  | { name: "marketing"; org: string; surface: PrepareMarketingResponse };
 
 export function CustomerZeroRoute() {
-  const [companyName, setCompanyName] = useState("MOON Shared Living");
-  const [companyInfo, setCompanyInfo] = useState("");
-  const [status, setStatus] = useState<"idle" | "working" | "done" | "error">(
-    "idle",
-  );
-  const [result, setResult] = useState<CustomerZeroMarketingResult | null>(null);
+  const [url, setUrl] = useState("");
+  const [step, setStep] = useState<Step>({ name: "url" });
   const [error, setError] = useState<string | null>(null);
+  // Chat state.
+  const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatBusy, setChatBusy] = useState(false);
 
-  async function putMarketingToWork(event: FormEvent<HTMLFormElement>) {
+  async function analyze(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setStatus("working");
-    setResult(null);
     setError(null);
+    setStep({ name: "analyzing", url });
 
     try {
-      const rawData = buildRawData(companyInfo);
-      const response = await fetch(CUSTOMER_ZERO_ENDPOINT, {
+      const response = await fetch("/api/customer-zero/analyze", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          companyName,
-          rawData,
-        } satisfies CustomerZeroMarketingInput),
+        body: JSON.stringify({ url }),
       });
-
-      if (!response.ok) {
-        setError(`El servidor respondió con error ${response.status}.`);
-        setStatus("error");
+      const body = (await response.json()) as AnalyzeResponse & {
+        error?: { code: string; message: string };
+      };
+      if (!response.ok || body.error) {
+        setError(body.error?.message ?? `Error ${response.status}`);
+        setStep({ name: "url" });
         return;
       }
-
-      const payload = (await response.json()) as CustomerZeroMarketingResult;
-      setResult(payload);
-      setStatus(payload.status === "completed" ? "done" : "error");
-      if (payload.status !== "completed") {
-        setError(
-          payload.errors.map((e) => e.message).join(" · ") ||
-            "El trabajo no pudo completarse.",
-        );
-      }
+      setStep({
+        name: "review",
+        analyze: body,
+        corrections: seedCorrections(body.understood),
+      });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
-      setStatus("error");
+      setStep({ name: "url" });
+    }
+  }
+
+  async function confirmCorrections(
+    org: string,
+    corrections: Corrections,
+  ) {
+    setError(null);
+    try {
+      const response = await fetch(`/api/customer-zero/${org}/correct`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ corrections }),
+      });
+      const body = (await response.json()) as CorrectResponse & {
+        error?: string;
+      };
+      if (!response.ok || body.error) {
+        setError(typeof body.error === "string" ? body.error : `Error ${response.status}`);
+        return;
+      }
+      setStep({ name: "prepare", org, corrected: body });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  async function prepareMarketing(org: string) {
+    setError(null);
+    try {
+      const response = await fetch(`/api/customer-zero/${org}/marketing`, {
+        method: "POST",
+      });
+      const body = (await response.json()) as PrepareMarketingResponse;
+      if (!response.ok) {
+        setError(`Error ${response.status}`);
+        return;
+      }
+      setStep({ name: "marketing", org, surface: body });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  async function sendMessage(org: string) {
+    const content = chatInput.trim();
+    if (!content || chatBusy) return;
+    setChatBusy(true);
+    setMessages((prev) => [...prev, { role: "user", content }]);
+    setChatInput("");
+    try {
+      const response = await fetch(`/api/customer-zero/${org}/marketing/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: content }),
+      });
+      const body = (await response.json()) as ChatResponse & { error?: { message: string } };
+      if (!response.ok || body.error) {
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: `Error: ${body.error?.message ?? response.status}` },
+        ]);
+      } else {
+        setMessages((prev) => [...prev, { role: "assistant", content: body.reply }]);
+      }
+    } catch (cause) {
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: cause instanceof Error ? cause.message : String(cause) },
+      ]);
+    } finally {
+      setChatBusy(false);
     }
   }
 
@@ -74,133 +190,323 @@ export function CustomerZeroRoute() {
     <main className="customer-zero" aria-labelledby="customer-zero-title">
       <section className="customer-zero__panel">
         <p className="customer-zero__label">Departify · Customer Zero</p>
-        <h1 id="customer-zero-title">Poner el Departamento de Marketing a trabajar</h1>
-        <p className="customer-zero__intro">
-          Cuéntanos tu empresa. Marketing la conocerá, la analizará y producirá
-          su primer resultado.
-        </p>
+        <h1 id="customer-zero-title">
+          {step.name === "url" && "Empieza con la web de tu empresa"}
+          {step.name === "analyzing" && "Conociendo tu negocio…"}
+          {step.name === "review" && "Esto es lo que hemos entendido"}
+          {step.name === "prepare" && "Confirmando el conocimiento"}
+          {step.name === "marketing" && "Departamento de Marketing"}
+        </h1>
 
-        <form onSubmit={putMarketingToWork} className="customer-zero__form">
-          <label className="customer-zero__field">
-            <span>Empresa</span>
-            <input
-              type="text"
-              value={companyName}
-              onChange={(event) => setCompanyName(event.target.value)}
-              required
-              disabled={status === "working"}
-            />
-          </label>
-
-          <label className="customer-zero__field">
-            <span>Información de tu empresa</span>
-            <textarea
-              value={companyInfo}
-              onChange={(event) => setCompanyInfo(event.target.value)}
-              rows={6}
-              placeholder="Por ejemplo: misión, qué productos o servicios vendes, tu mercado, a quién te diriges, qué te hace diferente…"
-              disabled={status === "working"}
-            />
-          </label>
-
-          <p className="customer-zero__department">
-            Departamento: <strong>Marketing</strong>
-          </p>
-
-          <button
-            type="submit"
-            className="customer-zero__submit"
-            disabled={status === "working" || companyName.trim().length === 0}
-          >
-            {status === "working" ? "Marketing está trabajando…" : "Poner Marketing a trabajar"}
-          </button>
-        </form>
-
-        {status === "working" && (
-          <div className="customer-zero__state" role="status">
-            <p>El Departamento de Marketing está trabajando para {companyName}…</p>
-            <p className="customer-zero__state-hint">
-              Conociendo la empresa · Analizando · Planificando · Primer trabajo
-            </p>
-          </div>
-        )}
-
-        {status === "error" && (
+        {error && (
           <div className="customer-zero__state customer-zero__state--error" role="alert">
-            <p>No se pudo completar el trabajo.</p>
-            {error ? <p className="customer-zero__error">{error}</p> : null}
+            <p>{error}</p>
           </div>
         )}
 
-        {status === "done" && result?.firstResult && (
-          <div className="customer-zero__result" role="region" aria-label="Primer resultado">
-            <h2>Primer resultado de Marketing</h2>
-            <dl className="customer-zero__metrics">
-              <div>
-                <dt>Confianza en el conocimiento</dt>
-                <dd>{result.firstResult.confidence}</dd>
-              </div>
-              <div>
-                <dt>Información pendiente de la empresa</dt>
-                <dd>{result.firstResult.gapCount}</dd>
-              </div>
-              <div>
-                <dt>Puntos críticos pendientes</dt>
-                <dd>{result.firstResult.criticalGapCount}</dd>
-              </div>
-              <div>
-                <dt>Bloqueos para actuar</dt>
-                <dd>{result.firstResult.blockingGapCount}</dd>
-              </div>
-              <div>
-                <dt>Preguntas que Marketing te hará</dt>
-                <dd>{result.firstResult.questionCount}</dd>
-              </div>
-            </dl>
-            <p className="customer-zero__run">
-              Marketing ya conoce {result.companyName} y ha producido su primer
-              resultado. Aún necesita que respondas a sus preguntas para
-              completar su conocimiento.
-            </p>
+        {step.name === "url" && (
+          <form onSubmit={analyze} className="customer-zero__form">
+            <label className="customer-zero__field">
+              <span>¿Cuál es la web de tu empresa?</span>
+              <input
+                type="url"
+                value={url}
+                onChange={(event) => setUrl(event.target.value)}
+                placeholder="https://empresa.com"
+                required
+              />
+            </label>
+            <button type="submit" className="customer-zero__submit" disabled={url.trim().length === 0}>
+              Conocer mi negocio
+            </button>
+          </form>
+        )}
+
+        {step.name === "analyzing" && (
+          <div className="customer-zero__state" role="status">
+            <p>Departify está investigando la empresa real…</p>
+            <ul className="customer-zero__stages">
+              <li>Revisando la web</li>
+              <li>Identificando qué vende</li>
+              <li>Entendiendo a quién se dirige</li>
+              <li>Analizando cómo se presenta</li>
+              <li>Detectando qué necesita confirmación</li>
+            </ul>
           </div>
+        )}
+
+        {step.name === "review" && (
+          <ReviewStep
+            analyze={step.analyze}
+            initialCorrections={step.corrections}
+            onConfirm={(corrections) => confirmCorrections(step.analyze.organizationId, corrections)}
+          />
+        )}
+
+        {step.name === "prepare" && (
+          <PrepareStep corrected={step.corrected} onPrepare={() => prepareMarketing(step.org)} />
+        )}
+
+        {step.name === "marketing" && (
+          <MarketingStep
+            surface={step.surface}
+            messages={messages}
+            busy={chatBusy}
+            input={chatInput}
+            onInput={setChatInput}
+            onSend={() => sendMessage(step.org)}
+          />
         )}
       </section>
     </main>
   );
 }
 
-/**
- * Maps the CEO's free-form company information into the `rawData` shape the
- * Business Discovery pipeline understands (Sprint 55). Kept deliberately
- * simple: a best-effort interpretation of a plain-text description.
- */
-function buildRawData(companyInfo: string): Readonly<Record<string, unknown>> {
-  const trimmed = companyInfo.trim();
-  if (trimmed.length === 0) {
-    return {};
-  }
-
-  const rawData: Record<string, unknown> = {};
-
-  const firstLine = trimmed.split("\n")[0]?.trim();
-  if (firstLine) {
-    rawData.mission = {
-      statement: firstLine,
-      confidence: verifiedConfidence(),
-    };
-  }
-
-  return rawData;
+function seedCorrections(understood: InterpretedBusiness): Corrections {
+  return {
+    mission: understood.mission ?? "",
+    market: understood.market ?? "",
+    positioning: understood.positioning ?? "",
+    valueProposition: understood.valueProposition ?? "",
+  };
 }
 
-function verifiedConfidence(): {
-  readonly level: "verified";
-  readonly source: "user_input";
-  readonly lastVerified: string;
-} {
-  return {
-    level: "verified",
-    source: "user_input",
-    lastVerified: new Date().toISOString(),
-  };
+function ReviewStep(props: {
+  analyze: AnalyzeResponse;
+  initialCorrections: Corrections;
+  onConfirm: (corrections: Corrections) => void;
+}) {
+  const [corrections, setCorrections] = useState(props.initialCorrections);
+  const [busy, setBusy] = useState(false);
+
+  function set(key: keyof Corrections, value: string) {
+    setCorrections((prev) => ({ ...prev, [key]: value }));
+  }
+
+  const understood = props.analyze.understood;
+
+  return (
+    <>
+      <p className="customer-zero__intro">
+        Esto es lo que Departify ha descubierto de{" "}
+        <strong>{props.analyze.url}</strong>. Revísalo y corrige lo que sea
+        necesario.
+      </p>
+
+      <div className="customer-zero__review">
+        <h2>Lo que hemos entendido</h2>
+        <dl>
+          {understood.companyName && <div><dt>Empresa</dt><dd>{understood.companyName}</dd></div>}
+          {understood.activity && <div><dt>Actividad</dt><dd>{understood.activity}</dd></div>}
+          {understood.products && understood.products.length > 0 && (
+            <div><dt>Productos</dt><dd>{understood.products.join(", ")}</dd></div>
+          )}
+          {understood.targetAudience && understood.targetAudience.length > 0 && (
+            <div><dt>A quién se dirige</dt><dd>{understood.targetAudience.join(", ")}</dd></div>
+          )}
+          {understood.tone && understood.tone.length > 0 && (
+            <div><dt>Tono</dt><dd>{understood.tone.join(", ")}</dd></div>
+          )}
+          {understood.locations && understood.locations.length > 0 && (
+            <div><dt>Ubicaciones</dt><dd>{understood.locations.join(", ")}</dd></div>
+          )}
+        </dl>
+      </div>
+
+      <h2 className="customer-zero__section">Corrige o completa</h2>
+      <div className="customer-zero__form">
+        <CorrectionField
+          label="Misión"
+          value={corrections.mission}
+          onChange={(value) => set("mission", value)}
+        />
+        <CorrectionField
+          label="Mercado / industria"
+          value={corrections.market}
+          onChange={(value) => set("market", value)}
+        />
+        <CorrectionField
+          label="Posicionamiento"
+          value={corrections.positioning}
+          onChange={(value) => set("positioning", value)}
+        />
+        <CorrectionField
+          label="Propuesta de valor"
+          value={corrections.valueProposition}
+          onChange={(value) => set("valueProposition", value)}
+        />
+      </div>
+
+      <div className="customer-zero__review">
+        <h2>Información que falta</h2>
+        <p className="customer-zero__muted">
+          {props.analyze.gapCount} puntos necesitan confirmación. Marketing te
+          hará solo las preguntas imprescindibles.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        className="customer-zero__submit"
+        disabled={busy}
+        onClick={() => {
+          setBusy(true);
+          props.onConfirm(corrections);
+        }}
+      >
+        {busy ? "Confirmando…" : "Confirmar y continuar"}
+      </button>
+    </>
+  );
+}
+
+function CorrectionField(props: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="customer-zero__field">
+      <span>{props.label}</span>
+      <input
+        type="text"
+        value={props.value}
+        onChange={(event) => props.onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
+function PrepareStep(props: {
+  corrected: CorrectResponse;
+  onPrepare: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <>
+      <p className="customer-zero__intro">
+        Gracias. El conocimiento de la empresa está listo. Ahora preparamos el
+        Departamento de Marketing para que empiece a trabajar.
+      </p>
+      <div className="customer-zero__review">
+        <h2>Conocimiento confirmado</h2>
+        <p className="customer-zero__muted">
+          {props.corrected.gapCount} puntos pendientes de confirmar con preguntas
+          imprescindibles.
+        </p>
+      </div>
+      <button
+        type="button"
+        className="customer-zero__submit"
+        disabled={busy}
+        onClick={() => {
+          setBusy(true);
+          props.onPrepare();
+        }}
+      >
+        {busy ? "Preparando Marketing…" : "Poner Marketing a trabajar"}
+      </button>
+    </>
+  );
+}
+
+function MarketingStep(props: {
+  surface: PrepareMarketingResponse;
+  messages: { role: string; content: string }[];
+  busy: boolean;
+  input: string;
+  onInput: (value: string) => void;
+  onSend: () => void;
+}) {
+  const dept = props.surface.department;
+  return (
+    <>
+      <p className="customer-zero__intro">
+        {props.surface.error ? (
+          <span className="customer-zero__state--error">
+            El Departamento no pudo prepararse: {props.surface.error.message}
+          </span>
+        ) : (
+          "Marketing ya conoce tu negocio. Entra y habla con el Director."
+        )}
+      </p>
+
+      {dept && (
+        <div className="customer-zero__review">
+          <h2>{dept.name}</h2>
+          <dl>
+            <div><dt>Estado</dt><dd>{dept.status}</dd></div>
+            {dept.directorAgentId && <div><dt>Director</dt><dd>{dept.directorAgentId}</dd></div>}
+            <div>
+              <dt>Equipo</dt>
+              <dd>{dept.employeeAgentIds.length} personas en el Departamento</dd>
+            </div>
+            {dept.connections.length > 0 && (
+              <div>
+                <dt>Conectado a</dt>
+                <dd>
+                  {dept.connections
+                    .map((c) => c.label ?? c.referenceId)
+                    .filter(Boolean)
+                    .join(", ") || "—"}
+                </dd>
+              </div>
+            )}
+          </dl>
+        </div>
+      )}
+
+      {props.surface.firstResult && (
+        <div className="customer-zero__review">
+          <h2>Primer resultado</h2>
+          <p className="customer-zero__muted">
+            El Departamento ya ha producido su primer análisis del negocio.
+          </p>
+        </div>
+      )}
+
+      <h2 className="customer-zero__section">Habla con Marketing</h2>
+      <div className="customer-zero__chat">
+        {props.messages.length === 0 && (
+          <p className="customer-zero__muted">
+            Pregunta al Director de Marketing, por ejemplo: «Basándote en lo que
+            acabas de aprender de mi negocio, ¿cuáles serían las tres primeras
+            prioridades de Marketing y por qué?»
+          </p>
+        )}
+        {props.messages.map((message, index) => (
+          <div
+            key={index}
+            className={
+              message.role === "user"
+                ? "customer-zero__chat-message customer-zero__chat-message--user"
+                : "customer-zero__chat-message"
+            }
+          >
+            <strong>{message.role === "user" ? "Tú" : "Director de Marketing"}</strong>
+            <p>{message.content}</p>
+          </div>
+        ))}
+      </div>
+      <div className="customer-zero__chat-input">
+        <input
+          type="text"
+          value={props.input}
+          onChange={(event) => props.onInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") props.onSend();
+          }}
+          placeholder="Escribe un mensaje…"
+          disabled={props.busy}
+        />
+        <button
+          type="button"
+          onClick={props.onSend}
+          disabled={props.busy || props.input.trim().length === 0}
+        >
+          Enviar
+        </button>
+      </div>
+    </>
+  );
 }
