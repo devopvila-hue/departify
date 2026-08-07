@@ -31,6 +31,9 @@ import {
   type DiscoverySummaryOutput,
 } from "../tools/discovery-summary-tool.js";
 import {
+  createMarketingChatToolDefinition,
+} from "../tools/marketing-chat-tool.js";
+import {
   createKnowledgeSearchToolDefinition,
   type KnowledgeSearchInput,
   type KnowledgeSearchOutput,
@@ -88,6 +91,7 @@ export const CORE_CATALOG_IDS = [
   "discovery.plan",
   "discovery.delegate",
   "discovery.summary",
+  "marketing.chat",
 ] as const;
 
 export type CoreCatalogId = (typeof CORE_CATALOG_IDS)[number];
@@ -179,6 +183,20 @@ export function buildCoreCatalog(
       ...(context.clock ? { clock: context.clock } : {}),
     }) as unknown as ToolDefinition,
   );
+
+  // Sprint 57 — Marketing conversation. The Director talks to the CEO through
+  // this tool, grounding every reply in the real Company DNA persisted by the
+  // discovery pipeline. Registered only when the host wires a real LLM Router
+  // and a discovery report repository.
+  if (context.llmRouter && context.discoveryRepository) {
+    catalog.push(
+      createMarketingChatToolDefinition({
+        llmRouter: context.llmRouter,
+        repository: context.discoveryRepository,
+        ...(context.clock ? { clock: context.clock } : {}),
+      }) as unknown as ToolDefinition,
+    );
+  }
 
   return catalog;
 }

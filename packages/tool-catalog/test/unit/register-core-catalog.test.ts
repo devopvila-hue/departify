@@ -10,12 +10,19 @@ import type {
 } from "@departify/knowledge-engine";
 import { Organization } from "@departify/organization-domain";
 import { createInMemoryDiscoveryReportRepository } from "@departify/business-discovery";
+import type { LlmRouter } from "@departify/llm-router";
 import {
   CORE_CATALOG_IDS,
   buildCoreCatalog,
   registerAllCoreTools,
   type CoreCatalogContext,
 } from "../../src/index.js";
+
+function buildLlmRouter(): LlmRouter {
+  return {
+    getDefaultProviderId: () => "openai",
+  } as unknown as LlmRouter;
+}
 
 function buildOrganization(): Organization {
   return Organization.request({
@@ -86,6 +93,7 @@ describe("registerAllCoreTools", () => {
       memoryRetrieval: memoryPort,
       knowledgeRetrieval: knowledgePort,
       discoveryRepository: createInMemoryDiscoveryReportRepository(),
+      llmRouter: buildLlmRouter(),
     };
 
     const result = registerAllCoreTools(registry, context);
@@ -153,6 +161,7 @@ describe("registerAllCoreTools", () => {
       memoryRetrieval: memoryPort,
       knowledgeRetrieval: knowledgePort,
       discoveryRepository: createInMemoryDiscoveryReportRepository(),
+      llmRouter: buildLlmRouter(),
     });
 
     expect(tools.map((tool) => tool.id).sort()).toEqual(

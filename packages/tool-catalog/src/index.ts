@@ -90,3 +90,11 @@ export {
   type DiscoverySummaryOutput,
   type DiscoverySummaryToolOptions,
 } from "./tools/discovery-summary-tool.js";
+
+export {
+  createMarketingChatToolDefinition,
+  type MarketingChatInput,
+  type MarketingChatMessage,
+  type MarketingChatOutput,
+  type MarketingChatToolOptions,
+} from "./tools/marketing-chat-tool.js";
