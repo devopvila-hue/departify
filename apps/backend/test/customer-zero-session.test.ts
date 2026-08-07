@@ -4,7 +4,6 @@ import {
   getOrCreateCustomerZeroSession,
   runDiscoveryForSession,
   runMarketingPreparationForSession,
-  runMarketingPlanForSession,
   executeMarketingWorkItemForSession,
   approveMarketingWorkItemForSession,
 } from "../src/customer-zero/customer-zero-session.js";
