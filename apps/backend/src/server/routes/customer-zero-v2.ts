@@ -614,8 +614,9 @@ async function runResearch(
     startStage(progress, "audience");
     const rawData = buildRawDataFromInterpretation(interpreted);
     session.state.rawData = { ...session.state.rawData, ...rawData };
-    session.state.companyName =
-      interpreted.companyName ?? onboarding.companyName;
+    // The CEO's own company name always wins: the research may guess a name
+    // from the website/description, but the explicit input is authoritative.
+    session.state.companyName = onboarding.companyName;
     completeStage(
       progress,
       "audience",

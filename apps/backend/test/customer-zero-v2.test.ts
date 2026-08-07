@@ -219,4 +219,30 @@ describe("Customer Zero UX v2 routes", () => {
     expect(body.message).toContain("Ya tengo suficiente para empezar");
     expect(body.message).not.toContain("Discovery completed");
   });
+
+  it("keeps the CEO's explicit company name as the source of truth", async () => {
+    // The CEO's own company name must always win, even when the research
+    // guesses a different one from the website or description. Regression for
+    // the case where the LLM-derived companyName overwrote the explicit input.
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      payload: {
+        companyName: "Panaderia Sol",
+        hasWebsite: false,
+        description:
+          "Panaderia artesanal de masa madre con reparto local en Sevilla.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const organizationId = start.json().organizationId as string;
+
+    const overview = await server.inject({
+      method: "GET",
+      url: `/api/customer-zero/${organizationId}/overview`,
+    });
+    expect(overview.statusCode).toBe(200);
+    expect(overview.json().companyName).toBe("Panaderia Sol");
+  });
 });
