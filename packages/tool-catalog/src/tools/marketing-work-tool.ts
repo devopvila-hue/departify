@@ -202,7 +202,7 @@ export function createMarketingExecuteToolDefinition(
       },
       additionalProperties: false,
     },
-    limits: { timeoutMs: 90_000 },
+    limits: { timeoutMs: 180_000 },
     executor: async (
       _context: ToolExecutionContext,
       args: MarketingExecuteInput,
@@ -276,6 +276,7 @@ function buildExecuteSystemPrompt(context: string): string {
     "Produce el entregable FINAL y concreto para el elemento de trabajo indicado.",
     "Usa ÚNICAMENTE el contexto real del negocio. No inventes datos de la empresa.",
     "El entregable debe ser accionable, específico para esta empresa y listo para que el CEO lo revise.",
+    "Sé conciso: 3-6 puntos o párrafos breves. No generes un documento extenso.",
     "Si el trabajo requiere una capacidad que NO está disponible, dilo explícitamente en lugar de simularla.",
     "",
     "CONTEXTO REAL DEL NEGOCIO:",
