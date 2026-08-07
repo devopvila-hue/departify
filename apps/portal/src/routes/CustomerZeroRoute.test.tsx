@@ -1,6 +1,18 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import type { ReactElement } from "react";
 
+import { OrgProvider } from "@/app/org-context";
 import { CustomerZeroRoute } from "@/routes/CustomerZeroRoute";
+
+/** The onboarding lives inside the portal shell's providers. */
+function render(ui: ReactElement) {
+  return rtlRender(
+    <MemoryRouter>
+      <OrgProvider>{ui}</OrgProvider>
+    </MemoryRouter>,
+  );
+}
 
 function mockFetch(handler: (url: string, init?: RequestInit) => Promise<unknown>) {
   vi.stubGlobal("fetch", vi.fn(handler));

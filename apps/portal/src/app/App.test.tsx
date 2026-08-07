@@ -3,7 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { App } from "@/app/App";
 
 describe("App", () => {
-  it("renders the Customer Zero route", () => {
+  it("renders the onboarding as the entry point", () => {
     render(<App />);
 
     expect(

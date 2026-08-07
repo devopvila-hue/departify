@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useNavigate } from "react-router-dom";
+
+import { useOrg } from "@/app/org-context";
 
 /**
- * Customer Zero — UX v2.
+ * Onboarding (Customer Zero UX v2 flow, consolidated shell).
  *
  * The CEO explains what he wants to achieve; Departify learns, works
  * visibly, asks only what it cannot know, offers the connections it needs
- * inside the conversation, and hands over to Marketing with continuity.
- * The complexity belongs to the system, never to the user.
+ * inside the conversation, and hands the company over to its Marketing head.
+ * When the handover happens, the CEO enters the portal shell — this route
+ * never renders the department itself.
  */
 
 export interface InterpretedBusiness {
@@ -85,36 +89,10 @@ export interface DepartmentSurface {
   discoveryId?: string;
 }
 
-export interface PrepareMarketingResponse {
-  organizationId: string;
-  department: DepartmentSurface | null;
-  firstResult: Record<string, unknown> | null;
-  gaps: unknown[];
-  questions: unknown[];
-  error: { code: string; message: string } | null;
-}
-
-export interface MarketingWorkItem {
-  id: string;
-  title: string;
-  description: string;
-  kind: string;
-  capability?: string;
-  status?: string;
-  result?: string;
-}
-
-export interface MarketingWorkState {
-  goal: string;
-  summary: string;
-  items: MarketingWorkItem[];
-}
-
 type Step =
   | { name: "intake" }
   | { name: "researching"; org: string }
-  | { name: "conversation"; org: string }
-  | { name: "marketing"; org: string; surface: PrepareMarketingResponse };
+  | { name: "conversation"; org: string };
 
 const GOAL_OPTIONS = [
   "Conseguir clientes",
@@ -128,16 +106,13 @@ const GOAL_OPTIONS = [
 const SIZE_OPTIONS = ["Solo yo", "2-10", "11-50", "51-200", "Más de 200"];
 
 export function CustomerZeroRoute() {
+  const navigate = useNavigate();
+  const { setOrganizationId } = useOrg();
   const [step, setStep] = useState<Step>({ name: "intake" });
   const [error, setError] = useState<string | null>(null);
   const [conversation, setConversation] = useState<ConversationResponse | null>(null);
   const [handoff, setHandoff] = useState<string>("");
-  const [work, setWork] = useState<MarketingWorkState | null>(null);
-  const [workBusy, setWorkBusy] = useState(false);
-  const [goalInput, setGoalInput] = useState("");
-  const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
-  const [chatInput, setChatInput] = useState("");
-  const [chatBusy, setChatBusy] = useState(false);
+  const [entering, setEntering] = useState(false);
 
   // Resume after a reload: DNA, objetivo, respuestas, herramientas y Marketing.
   useEffect(() => {
@@ -157,25 +132,12 @@ export function CustomerZeroRoute() {
         const status = (await response.json()) as {
           organizationId: string;
           department: DepartmentSurface | null;
-          marketingWork?: MarketingWorkState | null;
-          conversation: { role: string; content: string }[];
         };
         if (cancelled) return;
-        setMessages(status.conversation ?? []);
-        if (status.marketingWork) setWork(status.marketingWork);
         if (status.department) {
-          setStep({
-            name: "marketing",
-            org: status.organizationId,
-            surface: {
-              organizationId: status.organizationId,
-              department: status.department,
-              firstResult: null,
-              gaps: [],
-              questions: [],
-              error: null,
-            },
-          });
+          // The company already has its department: go straight to the portal.
+          setOrganizationId(status.organizationId);
+          navigate("/inicio", { replace: true });
           return;
         }
         const next = await fetch(
@@ -192,7 +154,7 @@ export function CustomerZeroRoute() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [navigate, setOrganizationId]);
 
   function persistSession(organizationId: string) {
     try {
@@ -231,6 +193,7 @@ export function CustomerZeroRoute() {
         return;
       }
       persistSession(body.organizationId);
+      setOrganizationId(body.organizationId);
       setStep({ name: "researching", org: body.organizationId });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -288,134 +251,28 @@ export function CustomerZeroRoute() {
     }
   }
 
-  async function prepareMarketing(org: string) {
+  /**
+   * Handover: the company gets its Marketing department and the CEO enters
+   * the portal, where Elvira and her team are already working.
+   */
+  async function enterCompany(org: string) {
+    if (entering) return;
+    setEntering(true);
     setError(null);
     try {
       const response = await fetch(`/api/customer-zero/${org}/marketing`, {
         method: "POST",
       });
-      const body = (await response.json()) as PrepareMarketingResponse;
       if (!response.ok) {
         setError(`Error ${response.status}`);
+        setEntering(false);
         return;
       }
-      const handoffResponse = await fetch(`/api/customer-zero/${org}/handoff`);
-      if (handoffResponse.ok) {
-        const handoffBody = (await handoffResponse.json()) as {
-          message: string;
-          goal: string;
-        };
-        setHandoff(handoffBody.message);
-        setMessages([{ role: "assistant", content: handoffBody.message }]);
-        if (handoffBody.goal) setGoalInput(handoffBody.goal);
-      }
-      setStep({ name: "marketing", org, surface: body });
+      setOrganizationId(org);
+      navigate("/inicio");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  }
-
-  async function giveGoal(org: string) {
-    const goal = goalInput.trim();
-    if (!goal || workBusy) return;
-    setWorkBusy(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/customer-zero/${org}/marketing/work`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ goal }),
-      });
-      const body = (await response.json()) as {
-        summary: string;
-        items: MarketingWorkItem[];
-        error?: { message: string };
-      };
-      if (!response.ok || body.error) {
-        setError(body.error?.message ?? `Error ${response.status}`);
-        return;
-      }
-      setWork({
-        goal,
-        summary: body.summary,
-        items: body.items.map((item) => ({
-          ...item,
-          status: item.kind === "external_action" ? "needs_approval" : "pending",
-        })),
-      });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setWorkBusy(false);
-    }
-  }
-
-  async function itemAction(org: string, itemId: string, action: string) {
-    setWorkBusy(true);
-    setError(null);
-    try {
-      const response = await fetch(
-        `/api/customer-zero/${org}/marketing/work/${itemId}/${action}`,
-        { method: "POST" },
-      );
-      const body = (await response.json()) as {
-        status: string;
-        result: string;
-        error?: { message: string };
-      };
-      if (!response.ok || body.error) {
-        setError(body.error?.message ?? `Error ${response.status}`);
-        return;
-      }
-      setWork((prev) =>
-        prev
-          ? {
-              ...prev,
-              items: prev.items.map((item) =>
-                item.id === itemId
-                  ? { ...item, status: body.status, result: body.result }
-                  : item,
-              ),
-            }
-          : prev,
-      );
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setWorkBusy(false);
-    }
-  }
-
-  async function sendMessage(org: string) {
-    const content = chatInput.trim();
-    if (!content || chatBusy) return;
-    setChatBusy(true);
-    setMessages((prev) => [...prev, { role: "user", content }]);
-    setChatInput("");
-    try {
-      const response = await fetch(`/api/customer-zero/${org}/marketing/messages`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: content }),
-      });
-      const body = (await response.json()) as {
-        reply?: string;
-        error?: { message: string };
-      };
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content: body.reply ?? `Error: ${body.error?.message ?? response.status}`,
-        },
-      ]);
-    } catch (cause) {
-      setMessages((prev) => [
-        ...prev,
-        { role: "assistant", content: cause instanceof Error ? cause.message : String(cause) },
-      ]);
-    } finally {
-      setChatBusy(false);
+      setEntering(false);
     }
   }
 
@@ -423,11 +280,24 @@ export function CustomerZeroRoute() {
     <main className="customer-zero" aria-labelledby="customer-zero-title">
       <section className="customer-zero__panel">
         <p className="customer-zero__label">Departify</p>
+        <ol className="customer-zero__steps" aria-label="Progreso">
+          {(["intake", "researching", "conversation"] as const).map((name, index) => (
+            <li
+              key={name}
+              className={
+                name === step.name
+                  ? "customer-zero__step customer-zero__step--active"
+                  : index < ["intake", "researching", "conversation"].indexOf(step.name)
+                    ? "customer-zero__step customer-zero__step--done"
+                    : "customer-zero__step"
+              }
+            />
+          ))}
+        </ol>
         <h1 id="customer-zero-title">
           {step.name === "intake" && "Cuéntame lo mínimo sobre tu empresa"}
           {step.name === "researching" && "Conociendo tu negocio…"}
           {step.name === "conversation" && "Solo un par de cosas más"}
-          {step.name === "marketing" && "Departamento de Marketing"}
         </h1>
 
         {error && (
@@ -457,28 +327,11 @@ export function CustomerZeroRoute() {
               answerQuestion(step.org, questionId, answers)
             }
             onConnect={(toolId) => connectTool(step.org, toolId)}
-            onStartMarketing={() => prepareMarketing(step.org)}
+            entering={entering}
+            onStartMarketing={() => enterCompany(step.org)}
           />
         )}
 
-        {step.name === "marketing" && (
-          <MarketingStep
-            surface={step.surface}
-            handoff={handoff}
-            work={work}
-            workBusy={workBusy}
-            goalInput={goalInput}
-            onGoalInput={setGoalInput}
-            onGiveGoal={() => giveGoal(step.org)}
-            onExecuteItem={(itemId) => itemAction(step.org, itemId, "execute")}
-            onApproveItem={(itemId) => itemAction(step.org, itemId, "approve")}
-            messages={messages}
-            busy={chatBusy}
-            input={chatInput}
-            onInput={setChatInput}
-            onSend={() => sendMessage(step.org)}
-          />
-        )}
       </section>
     </main>
   );
@@ -718,6 +571,7 @@ function ResearchStep(props: {
 function ConversationStep(props: {
   conversation: ConversationResponse;
   handoff: string;
+  entering?: boolean;
   onAnswer: (questionId: string, answers: string[]) => void;
   onConnect: (toolId: string) => void;
   onStartMarketing: () => void;
@@ -863,9 +717,10 @@ function ConversationStep(props: {
           <button
             type="button"
             className="customer-zero__submit"
+            disabled={props.entering ?? false}
             onClick={props.onStartMarketing}
           >
-            Vamos a trabajar
+            {props.entering ? "Entrando…" : "Vamos a trabajar"}
           </button>
         </div>
       )}
@@ -883,174 +738,5 @@ function connectionLabel(connection: ConnectionCard): string {
       return "Todavía no disponible";
     default:
       return "○ No conectado";
-  }
-}
-
-function MarketingStep(props: {
-  surface: PrepareMarketingResponse;
-  handoff: string;
-  work: MarketingWorkState | null;
-  workBusy: boolean;
-  goalInput: string;
-  onGoalInput: (value: string) => void;
-  onGiveGoal: () => void;
-  onExecuteItem: (itemId: string) => void;
-  onApproveItem: (itemId: string) => void;
-  messages: { role: string; content: string }[];
-  busy: boolean;
-  input: string;
-  onInput: (value: string) => void;
-  onSend: () => void;
-}) {
-  const dept = props.surface.department;
-  return (
-    <>
-      <p className="customer-zero__intro">
-        {props.surface.error ? (
-          <span className="customer-zero__state--error">
-            El Departamento no pudo prepararse: {props.surface.error.message}
-          </span>
-        ) : (
-          props.handoff || "Marketing ya conoce tu negocio."
-        )}
-      </p>
-
-      {dept && (
-        <div className="customer-zero__review">
-          <h2>{dept.name}</h2>
-          <dl>
-            <div>
-              <dt>Estado</dt>
-              <dd>{dept.status}</dd>
-            </div>
-            <div>
-              <dt>Equipo</dt>
-              <dd>{dept.employeeAgentIds.length} personas en el Departamento</dd>
-            </div>
-          </dl>
-        </div>
-      )}
-
-      <h2 className="customer-zero__section">¿Qué quieres conseguir?</h2>
-      <div className="customer-zero__chat-input">
-        <input
-          type="text"
-          value={props.goalInput}
-          onChange={(event) => props.onGoalInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") props.onGiveGoal();
-          }}
-          placeholder="Por ejemplo: Necesito conseguir más clientes."
-          disabled={props.workBusy}
-        />
-        <button
-          type="button"
-          onClick={props.onGiveGoal}
-          disabled={props.workBusy || props.goalInput.trim().length === 0}
-        >
-          Poner a trabajar
-        </button>
-      </div>
-
-      {props.work && (
-        <div className="customer-zero__review">
-          <h2>Plan de Marketing</h2>
-          <p className="customer-zero__muted">{props.work.summary}</p>
-          <div className="customer-zero__work-items">
-            {props.work.items.map((item) => (
-              <div key={item.id} className="customer-zero__work-item">
-                <div className="customer-zero__work-item-head">
-                  <strong>{item.title}</strong>
-                  <span
-                    className={`customer-zero__badge customer-zero__badge--${item.status ?? "pending"}`}
-                  >
-                    {statusLabel(item.status)}
-                  </span>
-                </div>
-                <p className="customer-zero__muted">{item.description}</p>
-                {(item.status === "pending" || item.status === "running") && (
-                  <button
-                    type="button"
-                    className="customer-zero__submit customer-zero__submit--small"
-                    disabled={props.workBusy}
-                    onClick={() => props.onExecuteItem(item.id)}
-                  >
-                    Ejecutar
-                  </button>
-                )}
-                {item.status === "needs_approval" && (
-                  <button
-                    type="button"
-                    className="customer-zero__submit customer-zero__submit--small"
-                    disabled={props.workBusy}
-                    onClick={() => props.onApproveItem(item.id)}
-                  >
-                    Aprobar
-                  </button>
-                )}
-                {item.result && (
-                  <p className="customer-zero__work-result">{item.result}</p>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <h2 className="customer-zero__section">Habla con Marketing</h2>
-      <div className="customer-zero__chat">
-        {props.messages.map((message, index) => (
-          <div
-            key={index}
-            className={
-              message.role === "user"
-                ? "customer-zero__chat-message customer-zero__chat-message--user"
-                : "customer-zero__chat-message"
-            }
-          >
-            <strong>{message.role === "user" ? "Tú" : "Director de Marketing"}</strong>
-            <p>{message.content}</p>
-          </div>
-        ))}
-      </div>
-      <div className="customer-zero__chat-input">
-        <input
-          type="text"
-          value={props.input}
-          onChange={(event) => props.onInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") props.onSend();
-          }}
-          placeholder="Escribe un mensaje…"
-          disabled={props.busy}
-        />
-        <button
-          type="button"
-          onClick={props.onSend}
-          disabled={props.busy || props.input.trim().length === 0}
-        >
-          Enviar
-        </button>
-      </div>
-    </>
-  );
-}
-
-function statusLabel(status?: string): string {
-  switch (status) {
-    case "needs_approval":
-      return "Necesita aprobación";
-    case "approved":
-      return "Aprobado";
-    case "completed":
-      return "Completado";
-    case "running":
-      return "Trabajando";
-    case "failed":
-      return "Falló";
-    case "unavailable":
-      return "Capacidad no conectada";
-    default:
-      return "Pendiente";
   }
 }
