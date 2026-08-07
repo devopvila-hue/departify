@@ -401,3 +401,79 @@ select {
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* Sprint goal — Marketing work surface */
+.customer-zero__work-items {
+  margin-top: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.customer-zero__work-item {
+  padding: 14px 16px;
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-md);
+  background: var(--dfy-color-surface);
+}
+
+.customer-zero__work-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.customer-zero__work-item-head strong {
+  font-size: 0.98rem;
+}
+
+.customer-zero__badge {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--dfy-color-surface-raised);
+  color: var(--dfy-color-muted);
+  white-space: nowrap;
+}
+
+.customer-zero__badge--completed {
+  background: #1e3a2b;
+  color: #7ee2a8;
+}
+
+.customer-zero__badge--needs_approval {
+  background: #3a2f1e;
+  color: #f5d97e;
+}
+
+.customer-zero__badge--approved {
+  background: #1e2f3a;
+  color: #7ec9e2;
+}
+
+.customer-zero__badge--unavailable {
+  background: #3a1e1e;
+  color: #f08a8a;
+}
+
+.customer-zero__badge--failed {
+  background: #3a1e1e;
+  color: #f08a8a;
+}
+
+.customer-zero__submit--small {
+  margin-top: 12px;
+  padding: 8px 14px;
+  font-size: 0.85rem;
+}
+
+.customer-zero__work-result {
+  margin: 12px 0 0;
+  color: var(--dfy-color-text);
+  font-size: 0.9rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}

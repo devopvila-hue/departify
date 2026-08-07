@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 export interface InterpretedBusiness {
   companyName?: string;
@@ -72,6 +72,46 @@ export interface ChatResponse {
   reply: string;
 }
 
+export interface MarketingWorkItem {
+  id: string;
+  title: string;
+  description: string;
+  kind: string;
+  capability?: string;
+  status?: string;
+  result?: string;
+}
+
+export interface MarketingPlanResponse {
+  organizationId: string;
+  summary: string;
+  items: MarketingWorkItem[];
+}
+
+export interface MarketingWorkState {
+  goal: string;
+  summary: string;
+  items: MarketingWorkItem[];
+}
+
+export interface WorkItemResponse {
+  organizationId: string;
+  itemId: string;
+  status: string;
+  result: string;
+}
+
+export interface CustomerZeroStatus {
+  organizationId: string;
+  url?: string;
+  companyName?: string;
+  gapCount: number;
+  mandatoryQuestions: MandatoryQuestion[];
+  department: DepartmentSurface | null;
+  marketingWork?: MarketingWorkState | null;
+  conversation: { role: string; content: string }[];
+}
+
 export interface Corrections {
   mission: string;
   market: string;
@@ -95,6 +135,63 @@ export function CustomerZeroRoute() {
   const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatBusy, setChatBusy] = useState(false);
+  // Marketing work state.
+  const [work, setWork] = useState<MarketingWorkState | null>(null);
+  const [workBusy, setWorkBusy] = useState(false);
+  const [goalInput, setGoalInput] = useState("");
+
+  // Resume a previous session after a reload (persistence across the flow).
+  useEffect(() => {
+    const stored = window.localStorage.getItem("departify_customer_zero");
+    if (!stored) return;
+    let parsed: { organizationId: string };
+    try {
+      parsed = JSON.parse(stored) as { organizationId: string };
+    } catch {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`/api/customer-zero/${parsed.organizationId}`);
+        if (!response.ok) return;
+        const status = (await response.json()) as CustomerZeroStatus;
+        if (cancelled) return;
+        setMessages(status.conversation);
+        if (status.marketingWork) setWork(status.marketingWork);
+        if (status.department) {
+          setStep({
+            name: "marketing",
+            org: status.organizationId,
+            surface: {
+              organizationId: status.organizationId,
+              department: status.department,
+              firstResult: null,
+              gaps: [],
+              questions: [],
+              error: null,
+            },
+          });
+        }
+      } catch {
+        /* silent: resume is best-effort */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function persistSession(organizationId: string) {
+    try {
+      window.localStorage.setItem(
+        "departify_customer_zero",
+        JSON.stringify({ organizationId }),
+      );
+    } catch {
+      /* localStorage unavailable */
+    }
+  }
 
   async function analyze(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -115,6 +212,7 @@ export function CustomerZeroRoute() {
         setStep({ name: "url" });
         return;
       }
+      persistSession(body.organizationId);
       setStep({
         name: "review",
         analyze: body,
@@ -195,6 +293,105 @@ export function CustomerZeroRoute() {
       setStep({ name: "marketing", org, surface: body });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
+
+  async function giveGoal(org: string) {
+    const goal = goalInput.trim();
+    if (!goal || workBusy) return;
+    setWorkBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/customer-zero/${org}/marketing/work`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ goal }),
+      });
+      const body = (await response.json()) as MarketingPlanResponse & {
+        error?: { message: string };
+      };
+      if (!response.ok || body.error) {
+        setError(body.error?.message ?? `Error ${response.status}`);
+        return;
+      }
+      setWork({
+        goal,
+        summary: body.summary,
+        items: body.items.map((item) => ({ ...item, status: item.kind === "external_action" ? "needs_approval" : "pending" })),
+      });
+      setGoalInput("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setWorkBusy(false);
+    }
+  }
+
+  async function executeItem(org: string, itemId: string) {
+    setWorkBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/customer-zero/${org}/marketing/work/${itemId}/execute`,
+        { method: "POST" },
+      );
+      const body = (await response.json()) as WorkItemResponse & {
+        error?: { message: string };
+      };
+      if (!response.ok || body.error) {
+        setError(body.error?.message ?? `Error ${response.status}`);
+        return;
+      }
+      setWork((prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.map((item) =>
+                item.id === itemId
+                  ? { ...item, status: body.status, result: body.result }
+                  : item,
+              ),
+            }
+          : prev,
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setWorkBusy(false);
+    }
+  }
+
+  async function approveItem(org: string, itemId: string) {
+    setWorkBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/customer-zero/${org}/marketing/work/${itemId}/approve`,
+        { method: "POST" },
+      );
+      const body = (await response.json()) as WorkItemResponse & {
+        error?: { message: string };
+      };
+      if (!response.ok || body.error) {
+        setError(body.error?.message ?? `Error ${response.status}`);
+        return;
+      }
+      setWork((prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.map((item) =>
+                item.id === itemId
+                  ? { ...item, status: body.status, result: body.result }
+                  : item,
+              ),
+            }
+          : prev,
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setWorkBusy(false);
     }
   }
 
@@ -300,7 +497,15 @@ export function CustomerZeroRoute() {
 
         {step.name === "marketing" && (
           <MarketingStep
+            org={step.org}
             surface={step.surface}
+            work={work}
+            workBusy={workBusy}
+            goalInput={goalInput}
+            onGoalInput={setGoalInput}
+            onGiveGoal={() => giveGoal(step.org)}
+            onExecuteItem={(itemId) => executeItem(step.org, itemId)}
+            onApproveItem={(itemId) => approveItem(step.org, itemId)}
             messages={messages}
             busy={chatBusy}
             input={chatInput}
@@ -529,7 +734,15 @@ function PrepareStep(props: {
 }
 
 function MarketingStep(props: {
+  org: string;
   surface: PrepareMarketingResponse;
+  work: MarketingWorkState | null;
+  workBusy: boolean;
+  goalInput: string;
+  onGoalInput: (value: string) => void;
+  onGiveGoal: () => void;
+  onExecuteItem: (itemId: string) => void;
+  onApproveItem: (itemId: string) => void;
   messages: { role: string; content: string }[];
   busy: boolean;
   input: string;
@@ -545,7 +758,7 @@ function MarketingStep(props: {
             El Departamento no pudo prepararse: {props.surface.error.message}
           </span>
         ) : (
-          "Marketing ya conoce tu negocio. Entra y habla con el Director."
+          "Marketing ya conoce tu negocio. Cuéntale qué quieres conseguir."
         )}
       </p>
 
@@ -571,6 +784,75 @@ function MarketingStep(props: {
               </div>
             )}
           </dl>
+        </div>
+      )}
+
+      <h2 className="customer-zero__section">¿Qué quieres conseguir?</h2>
+      <div className="customer-zero__chat-input">
+        <input
+          type="text"
+          value={props.goalInput}
+          onChange={(event) => props.onGoalInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") props.onGiveGoal();
+          }}
+          placeholder="Por ejemplo: Necesito conseguir más clientes."
+          disabled={props.workBusy}
+        />
+        <button
+          type="button"
+          onClick={props.onGiveGoal}
+          disabled={props.workBusy || props.goalInput.trim().length === 0}
+        >
+          Poner a trabajar
+        </button>
+      </div>
+
+      {props.work && (
+        <div className="customer-zero__review">
+          <h2>Plan de Marketing</h2>
+          <p className="customer-zero__muted">{props.work.summary}</p>
+          <div className="customer-zero__work-items">
+            {props.work.items.map((item) => (
+              <div key={item.id} className="customer-zero__work-item">
+                <div className="customer-zero__work-item-head">
+                  <strong>{item.title}</strong>
+                  <span className={`customer-zero__badge customer-zero__badge--${item.status ?? "pending"}`}>
+                    {statusLabel(item.status)}
+                  </span>
+                </div>
+                <p className="customer-zero__muted">{item.description}</p>
+                {(item.status === "pending" || item.status === "running") && (
+                  <button
+                    type="button"
+                    className="customer-zero__submit customer-zero__submit--small"
+                    disabled={props.workBusy}
+                    onClick={() => props.onExecuteItem(item.id)}
+                  >
+                    Ejecutar
+                  </button>
+                )}
+                {item.status === "needs_approval" && (
+                  <button
+                    type="button"
+                    className="customer-zero__submit customer-zero__submit--small"
+                    disabled={props.workBusy}
+                    onClick={() => props.onApproveItem(item.id)}
+                  >
+                    Aprobar
+                  </button>
+                )}
+                {item.status === "completed" && item.result && (
+                  <p className="customer-zero__work-result">{item.result}</p>
+                )}
+                {(item.status === "unavailable" || item.status === "failed") && item.result && (
+                  <p className="customer-zero__work-result customer-zero__state--error">
+                    {item.result}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -627,4 +909,23 @@ function MarketingStep(props: {
       </div>
     </>
   );
+}
+
+function statusLabel(status?: string): string {
+  switch (status) {
+    case "needs_approval":
+      return "Necesita aprobación";
+    case "approved":
+      return "Aprobado";
+    case "completed":
+      return "Completado";
+    case "running":
+      return "Trabajando";
+    case "failed":
+      return "Falló";
+    case "unavailable":
+      return "Capacidad no conectada";
+    default:
+      return "Pendiente";
+  }
 }

@@ -328,4 +328,119 @@ describe("CustomerZeroRoute", () => {
     expect(await screen.findByRole("alert")).toBeInTheDocument();
     expect(screen.getByText(/la web no responde/i)).toBeInTheDocument();
   });
+
+  it("lets the CEO give Marketing a goal, execute work and approve gated actions", async () => {
+    mockFetch(async (url, init) => {
+      if (url === "/api/customer-zero/analyze") return okJson(analyzeResponse);
+      if (url.endsWith("/answers")) {
+        const body = JSON.parse(String(init?.body));
+        if (body.answers.mission) {
+          return okJson({
+            organizationId: "org_moon",
+            gaps: [],
+            questions: [],
+            mandatoryQuestions: analyzeResponse.mandatoryQuestions,
+            companyDna: {},
+            gapCount: 2,
+          });
+        }
+        return okJson({
+          organizationId: "org_moon",
+          gaps: [],
+          questions: [],
+          mandatoryQuestions: [],
+          companyDna: {},
+          gapCount: 1,
+        });
+      }
+      if (url.endsWith("/marketing") && init?.method === "POST") {
+        return okJson({
+          organizationId: "org_moon",
+          department: {
+            id: "dep_marketing",
+            name: "Marketing",
+            description: "Marketing department",
+            directorAgentId: "agent_marketing_director",
+            employeeAgentIds: [],
+            status: "active",
+            connections: [],
+          },
+          firstResult: null,
+          gaps: [],
+          questions: [],
+          error: null,
+        });
+      }
+      if (url.endsWith("/work")) {
+        return okJson({
+          organizationId: "org_moon",
+          summary: "Plan para conseguir más clientes para MOON",
+          items: [
+            {
+              id: "item_1",
+              title: "Analizar audiencia",
+              description: "Estudio del cliente ideal",
+              kind: "analysis",
+            },
+            {
+              id: "item_2",
+              title: "Lanzar campaña de anuncios",
+              description: "Inversión en anuncios",
+              kind: "external_action",
+              capability: "ads_spend",
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/item_1/execute")) {
+        return okJson({
+          organizationId: "org_moon",
+          itemId: "item_1",
+          status: "completed",
+          result: "Análisis: los nómadas digitales buscan comunidad en Barcelona.",
+        });
+      }
+      if (url.endsWith("/item_2/approve")) {
+        return okJson({
+          organizationId: "org_moon",
+          itemId: "item_2",
+          status: "unavailable",
+          result: "Aprobado por el CEO. Esta capacidad todavía no está conectada.",
+        });
+      }
+      return okJson({});
+    });
+
+    render(<CustomerZeroRoute />);
+    fireEvent.change(screen.getByPlaceholderText("https://empresa.com"), {
+      target: { value: "https://moon.example" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /conocer mi negocio/i }));
+    await screen.findByRole("heading", { name: /esto es lo que hemos entendido/i });
+    fireEvent.click(screen.getByRole("button", { name: /confirmar y continuar/i }));
+    const visionInput = await screen.findByLabelText(/¿Dónde quieres llevar tu empresa/i);
+    fireEvent.change(visionInput, { target: { value: "Ser el co-living de referencia" } });
+    fireEvent.change(screen.getByLabelText(/¿Quién es tu cliente ideal?/i), {
+      target: { value: "Nómadas digitales" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Continuar" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: /poner marketing a trabajar/i }),
+    );
+    await screen.findByRole("heading", { name: /departamento de marketing/i });
+
+    // Give Marketing a business goal.
+    fireEvent.change(screen.getByPlaceholderText(/por ejemplo: necesito conseguir más clientes/i), {
+      target: { value: "Necesito conseguir más clientes." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /poner a trabajar/i }));
+
+    expect(await screen.findByText(/plan para conseguir más clientes/i)).toBeInTheDocument();
+    // Analysis item can be executed.
+    fireEvent.click(screen.getAllByRole("button", { name: "Ejecutar" })[0]!);
+    expect(await screen.findByText(/nómadas digitales buscan comunidad/i)).toBeInTheDocument();
+    // External action requires approval and reports the honest unavailable state.
+    fireEvent.click(screen.getByRole("button", { name: "Aprobar" }));
+    expect(await screen.findByText(/capacidad todavía no está conectada/i)).toBeInTheDocument();
+  });
 });
