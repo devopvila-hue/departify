@@ -26,9 +26,39 @@ importers:
 
   apps/backend:
     dependencies:
+      '@departify/agent-tool-bridge':
+        specifier: workspace:^
+        version: link:../../packages/agent-tool-bridge
+      '@departify/business-discovery':
+        specifier: workspace:^
+        version: link:../../packages/business-discovery
+      '@departify/business-events':
+        specifier: workspace:^
+        version: link:../../packages/business-events
       '@departify/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@departify/departments':
+        specifier: workspace:^
+        version: link:../../packages/departments
+      '@departify/executive-director':
+        specifier: workspace:^
+        version: link:../../packages/executive-director
+      '@departify/executive-orchestrator':
+        specifier: workspace:^
+        version: link:../../packages/executive-orchestrator
+      '@departify/platform-composition':
+        specifier: workspace:^
+        version: link:../../packages/platform-composition
+      '@departify/tool-catalog':
+        specifier: workspace:^
+        version: link:../../packages/tool-catalog
+      '@departify/tool-runtime':
+        specifier: workspace:^
+        version: link:../../packages/tool-runtime
+      '@departify/workflows':
+        specifier: workspace:^
+        version: link:../../packages/workflows
       '@fastify/swagger':
         specifier: ^9.4.0
         version: 9.8.1

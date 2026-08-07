@@ -1,172 +1,94 @@
-# WORKLOG — Sprint 53 — Primer Smoke Test del Customer Zero (Departamento Marketing)
+# WORKLOG — Sprint 56 — Customer Zero Vertical Slice (MOON → Marketing → resultado visible)
 
-## Sesión 1 (2026-08-06) — EPIC GATE y análisis
+## Sesión (2026-08-07)
 
-### EPIC GATE
-Business Discovery cerrado. No crear capacidades/workflows/eventos nuevos salvo imprescindibles.
-No infraestructura futura.
+### Bloqueo real encontrado
+"El motor Customer Zero existe pero no puede invocarse desde el producto."
+- Portal solo tenía `FoundationRoute`; backend solo rutas técnicas.
+- Además: `rawData` (información real de MOON, Sprint 55) NO llegaba a discovery
+  desde el flujo real: `ExecutiveDiscoveryWorkflowInput` no lo llevaba y
+  `runProvisioningPipeline` no lo propagaba desde el payload del evento.
 
-### Architecture Confidence Gate
-- STOP real: los e2e cablean el provisioningHandler como stub; el Departamento Marketing real
-  nunca se instancia vía `BusinessProvisioningService` — falta el Smoke Test que lo verifique.
-- Alternativas: A) Smoke Test e2e con provisión real (60%); B) servicio de composición (25%);
-  C) justificar que está listo (15%).
-- **Decisión: A** (60%, suficiente) — ejecutar el primer Smoke Test real del Customer Zero.
+### Solución mínima aplicada (Opción A)
+- `packages/executive-orchestrator/src/workflows/executive-discovery-workflow.ts`:
+  `rawData?` en el input del workflow, propagado a `initiateDiscovery`.
+- `packages/business-events/src/catalog/business-event-catalog.ts`:
+  `runProvisioningPipeline` propaga `event.payload.rawData` → `discoveryWorkflow.run`.
+- `apps/backend/src/customer-zero/customer-zero-composition.ts`:
+  composición del host que reutiliza el pipeline (mismo wiring que el smoke test
+  validado): report repo in-memory, tool catalog, tool runtime, bridge,
+  orchestrator, discovery workflow, workflow executor, provisioning real
+  `tpl_marketing`, catalog canónico, `BusinessEventService`.
+- `apps/backend/src/server/routes/customer-zero.ts`:
+  `POST /api/customer-zero/marketing` (único endpoint de intención de producto).
+- `apps/portal/src/routes/CustomerZeroRoute.tsx`:
+  formulario MOON → "Poner Marketing a trabajar" → estado → primer resultado.
+  Router + proxy dev `/api` → backend.
 
-### Contexto
-- `packages/platform-composition` (BusinessProvisioningService).
-- `packages/business-events` (e2e de la Vending Machine, composición completa).
-- `packages/departments` (tpl_marketing).
+### Archivos/paquetes modificados
+- `apps/backend/src/customer-zero/customer-zero-composition.ts` (nuevo)
+- `apps/backend/src/server/routes/customer-zero.ts` (nuevo)
+- `apps/backend/src/server/server.ts`
+- `apps/backend/package.json`, `pnpm-lock.yaml`
+- `apps/backend/test/customer-zero.test.ts` (nuevo)
+- `apps/portal/src/routes/CustomerZeroRoute.tsx` (nuevo)
+- `apps/portal/src/routes/CustomerZeroRoute.test.tsx` (nuevo)
+- `apps/portal/src/app/router.tsx`, `apps/portal/src/app/App.test.tsx`
+- `apps/portal/src/styles/tokens.css`, `apps/portal/vite.config.ts`
+- `packages/executive-orchestrator/src/workflows/executive-discovery-workflow.ts`
+- `packages/executive-orchestrator/test/unit/executive-discovery-workflow.test.ts`
+- `packages/business-events/src/catalog/business-event-catalog.ts`
+- `packages/business-events/test/integration/business-events-end-to-end.test.ts`
 
-### Tareas completadas
-- [x] T0-T4 (EPIC GATE, decisión, contexto).
-- [x] T5. `test/integration/smoke/marketing-customer-zero.smoke.test.ts`: primer Smoke Test — payment.confirmed → organización → provisión REAL (`BusinessProvisioningService` con tpl_marketing) → discovery → onboarding con agent_marketing_director/agent_content_strategist → verifica Departamento Marketing instanciado (director + 3 empleados) + primer valor.
-- [x] T6. Smoke Test en verde (business-events 39 tests).
-- [x] Paquete: lint/typecheck/test/build en verde.
+### Paquetes deliberadamente intactos
+- business-discovery (congelado), ROSA (congelado), workflows, departments,
+  platform-composition, provisioning-engine, tool-catalog, tool-runtime,
+  agent-tool-bridge, executive-director: sin cambios de lógica (solo contratos
+  públicos estrictamente necesarios en executive-orchestrator).
 
-### Próximos pasos
-- T7-T11. Validación final monorepo.
-- T12. Documentación.
-- T13-T14. Commit + push + informe + autopilot.done.
+### Tests (nueva frontera)
+- Backend (4): input válido → resultado; reutiliza composición (departamento
+  real); sin rawData → completo; sin companyName → 400.
+- Portal (6): formulario, estado de carga, envío + resultado, error 500, error pipeline.
+- Thread rawData: unit workflow (forwards rawData) + e2e payment.confirmed.
 
-## Sesión 2 (2026-08-06) — Validación final monorepo en verde
+## Validaciones
+- [x] `pnpm lint` — exit 0
+- [x] `pnpm typecheck` — exit 0
+- [x] `pnpm test` — exit 0 (todos los paquetes)
+- [x] `pnpm -r build` — exit 0
+- [x] `pnpm check` — exit 0 (33 paquetes Done)
 
-- [x] T7. `pnpm lint` — exit 0.
-- [x] T8. `pnpm typecheck` — exit 0, 0 errores TS.
-- [x] T9. `pnpm test` — exit 0, sin fallos (business-events 39 tests, incluido Smoke Test).
-- [x] T10. `pnpm -r build` — exit 0.
-- [x] T11. `pnpm check` — exit 0 (165 Done/✓).
+## PRUEBA MANUAL REAL (DoD)
+- Backend real en local: `http://127.0.0.1:3210` (dev server previo, hot-reload).
+- Portal real en local: `http://127.0.0.1:5173` (vite reiniciado con proxy).
+- Validación en navegador real (headless Chrome vía CDP):
+  1. Formulario MOON renderizado ✓
+  2. Información real introducida ✓
+  3. "Poner Marketing a trabajar" clickado ✓
+  4. Resultado visible: "Primer resultado de Marketing" con confianza low,
+     gapCount 21, criticalGapCount 12, blockingGapCount 12, questionCount 20 ✓
+  5. Mensaje: "Marketing ya conoce MOON Shared Living y ha producido su
+     primer resultado." ✓
+- `BROWSER_VALIDATION_RESULT: PASS`
 
-### Próximos pasos
-- T12. Documentación (CHANGELOG).
-- T13. Commit + push.
-- T14. autopilot.done + informe final.
+### Input utilizado (sin secretos)
+```json
+{ "companyName": "MOON Shared Living", "rawData": { ...misión, visión, mercado, posicionamiento, productos, cliente ideal, tono... } }
+```
+### Output obtenido (con datos reales completos)
+```json
+{ "status": "completed", "department": "Marketing",
+  "firstResult": { "confidence": "low", "gapCount": 15,
+    "criticalGapCount": 7, "blockingGapCount": 7, "questionCount": 20 } }
+```
+(Con `rawData: {}` → gapCount 22 / critical 13: la información real de MOON
+reduce los gaps, confirmando que el pipeline aprende el negocio.)
 
-## Sesión 3 (2026-08-06) — Documentación, commit y cierre
+### Fricciones observadas
+- Dev servers previos ya estaban levantados; hubo que reiniciar vite para el proxy.
+- No hay Playwright/puppeteer instalado: validación con Chrome headless vía CDP.
 
-- [x] T12. `CHANGELOG.md` (Sprint 53).
-- [x] T13. Commit `58aaa4c` + push a main (`18fc9f7..58aaa4c`).
-- [x] T14. Informe final + `.opencode/autopilot.done`.
-
----
-
-# INFORME FINAL — SPRINT 53 (Primer Smoke Test del Customer Zero)
-
-## Objetivo
-Ejecutar el primer Smoke Test del Customer Zero: una empresa real contrata Marketing y el flujo
-completo corre con provisión REAL — el Departamento Marketing se crea de verdad y entrega su
-primer valor.
-
-## EPIC GATE
-Business Discovery cerrado. No se crearon capacidades, workflows, eventos, paquetes ni
-infraestructura futura. No se diseñó para otros departamentos.
-
-## Architecture Confidence Gate
-- **STOP real:** todos los e2e cableaban el `provisioningHandler` como stub — el Departamento
-  Marketing nunca se instanciaba vía `BusinessProvisioningService`. El Smoke Test debía
-  verificarlo.
-- **Alternativas:** A) Smoke Test e2e con provisión real (60%); B) servicio de composición (25%);
-  C) justificar que está listo (15%).
-- **Decisión: A** (mayor confianza, suficiente).
-
-## Causa raíz
-El pipeline existía y funcionaba con stubs, pero nadie había verificado el escenario completo con
-la provisión real: empresa real → contrata Marketing → Marketing aprende → trabaja → primer valor.
-
-## El Smoke Test
-`marketing-customer-zero.smoke.test.ts` (business-events):
-- `payment.confirmed` (único mock: el emisor externo)
-- → organización → provisión REAL (`BusinessProvisioningService` + `DepartmentService` con
-  `tpl_marketing`)
-- → discovery (report persistido)
-- → onboarding con `agent_marketing_director` / `agent_content_strategist`
-- → **verifica**: Departamento Marketing realmente creado (director + 3 empleados, active),
-  report persistido, primer valor en el finalOutput del onboarding.
-
-## Paquetes modificados
-- `packages/business-events` (test/integration/smoke/marketing-customer-zero.smoke.test.ts nuevo).
-- `CHANGELOG.md`.
-
-## Paquetes deliberadamente NO modificados
-- 10 paquetes ajenos intactos (verificado con `git diff --stat`): business-discovery (congelado),
-  departments, workflows, tool-catalog, platform-composition, executive-*, agent-*, etc.
-
-## Riesgos
-- El Smoke Test usa `DepartmentService` en memoria (por instancia): valida el flujo en un solo
-  proceso; la persistencia real es infraestructura futura (fuera de alcance).
-- `provisioningHandler` conecta el evento al `BusinessProvisioningService` real — el mapeo
-  plan→template es del host (aquí fijado a `tpl_marketing`).
-
-## Validaciones ejecutadas (todas en verde)
-| Validación | Resultado |
-|---|---|
-| `pnpm lint` | exit 0 |
-| `pnpm typecheck` | exit 0 |
-| `pnpm test` | exit 0 (business-events 39 tests, incluido Smoke Test) |
-| `pnpm -r build` | exit 0 |
-| `pnpm check` | exit 0 (165 Done/✓) |
-
-## Commit y push
-- Commit: `58aaa4c` — `test(business-events): add Marketing Customer Zero smoke test with real provisioning (Sprint 53)`
-- Push: `18fc9f7..58aaa4c main -> main` → https://github.com/devopvila-hue/departify
-
-## Estado final del working tree
-- Código commiteado y pusheado. Solo quedan `.opencode/GOAL.md`, `PLAN.md`, `WORKLOG.md`
-  (seguimiento del agente).
-- Sprint 53 cerrado. No se inicia el Sprint 54.
-
-## Criterio de éxito
-✓ elimina exactamente un bloqueo que acerca el primer Smoke Test del Departamento Marketing
-✓ el éxito no es añadir código — es validar el escenario completo con la provisión real
-
-## Nota ROSA (backlog mental, no aplicado)
-- El Smoke Test valida el Customer Zero; los siguientes pasos naturales (fuera de alcance): el
-  repositorio de departamentos y la Golden Image oficial. Anotado en el backlog mental; ROSA no
-  se modifica.
-
----
-
-# SPRINT 54 — Análisis crítico del Customer Zero (sin implementación)
-
-## Sesión (2026-08-06) — Recorrido completo como CTO
-
-### Misión
-NO implementar funcionalidades. Analizar el flujo del Customer Zero como si mañana un CEO fuera a
-contratar el Departamento Marketing. Buscar únicamente: dependencias manuales, wiring incompleto,
-hardcodes, configuraciones obligatorias, pasos técnicos pendientes.
-
-### Recorrido del flujo
-
-| Eslabón | Estado | Nota |
-|---|---|---|
-| payment.confirmed → organización | Sprint 49/50 | Port `OrganizationCreator` (inyección por diseño) |
-| Provisión → Departamento Marketing | Sprint 53 (Smoke Test con provisión REAL) | Port `provisioningHandler` → `BusinessProvisioningService` |
-| tpl_marketing (Director + 3 empleados) | Sprint 51 | Ninguna dependencia manual |
-| Business Discovery | Sprints 28-38 | Port `discoveryWorkflow` (inyección por diseño) |
-| Department Onboarding (director parametrizado) | Sprint 52 | Ninguna |
-| Primer trabajo + primer resultado | Sprints 44-45 | Ninguna |
-
-### Conclusión
-No existe un bloqueo real. El Smoke Test del Sprint 53 ejecuta el flujo completo de punta a punta
-con provisión real: payment.confirmed → organización → Departamento Marketing instanciado
-(tpl_marketing) → discovery → onboarding con agent_marketing_director/agent_content_strategist →
-primer valor entregado. Los únicos puntos de inyección (OrganizationCreator, provisioningHandler,
-discoveryWorkflow) son dependency inversion por diseño ROSA — la composición oficial, no wiring
-incompleto ni pasos técnicos pendientes.
-
-**Respuesta a la pregunta del criterio de éxito: SÍ.** Un CEO puede contratar hoy el Departamento
-Marketing y comenzar la validación del Customer Zero sin necesitar más infraestructura.
-
-### Decisión
-Según la regla del Sprint ("Si no existe ningún bloqueo: NO escribir código"), NO se implementa
-nada. Se ejecutan las validaciones para confirmar el estado verde y se cierra con informe.
-
-### Validaciones (todas en verde)
-- [x] pnpm lint — exit 0
-- [x] pnpm typecheck — exit 0
-- [x] pnpm test — exit 0
-- [x] pnpm -r build — exit 0
-- [x] pnpm check — exit 0 (164 Done/✓)
-
-### Commit y push
-- Commit: (documentación del análisis + autopilot.done)
+## Estado
+VALIDADO POR TESTS y VALIDADO MANUALMENTE EN NAVEGADOR (ambos verdes).
+Sprint 56 candidato a cierre.

@@ -80,3 +80,181 @@ select {
   font-size: 1rem;
   line-height: 1.7;
 }
+
+/* Sprint 56 — Customer Zero vertical slice. Deliberately minimal. */
+.customer-zero {
+  display: grid;
+  min-height: 100dvh;
+  place-items: center;
+  padding: 24px;
+}
+
+.customer-zero__panel {
+  width: min(100%, 680px);
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-lg);
+  background: var(--dfy-color-surface);
+  padding: clamp(24px, 5vw, 48px);
+}
+
+.customer-zero__label {
+  margin: 0 0 12px;
+  color: var(--dfy-color-accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.customer-zero h1 {
+  margin: 0;
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+  letter-spacing: 0;
+  line-height: 1.15;
+}
+
+.customer-zero__intro {
+  margin: 16px 0 0;
+  max-width: 54ch;
+  color: var(--dfy-color-muted);
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
+.customer-zero__form {
+  margin-top: 28px;
+  display: grid;
+  gap: 20px;
+}
+
+.customer-zero__field {
+  display: grid;
+  gap: 8px;
+  color: var(--dfy-color-muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.customer-zero__field input,
+.customer-zero__field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-md);
+  background: var(--dfy-color-surface-raised);
+  color: var(--dfy-color-text);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.customer-zero__field input:focus,
+.customer-zero__field textarea:focus {
+  outline: 2px solid var(--dfy-color-accent);
+  outline-offset: 1px;
+}
+
+.customer-zero__department {
+  margin: 0;
+  color: var(--dfy-color-muted);
+  font-size: 1rem;
+}
+
+.customer-zero__department strong {
+  color: var(--dfy-color-text);
+}
+
+.customer-zero__submit {
+  justify-self: start;
+  padding: 14px 22px;
+  border: 0;
+  border-radius: var(--dfy-radius-md);
+  background: var(--dfy-color-accent);
+  color: var(--dfy-color-accent-contrast);
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.customer-zero__submit:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.customer-zero__state {
+  margin-top: 28px;
+  padding: 16px 18px;
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-md);
+  background: var(--dfy-color-surface-raised);
+}
+
+.customer-zero__state p {
+  margin: 0;
+  color: var(--dfy-color-text);
+  line-height: 1.6;
+}
+
+.customer-zero__state-hint {
+  margin-top: 8px !important;
+  color: var(--dfy-color-muted) !important;
+  font-size: 0.85rem;
+}
+
+.customer-zero__state--error {
+  border-color: #e5484d;
+}
+
+.customer-zero__error {
+  margin-top: 8px !important;
+  color: #ffb4b4 !important;
+  font-size: 0.9rem;
+}
+
+.customer-zero__result {
+  margin-top: 28px;
+  padding: 20px 22px;
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-lg);
+  background: var(--dfy-color-surface-raised);
+}
+
+.customer-zero__result h2 {
+  margin: 0 0 16px;
+  font-size: 1.15rem;
+}
+
+.customer-zero__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin: 0;
+}
+
+.customer-zero__metrics div {
+  padding: 12px;
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-md);
+  background: var(--dfy-color-surface);
+}
+
+.customer-zero__metrics dt {
+  color: var(--dfy-color-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.customer-zero__metrics dd {
+  margin: 6px 0 0;
+  color: var(--dfy-color-text);
+  font-size: 1.6rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.customer-zero__run {
+  margin: 16px 0 0;
+  color: var(--dfy-color-muted);
+  font-size: 0.92rem;
+  line-height: 1.6;
+}

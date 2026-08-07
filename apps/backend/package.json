@@ -13,7 +13,17 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@departify/agent-tool-bridge": "workspace:^",
+    "@departify/business-discovery": "workspace:^",
+    "@departify/business-events": "workspace:^",
     "@departify/config": "workspace:*",
+    "@departify/departments": "workspace:^",
+    "@departify/executive-director": "workspace:^",
+    "@departify/executive-orchestrator": "workspace:^",
+    "@departify/platform-composition": "workspace:^",
+    "@departify/tool-catalog": "workspace:^",
+    "@departify/tool-runtime": "workspace:^",
+    "@departify/workflows": "workspace:^",
     "@fastify/swagger": "^9.4.0",
     "@fastify/swagger-ui": "^5.2.0",
     "fastify": "^5.2.1"

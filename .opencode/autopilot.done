@@ -1,0 +1,56 @@
+# AUTOPILOT DONE — Sprint 56 completado y verificado
+
+## Resumen
+
+Sprint 56 (Customer Zero Vertical Slice): la primera rebanada vertical que permite
+ejecutar desde el navegador **MOON → Marketing → primer resultado visible**.
+
+Bloqueo real descubierto mediante uso: el pipeline Customer Zero existía y estaba
+validado por tests, pero NO había superficie HTTP + UI para que el CEO lo usara.
+Además, `rawData` (información real de MOON, Sprint 55) no llegaba a discovery
+desde el flujo real.
+
+Solución mínima (Opción A): UN endpoint HTTP de intención de producto
+`POST /api/customer-zero/marketing` + pantalla mínima en el portal. La ruta es
+adapter; el dominio sigue mandando. `rawData` se hilo por los contratos públicos
+necesarios (workflow input + pipeline de provisioning).
+
+## Qué se implementó
+- `packages/executive-orchestrator`: `ExecutiveDiscoveryWorkflowInput.rawData?` → `initiateDiscovery`.
+- `packages/business-events`: `runProvisioningPipeline` propaga `event.payload.rawData`.
+- `apps/backend`: composición Customer Zero (reutiliza el pipeline) + ruta HTTP.
+- `apps/portal`: `CustomerZeroRoute` — formulario MOON, botón "Poner Marketing a
+  trabajar", estado de carga, primer resultado, errores. Proxy dev `/api` → backend.
+
+## Paquetes deliberadamente intactos
+business-discovery (congelado), ROSA (congelado), workflows, departments,
+platform-composition, provisioning-engine, tool-catalog, tool-runtime,
+agent-tool-bridge, executive-director. Sin IA nueva, sin Stripe real, sin Supabase.
+
+## Validaciones (todas en verde)
+- `pnpm lint` — exit 0
+- `pnpm typecheck` — exit 0
+- `pnpm test` — exit 0
+- `pnpm -r build` — exit 0
+- `pnpm check` — exit 0 (33 paquetes)
+
+## PRUEBA MANUAL REAL EN NAVEGADOR (DoD)
+Backend `http://127.0.0.1:3210` + portal `http://127.0.0.1:5173`.
+Headless Chrome (CDP): formulario MOON renderizado → información real → click
+"Poner Marketing a trabajar" → estado de carga → **"Primer resultado de Marketing"**
+(confianza low, gapCount 21, criticalGapCount 12, blockingGapCount 12,
+questionCount 20) → "Marketing ya conoce MOON Shared Living y ha producido su
+primer resultado." → **BROWSER_VALIDATION_RESULT: PASS**.
+
+Con datos reales completos de MOON: gapCount baja de 22 → 15 (critical 13 → 7),
+confirmando que Marketing aprende el negocio real.
+
+## Cómo verificarlo
+```sh
+pnpm check
+# luego, con backend y portal levantados:
+#   http://127.0.0.1:5173/  → MOON → "Poner Marketing a trabajar"
+```
+
+## Estado
+Sprint 56 cerrado. No se inicia el Sprint 57.

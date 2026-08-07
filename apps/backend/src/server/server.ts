@@ -6,6 +6,7 @@ import { registerErrorHandling } from "./errors.js";
 import { registerOpenApi } from "./openapi.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerVersionRoutes } from "./routes/version.js";
+import { registerCustomerZeroRoutes } from "./routes/customer-zero.js";
 
 export async function buildServer(
   config: BackendConfig,
@@ -33,6 +34,7 @@ export async function buildServer(
   await registerOpenApi(server, config);
   await registerHealthRoutes(server);
   await registerVersionRoutes(server, config);
+  await registerCustomerZeroRoutes(server);
 
   return server;
 }

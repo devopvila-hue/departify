@@ -48,6 +48,12 @@ export interface ExecutiveDiscoveryWorkflowInput {
    */
   readonly priority?: "low" | "normal" | "high";
   /**
+   * Raw information about the real company (Sprint 55). Forwarded to the
+   * Business Discovery request so the pipeline builds a real Company DNA
+   * instead of an empty one when the CEO / host provides it.
+   */
+  readonly rawData?: Readonly<Record<string, unknown>>;
+  /**
    * Question generation options forwarded to `discovery.analyze` (Sprint 30).
    */
   readonly questionOptions?: {
@@ -147,6 +153,7 @@ export class ExecutiveDiscoveryWorkflow {
       requestedAt: this.clock(),
       priority: input.priority ?? "normal",
       options: input.options,
+      ...(input.rawData ? { rawData: input.rawData } : {}),
     });
 
     if (discovery.status !== "completed" || !discovery.report) {

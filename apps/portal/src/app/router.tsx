@@ -1,10 +1,10 @@
 import { createBrowserRouter } from "react-router-dom";
 
-import { FoundationRoute } from "@/routes/FoundationRoute";
+import { CustomerZeroRoute } from "@/routes/CustomerZeroRoute";
 
 export const router = createBrowserRouter([
   {
     path: "/",
-    element: <FoundationRoute />,
+    element: <CustomerZeroRoute />,
   },
 ]);

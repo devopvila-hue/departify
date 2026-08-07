@@ -10,7 +10,10 @@ import {
   type WorkflowExecution,
   type WorkflowResult,
 } from "@departify/workflows";
-import type { BusinessEvent } from "../contracts/business-event-types.js";
+import type {
+  BusinessEvent,
+  BusinessEventPayload,
+} from "../contracts/business-event-types.js";
 import type {
   BusinessEventError,
   BusinessEventResult,
@@ -346,11 +349,14 @@ async function runProvisioningPipeline(options: {
   // run the Executive Discovery Workflow (Sprint 31) when the host wired
   // one. The resulting report (Sprint 36) and its association to the
   // Department (Sprint 35) complete the end-to-end flow without a manual
-  // `organization.discovery_requested`.
+  // `organization.discovery_requested`. Sprint 56: the raw company
+  // information carried by the event payload is forwarded so the CEO's
+  // real data reaches the discovery pipeline.
   if (!discoveryWorkflow) {
     return activation;
   }
 
+  const rawData = extractRawData(event.payload);
   const discovery: ExecutiveDiscoveryWorkflowResult =
     await discoveryWorkflow.run({
       organizationId: event.organizationId,
@@ -361,6 +367,7 @@ async function runProvisioningPipeline(options: {
         includeMarketAnalysis: false,
         depth: "standard",
       },
+      ...(rawData ? { rawData } : {}),
     });
 
   if (discovery.status === "failed") {
@@ -542,6 +549,17 @@ function createOrganizationDiscoveredHandler(
       errors: [],
     };
   };
+}
+
+function extractRawData(payload: BusinessEventPayload): Readonly<Record<string, unknown>> | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const rawData = (payload as Record<string, unknown>).rawData;
+  if (typeof rawData !== "object" || rawData === null || Array.isArray(rawData)) {
+    return undefined;
+  }
+  return rawData as Readonly<Record<string, unknown>>;
 }
 
 function rejected(message: string): BusinessEventHandlerOutcome {

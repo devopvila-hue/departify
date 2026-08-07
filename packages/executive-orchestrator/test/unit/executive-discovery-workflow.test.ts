@@ -294,4 +294,36 @@ describe("ExecutiveDiscoveryWorkflow", () => {
 
     expect(result.status).toBe("completed");
   });
+
+  it("forwards the real company rawData to the discovery service (Sprint 56)", async () => {
+    const received: { rawData?: unknown } = {};
+    const discoveryService: BusinessDiscoveryService = {
+      initiateDiscovery: async (request: unknown) => {
+        const candidate = request as { rawData?: unknown };
+        received.rawData = candidate.rawData;
+        return buildDiscoverySuccess();
+      },
+    } as unknown as BusinessDiscoveryService;
+    const orchestrator: ExecutiveOrchestrator = {
+      orchestrateDiscoveryAnalyze: async () => buildOrchestrationSuccess(),
+    } as unknown as ExecutiveOrchestrator;
+
+    const workflow = createExecutiveDiscoveryWorkflow({
+      discoveryService,
+      orchestrator,
+      clock: () => new Date("2026-08-06T10:00:00Z"),
+      executionIdFactory: () => "exe_disc_rawdata_001",
+    });
+
+    const rawData = {
+      mission: {
+        statement: "MOON co-living: shared living in Barcelona and Madrid",
+      },
+      market: { industry: "co-living" },
+    };
+    const result = await workflow.run({ ...input, rawData });
+
+    expect(result.status).toBe("completed");
+    expect(received.rawData).toEqual(rawData);
+  });
 });
