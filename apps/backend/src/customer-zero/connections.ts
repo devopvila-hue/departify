@@ -145,6 +145,52 @@ export const TOOL_CATALOG: readonly ToolDescriptor[] = [
     connectable: false,
     requiredCredentials: ["ZOHO_OAUTH_CLIENT_ID", "ZOHO_OAUTH_CLIENT_SECRET"],
   },
+  // Mautic — entered by the founder in Customer Zero. Integration discovery
+  // (Sprint 58) treats this as a real connector: OAuth2 client_credentials
+  // is the documented flow for Marketing/CRM access. The connector is
+  // currently `connectable: false` because the backend does not ship the
+  // generic OAuth handshake for it yet — but the CEO is never told
+  // "no soportado"; they see the why and the planned path.
+  {
+    id: "mautic",
+    label: "Mautic",
+    capability: "crm.contacts",
+    categoryEs: "CRM",
+    categoryEn: "CRM",
+    connectable: false,
+    requiredCredentials: [
+      "MAUTIC_BASE_URL",
+      "MAUTIC_CLIENT_ID",
+      "MAUTIC_CLIENT_SECRET",
+    ],
+  },
+  {
+    id: "mailchimp",
+    label: "Mailchimp",
+    capability: "email.send",
+    categoryEs: "Correo",
+    categoryEn: "Email",
+    connectable: false,
+    requiredCredentials: ["MAILCHIMP_API_KEY"],
+  },
+  {
+    id: "slack",
+    label: "Slack",
+    capability: "messaging.direct",
+    categoryEs: "Mensajería",
+    categoryEn: "Messaging",
+    connectable: false,
+    requiredCredentials: ["SLACK_OAUTH_CLIENT_ID", "SLACK_OAUTH_CLIENT_SECRET"],
+  },
+  {
+    id: "notion",
+    label: "Notion",
+    capability: "workspace.documents",
+    categoryEs: "Productividad",
+    categoryEn: "Productivity",
+    connectable: false,
+    requiredCredentials: ["NOTION_OAUTH_CLIENT_ID", "NOTION_OAUTH_CLIENT_SECRET"],
+  },
 ];
 
 /** Free-text / synonym resolution: the CEO's words → the internal connector. */
@@ -168,6 +214,10 @@ const ALIASES: Readonly<Record<string, string>> = {
   salesforce: "salesforce",
   pipedrive: "pipedrive",
   zoho: "zoho",
+  mautic: "mautic",
+  mailchimp: "mailchimp",
+  slack: "slack",
+  notion: "notion",
 };
 
 /**
