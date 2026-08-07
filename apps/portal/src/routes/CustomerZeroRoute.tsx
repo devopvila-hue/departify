@@ -128,7 +128,26 @@ export function CustomerZeroRoute() {
     (async () => {
       try {
         const response = await fetch(`/api/customer-zero/${parsed.organizationId}`);
-        if (!response.ok) return;
+        if (response.status === 404) {
+          // The local reference no longer exists on the backend (sessions are
+          // in-memory and may have been lost on restart). Treat it as a stale
+          // local session: clear it and let the CEO start fresh — no error.
+          if (!cancelled) {
+            window.localStorage.removeItem("departify_customer_zero");
+            setOrganizationId(null);
+          }
+          return;
+        }
+        if (!response.ok) {
+          // 5xx or other server errors are recoverable: keep the reference
+          // and offer a human retry instead of a fatal error.
+          if (!cancelled) {
+            setError(
+              "No hemos podido conectar con Departify. Inténtalo de nuevo.",
+            );
+          }
+          return;
+        }
         const status = (await response.json()) as {
           organizationId: string;
           department: DepartmentSurface | null;
@@ -148,7 +167,12 @@ export function CustomerZeroRoute() {
           setStep({ name: "conversation", org: parsed.organizationId });
         }
       } catch {
-        /* resume is best-effort */
+        // Network failure: recoverable, offer a retry with human language.
+        if (!cancelled) {
+          setError(
+            "No hemos podido conectar con Departify. Inténtalo de nuevo.",
+          );
+        }
       }
     })();
     return () => {

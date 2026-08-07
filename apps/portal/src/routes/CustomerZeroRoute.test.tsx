@@ -239,4 +239,79 @@ describe("CustomerZeroRoute — UX v2", () => {
     expect(screen.queryByText(/discovery completed/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /vamos a trabajar/i })).toBeInTheDocument();
   });
+
+  it("recovers from a stale local session: clears it and shows clean onboarding", async () => {
+    // The portal has a persisted organizationId, but the backend no longer
+    // knows it (in-memory sessions lost on restart) → GET returns 404.
+    window.localStorage.setItem(
+      "departify_customer_zero",
+      JSON.stringify({ organizationId: "org_lost_session" }),
+    );
+    mockFetch(async (url) => {
+      if (url === "/api/customer-zero/org_lost_session") {
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({ error: "Session not found." }),
+        } as Response;
+      }
+      return okJson({});
+    });
+
+    render(<CustomerZeroRoute />);
+
+    // The stale reference is cleared, onboarding shows cleanly, and no error
+    // is shown to the CEO.
+    await waitFor(() =>
+      expect(window.localStorage.getItem("departify_customer_zero")).toBeNull(),
+    );
+    expect(
+      screen.getByRole("heading", { name: /cuéntame lo mínimo sobre tu empresa/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/fetch failed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/404/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    // The CEO can start a brand new session: the onboarding form is
+    // interactive and no error blocks it.
+    fireEvent.change(screen.getByPlaceholderText("MOON Shared Living"), {
+      target: { value: "Nueva empresa" },
+    });
+    expect(screen.getByPlaceholderText("MOON Shared Living")).toHaveValue(
+      "Nueva empresa",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /estoy empezando/i }));
+    expect(
+      screen.getByPlaceholderText(/estoy creando|cuéntanos qué estás creando/i),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a recoverable human message on a server error instead of a fatal one", async () => {
+    window.localStorage.setItem(
+      "departify_customer_zero",
+      JSON.stringify({ organizationId: "org_moon" }),
+    );
+    mockFetch(async (url) => {
+      if (url === "/api/customer-zero/org_moon") {
+        return {
+          ok: false,
+          status: 500,
+          json: async () => ({}),
+        } as Response;
+      }
+      return okJson({});
+    });
+
+    render(<CustomerZeroRoute />);
+
+    expect(
+      await screen.findByText(/no hemos podido conectar con departify/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/fetch failed/i)).not.toBeInTheDocument();
+    // The stale reference is kept: this is a recoverable server error, not a
+    // lost session.
+    expect(window.localStorage.getItem("departify_customer_zero")).toContain(
+      "org_moon",
+    );
+  });
 });
