@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import type { CompanyDiscoveryReport } from "@departify/business-discovery";
+import type {
+  CompanyDiscoveryReport,
+  DiscoveryGap,
+  DiscoveryQuestion,
+} from "@departify/business-discovery";
 import { buildEmptyCompanyDNA } from "@departify/business-discovery";
 import { curateMandatoryQuestions } from "../src/customer-zero/questions.js";
 import { buildAnswersRawData } from "../src/customer-zero/answers.js";
@@ -29,7 +33,7 @@ function buildReport(
       description: `Missing ${g.category}`,
       importance: g.importance,
       blockingAction: g.importance === "critical",
-    })),
+    })) as DiscoveryGap[],
     questions: questions.map((q) => ({
       id: `q_${q.category}`,
       gapId: `gap_${q.category}`,
@@ -39,7 +43,7 @@ function buildReport(
       priority: q.priority,
       context: "ctx",
       importance: q.importance,
-    })),
+    })) as DiscoveryQuestion[],
     confidence: {
       overall: "low",
       companyDna: 0,
