@@ -7,6 +7,10 @@
  *   → herramientas + connection cards en la conversación
  *   → transición natural a Marketing con TODO el contexto.
  *
+ *   Sprint 58 adds the Command Center endpoints: the CEO's single chat lives
+ *   at `/api/customer-zero/:organizationId/command-center/...` and the same
+ *   `marketing.chat` tool from Core Tool Catalog answers through it.
+ *
  * Thin adapters only: every analysis, question and deliverable comes from the
  * composed runtime. Nothing is simulated.
  */
@@ -60,6 +64,12 @@ import {
   buildHeadView,
   getMarketingHead,
 } from "../../customer-zero/department-identity.js";
+import {
+  buildCommandCenterInput,
+  buildProactiveOpening,
+  routeCommandCenter,
+  type CommandCenterEvent,
+} from "../../customer-zero/command-center.js";
 import type { CompanyDiscoveryReport } from "@departify/business-discovery";
 
 export async function registerCustomerZeroV2Routes(
@@ -545,6 +555,176 @@ export async function registerCustomerZeroV2Routes(
       return reply.code(200).send({
         organizationId,
         ...buildCeoOverview(session),
+      });
+    },
+  );
+
+  /* -------------------------------------------------------------------------
+   * Command Center (Sprint 58) — the CEO's single chat surface.
+   *
+   * The portal's Home (called "Dirección") hosts the Command Center. Three
+   * endpoints:
+   *
+   *   GET  /:organizationId/command-center/opening
+   *     → proactive opening events to render BEFORE the CEO types anything.
+   *
+   *   POST /:organizationId/command-center/message
+   *     → route a CEO message. Returns the reply + structured events.
+   *       When the routing decision is `delegate_marketing` we also call
+   *       the existing `marketing.chat` tool through the AgentToolBridge so
+   *       the Marketing Director's own reasoning is preserved.
+   *
+   *   POST /:organizationId/command-center/ask
+   *     → "Preguntar sobre esto" from the Marketing workspace. Composes a
+   *       contextual message carrying the work item / department surface
+   *       reference and routes it through the Command Center.
+   *
+   * The transcript is the same `session.state.conversation` array the
+   * Customer Zero flow already uses. The events are returned separately so
+   * the portal can render them as cards without polluting the transcript.
+   * -------------------------------------------------------------------------*/
+
+  server.get(
+    "/api/customer-zero/:organizationId/command-center/opening",
+    {
+      schema: {
+        tags: ["command-center"],
+        summary: "Proactive opening events for the CEO Command Center",
+        params: {
+          type: "object",
+          required: ["organizationId"],
+          properties: { organizationId: { type: "string" } },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["organizationId", "events"],
+            properties: {
+              organizationId: { type: "string" },
+              events: { type: "array" },
+            },
+          },
+          404: { type: "object", properties: { error: { type: "string" } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId } = request.params as { organizationId: string };
+      const session = getCustomerZeroSession(organizationId);
+      if (!session) {
+        return reply.code(404).send({ error: "Session not found." });
+      }
+      const events = buildProactiveOpening(session);
+      return reply.code(200).send({ organizationId, events });
+    },
+  );
+
+  server.post(
+    "/api/customer-zero/:organizationId/command-center/message",
+    {
+      schema: {
+        tags: ["command-center"],
+        summary: "Route a CEO message through the Command Center",
+        params: {
+          type: "object",
+          required: ["organizationId"],
+          properties: { organizationId: { type: "string" } },
+        },
+        body: {
+          type: "object",
+          required: ["message"],
+          properties: {
+            message: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["organizationId", "reply", "events", "routing"],
+            properties: {
+              organizationId: { type: "string" },
+              reply: { type: "string" },
+              events: { type: "array" },
+              routing: { type: "object", additionalProperties: true },
+              connectionSuggestion: {
+                type: ["object", "null"],
+                additionalProperties: true,
+              },
+              pendingToolId: { type: ["string", "null"] },
+            },
+          },
+          404: { type: "object", properties: { error: { type: "string" } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId } = request.params as { organizationId: string };
+      const { message } = request.body as { message: string };
+      const session = getCustomerZeroSession(organizationId);
+      if (!session) {
+        return reply.code(404).send({ error: "Session not found." });
+      }
+
+      const input = buildCommandCenterInput(session, message);
+      const routed = routeCommandCenter(input);
+
+      // Persist the CEO turn in the transcript; the assistant reply is
+      // appended once we've resolved any marketing delegation.
+      let assistantReply = routed.reply;
+      let marketingTurn: { role: "user" | "assistant"; content: string } | null = null;
+
+      if (routed.decision.intent === "delegate_marketing") {
+        try {
+          const outcome = await session.port.executeAction({
+            actionId: `act_cc_${shortId()}`,
+            agentId: "agent_marketing_director",
+            organizationId,
+            toolId: "marketing.chat",
+            args: {
+              organizationId,
+              message,
+              history: session.state.conversation,
+            },
+          });
+          if (outcome.status === "completed") {
+            const output = outcome.output as { reply?: string } | undefined;
+            const marketingReply = output?.reply;
+            if (marketingReply && marketingReply.trim().length > 0) {
+              assistantReply = marketingReply;
+              marketingTurn = {
+                role: "assistant",
+                content: marketingReply,
+              };
+            }
+          }
+        } catch {
+          // Marketing Director failed: keep the routing reply. The CEO
+          // already saw the "I'll pass it to Elvira" acknowledgement.
+        }
+      }
+
+      session.state.conversation = [
+        ...session.state.conversation,
+        { role: "user", content: message },
+        marketingTurn ?? { role: "assistant", content: assistantReply },
+      ];
+
+      // Re-build proactive events so the portal can refresh cards after
+      // any state change the message might have triggered.
+      const events: CommandCenterEvent[] = buildProactiveOpening(session);
+
+      return reply.code(200).send({
+        organizationId,
+        reply: assistantReply,
+        events,
+        routing: routed.decision,
+        ...(routed.connectionSuggestion
+          ? { connectionSuggestion: routed.connectionSuggestion }
+          : { connectionSuggestion: null }),
+        ...(routed.pendingToolId !== undefined
+          ? { pendingToolId: routed.pendingToolId }
+          : { pendingToolId: null }),
       });
     },
   );
