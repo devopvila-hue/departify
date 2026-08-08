@@ -175,7 +175,8 @@ export interface RoutingDecision {
     | "unknown_department"
     | "greeting"
     | "knowledge_query"
-    | "remember_fact";
+    | "remember_fact"
+    | "external_tool_query";
   /** Departments that acted or were considered. Today only `marketing`. */
   readonly departments: readonly string[];
   /** Why this decision was made. */
@@ -272,6 +273,15 @@ const ROUTING_RULES: readonly RoutingRule[] = [
       "The CEO is asking what Marketing has learned or remembers.",
     match: (input) =>
       /\b(qu[ée]\s+(has|hemos|hab[ée]is)\s+aprendido|qu[ée]\s+(sabes|sab[ée]is|recuerdas|recuerdas de|conoces|conocemos)\b|what\s+(have|do)\s+(we|you)\s+(learned|know|remember)|aprendizaje|lo aprendido|hemos aprendido|has aprendido)\b/i.test(
+        input.message,
+      ),
+  },
+  {
+    intent: "external_tool_query",
+    rationale:
+      "The CEO is asking a business question that requires querying a connected external tool (Mautic, CRM, etc.).",
+    match: (input) =>
+      /\b(mautic|contactos?|contacts?|cu[áa]ntos\s+contactos?|cu[áa]ntas?\s+personas?|how many contacts|lista de contactos|busca\s+en\s+mautic|busca\s+contactos|search\s+contacts)\b/i.test(
         input.message,
       ),
   },

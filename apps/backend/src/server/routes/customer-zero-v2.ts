@@ -430,6 +430,59 @@ export async function registerCustomerZeroV2Routes(
         buildConnectionState(tool, session.state.locale);
       session.state.connections.set(tool.id, connection);
 
+      // Sprint 61 — Mautic uses API key auth (not OAuth). Validate
+      // credentials through the canonical Tool Runtime.
+      if (tool.id === "mautic") {
+        const connIsEs = session.state.locale !== "en";
+        const env = process.env;
+        const baseUrl = env["MAUTIC_BASE_URL"]?.trim();
+        const clientId = env["MAUTIC_CLIENT_ID"]?.trim();
+        const clientSecret = env["MAUTIC_CLIENT_SECRET"]?.trim();
+
+        if (!baseUrl || !clientId || !clientSecret) {
+          connection.status = "blocked";
+          connection.blockedReason = connIsEs
+            ? `Faltan las credenciales para conectar Mautic: MAUTIC_BASE_URL, MAUTIC_CLIENT_ID o MAUTIC_CLIENT_SECRET.`
+            : `Missing credentials to connect Mautic: MAUTIC_BASE_URL, MAUTIC_CLIENT_ID, or MAUTIC_CLIENT_SECRET.`;
+          connection.missingCredentials = ["MAUTIC_BASE_URL", "MAUTIC_CLIENT_ID", "MAUTIC_CLIENT_SECRET"].filter(
+            (key) => !env[key]?.trim(),
+          );
+          return reply.code(200).send({ organizationId, connection });
+        }
+
+        connection.status = "connecting";
+        try {
+          const outcome = await session.port.executeAction({
+            actionId: `act_mtc_connect_${shortId()}`,
+            agentId: "agent_marketing_director",
+            organizationId,
+            toolId: "mautic.test_connection",
+            args: {},
+          });
+
+          if (
+            outcome.status === "completed" &&
+            (outcome.output as { success?: boolean })?.success
+          ) {
+            completeConnection(connection);
+          } else {
+            const msg =
+              (outcome as { output?: { message?: string } })?.output
+                ?.message ?? "Connection test failed.";
+            connection.status = "blocked";
+            connection.blockedReason = connIsEs
+              ? `No se pudo validar la conexión con Mautic: ${msg}`
+              : `Could not validate Mautic connection: ${msg}`;
+          }
+        } catch (cause) {
+          connection.status = "blocked";
+          connection.blockedReason = connIsEs
+            ? `Error al conectar con Mautic: ${cause instanceof Error ? cause.message : "Error desconocido"}`
+            : `Error connecting to Mautic: ${cause instanceof Error ? cause.message : "Unknown error"}`;
+        }
+        return reply.code(200).send({ organizationId, connection });
+      }
+
       startConnection(
         connection,
         tool,
@@ -748,6 +801,81 @@ export async function registerCustomerZeroV2Routes(
           ? `Lo guardo. He apuntado esto como conocimiento del departamento de Marketing.`
           : `Saved. I have stored this as Marketing department knowledge.`;
         marketingTurn = { role: "assistant", content: assistantReply };
+      }
+
+      if (routed.decision.intent === "external_tool_query") {
+        const mauticConn = session.state.connections.get("mautic");
+        const mauticConnected = mauticConn?.status === "connected";
+
+        if (!mauticConnected) {
+          assistantReply = isEs
+            ? "Para responderte necesito acceder a Mautic. Todavía no está conectado. Puedes conectarlo en Conexiones."
+            : "To answer that I need access to Mautic. It is not connected yet. You can connect it in Connections.";
+          marketingTurn = { role: "assistant", content: assistantReply };
+        } else {
+          const msg = message.toLowerCase();
+          const isSearch =
+            /\b(busca|buscar|search|find|encuentra|busco)\b/i.test(msg);
+          const toolId = isSearch
+            ? "mautic.contacts.search"
+            : "mautic.contacts.count";
+
+          const toolArgs = isSearch
+            ? {
+                query: message
+                  .replace(
+                    /\b(busca|buscar|search|find|encuentra|busco)\s+(en\s+mautic\s+)?(contactos?\s+)?/i,
+                    "",
+                  )
+                  .trim(),
+              }
+            : {};
+
+          try {
+            const outcome = await session.port.executeAction({
+              actionId: `act_mautic_${shortId()}`,
+              agentId: "agent_marketing_director",
+              organizationId,
+              toolId,
+              args: toolArgs,
+            });
+
+            if (outcome.status === "completed") {
+              const output = outcome.output as { success?: boolean; count?: number; contacts?: Array<{ firstname: string; lastname: string; email: string }>; message?: string } | undefined;
+
+              if (output?.success) {
+                if (isSearch && output.contacts) {
+                  const lines = output.contacts.map(
+                    (c) =>
+                      `• ${[c.firstname, c.lastname].filter(Boolean).join(" ")} — ${c.email}`,
+                  );
+                  assistantReply = isEs
+                    ? `He encontrado ${output.count} contacto(s) en Mautic:\n\n${lines.join("\n")}`
+                    : `I found ${output.count} contact(s) in Mautic:\n\n${lines.join("\n")}`;
+                } else {
+                  assistantReply = isEs
+                    ? `En este momento hay ${output.count ?? 0} contactos en Mautic.`
+                    : `There are currently ${output.count ?? 0} contacts in Mautic.`;
+                }
+              } else {
+                assistantReply = isEs
+                  ? `No he podido consultar Mautic: ${output?.message ?? "Error desconocido."}`
+                  : `I could not query Mautic: ${output?.message ?? "Unknown error."}`;
+              }
+            } else {
+              const reason =
+                "reason" in outcome ? String(outcome.reason).slice(0, 100) : "execution failed";
+              assistantReply = isEs
+                ? `No he podido consultar Mautic: ${reason}`
+                : `I could not query Mautic: ${reason}`;
+            }
+          } catch {
+            assistantReply = isEs
+              ? "No he podido consultar Mautic ahora mismo. Puedo seguir con el resto del trabajo."
+              : "I could not query Mautic right now. I can continue with the rest of the work.";
+          }
+          marketingTurn = { role: "assistant", content: assistantReply };
+        }
       }
 
       session.state.conversation = [

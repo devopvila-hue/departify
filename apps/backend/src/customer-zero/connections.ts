@@ -145,19 +145,16 @@ export const TOOL_CATALOG: readonly ToolDescriptor[] = [
     connectable: false,
     requiredCredentials: ["ZOHO_OAUTH_CLIENT_ID", "ZOHO_OAUTH_CLIENT_SECRET"],
   },
-  // Mautic — entered by the founder in Customer Zero. Integration discovery
-  // (Sprint 58) treats this as a real connector: OAuth2 client_credentials
-  // is the documented flow for Marketing/CRM access. The connector is
-  // currently `connectable: false` because the backend does not ship the
-  // generic OAuth handshake for it yet — but the CEO is never told
-  // "no soportado"; they see the why and the planned path.
+  // Mautic — Sprint 61. OAuth2 client_credentials for the Marketing/CRM
+  // adapter. Connection validation goes through the canonical Tool Runtime
+  // (mautic.test_connection tool), not a standalone HTTP call.
   {
     id: "mautic",
     label: "Mautic",
     capability: "crm.contacts",
     categoryEs: "CRM",
     categoryEn: "CRM",
-    connectable: false,
+    connectable: true,
     requiredCredentials: [
       "MAUTIC_BASE_URL",
       "MAUTIC_CLIENT_ID",

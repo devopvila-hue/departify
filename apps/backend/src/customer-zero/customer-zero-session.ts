@@ -40,6 +40,11 @@ import {
 import { BusinessProvisioningService } from "@departify/platform-composition";
 import { registerAllCoreTools } from "@departify/tool-catalog";
 import {
+  createMauticContactCountToolDefinition,
+  createMauticContactSearchToolDefinition,
+  createMauticTestConnectionToolDefinition,
+} from "./mautic-tools.js";
+import {
   produceMarketingDiagnosis,
   formTeam,
   type MarketingDiagnosis,
@@ -206,12 +211,26 @@ export function getOrCreateCustomerZeroSession(
   });
 
   // Tool Runtime with the catalog's tools registered.
+  // Sprint 61: process isolation so network-capable tools (Mautic) can execute.
   const runtime = createToolRuntime({
-    grantedScopes: ["read.public", "read.private"],
+    grantedScopes: ["read.public", "read.private", "execute.network"],
+    isolationLevel: "process",
   });
   for (const entry of toolRegistry.list()) {
     runtime.registry.register(entry.definition);
     runtime.registry.setStatus(entry.definition.id, "active");
+  }
+
+  // Sprint 61 — Mautic connector tools (read-only, network-capable).
+  for (const def of [
+    createMauticTestConnectionToolDefinition(),
+    createMauticContactCountToolDefinition(),
+    createMauticContactSearchToolDefinition(),
+  ]) {
+    if (!runtime.registry.has(def.id)) {
+      runtime.registry.register(def);
+      runtime.registry.setStatus(def.id, "active");
+    }
   }
 
   // AgentToolBridge with the Marketing agents' permissions.
