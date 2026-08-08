@@ -28,6 +28,11 @@ export const envSchema = z.object({
     .positive()
     .optional(),
 
+  /** Public base URL of the portal (OAuth redirects + links). */
+  PUBLIC_BASE_URL: optionalUrl,
+  /** Comma-separated allowed browser origins for CORS. Empty = same-origin. */
+  CORS_ALLOWED_ORIGINS: z.string().optional().or(z.literal("")),
+
   NETLIFY_SITE_ID: z.string().optional().or(z.literal("")),
   NETLIFY_AUTH_TOKEN: optionalSecret,
 

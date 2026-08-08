@@ -14,6 +14,7 @@ const testConfig: BackendConfig = {
     tracingEnabled: false,
   },
   providers: {},
+  corsAllowedOrigins: [],
 };
 
 describe("backend server", () => {

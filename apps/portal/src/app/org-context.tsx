@@ -27,6 +27,15 @@ function readStored(): string | null {
   }
 }
 
+/**
+ * The stored organization id is a NAVIGATION preference, not authorization.
+ * Backend membership is the authoritative check.
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function readStoredOrganizationId(): string | null {
+  return readStored();
+}
+
 export function OrgProvider(props: { children: ReactNode }) {
   const [organizationId, setValue] = useState<string | null>(() => readStored());
 

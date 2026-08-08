@@ -79,9 +79,11 @@ import {
 } from "../../customer-zero/department-memory.js";
 import { buildSessionOperationalContext } from "../../customer-zero/operational-context.js";
 import type { CompanyDiscoveryReport } from "@departify/business-discovery";
+import type { ServerDeps } from "../deps.js";
 
 export async function registerCustomerZeroV2Routes(
   server: FastifyInstance,
+  deps: ServerDeps = {},
 ): Promise<void> {
   server.post(
     "/api/customer-zero/start",
@@ -123,6 +125,34 @@ export async function registerCustomerZeroV2Routes(
                 properties: {
                   code: { type: "string" },
                   message: { type: "string" },
+                },
+              },
+            },
+          },
+          500: {
+            type: "object",
+            properties: {
+              error: {
+                type: "object",
+                properties: {
+                  code: { type: "string" },
+                  message: { type: "string" },
+                  requestId: { type: "string" },
+                  statusCode: { type: "number" },
+                },
+              },
+            },
+          },
+          503: {
+            type: "object",
+            properties: {
+              error: {
+                type: "object",
+                properties: {
+                  code: { type: "string" },
+                  message: { type: "string" },
+                  requestId: { type: "string" },
+                  statusCode: { type: "number" },
                 },
               },
             },
@@ -177,7 +207,39 @@ export async function registerCustomerZeroV2Routes(
         });
       }
 
-      const organizationId = `org_${slugify(body.companyName)}_${shortId()}`;
+      // P0-A — the organization must be a real, durable tenant record owned
+      // by the authenticated user. The verified user id comes from the
+      // request token (never from the browser). Organization creation is
+      // atomic (organization + owner membership) through the store.
+      const ownerId = request.authUser?.id;
+      if (!ownerId || !deps.organizations) {
+        return reply.code(503).send({
+          error: {
+            code: "AUTH_UNAVAILABLE",
+            message: "Authentication is not configured.",
+            requestId: request.id,
+            statusCode: 503,
+          },
+        });
+      }
+      let organizationId: string;
+      try {
+        const organization = await deps.organizations.createOrganization(
+          body.companyName.trim(),
+          ownerId,
+        );
+        organizationId = organization.organizationId;
+      } catch (cause) {
+        request.log.error({ error: cause }, "Organization creation failed");
+        return reply.code(500).send({
+          error: {
+            code: "ORGANIZATION_CREATION_FAILED",
+            message: "Could not create the organization.",
+            requestId: request.id,
+            statusCode: 500,
+          },
+        });
+      }
       const session = getOrCreateCustomerZeroSession(organizationId, { locale });
       session.state.locale = locale;
       session.state.companyName = body.companyName;
@@ -501,7 +563,7 @@ export async function registerCustomerZeroV2Routes(
         tool,
         {
           env: process.env,
-          redirectUri: `${publicBaseUrl()}/api/customer-zero/${organizationId}/connections/${tool.id}/callback`,
+          redirectUri: `${deps.publicBaseUrl ?? publicBaseUrl()}/api/customer-zero/${organizationId}/connections/${tool.id}/callback`,
         },
         session.state.locale,
       );
@@ -1387,16 +1449,6 @@ function mostRecentReport(session: {
     (a, b) => b.generatedAt.getTime() - a.generatedAt.getTime(),
   );
   return reports[0] ?? null;
-}
-
-function slugify(value: string): string {
-  const slug = value
-    .toLowerCase()
-    .replace(/https?:\/\//, "")
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 40);
-  return slug.length > 0 ? slug : "company";
 }
 
 function shortId(): string {

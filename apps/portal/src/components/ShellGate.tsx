@@ -2,14 +2,18 @@ import { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 
 import { api } from "@/app/api";
+import { useAuth } from "@/app/auth-context";
 import { useOrg } from "@/app/org-context";
 import { AppShell } from "@/components/AppShell";
 
 /**
- * Guards the portal: the shell only exists once the CEO has a company with
- * its department. Without one, back to onboarding.
+ * Guards the portal (Phase P0-A): the shell exists only for an authenticated
+ * user with a real organization. Identity is Supabase; the organization id is
+ * a navigation preference that the backend re-validates on every call.
+ * Without an authenticated user or organization, back to "/".
  */
 export function ShellGate() {
+  const { user, loading } = useAuth();
   const { organizationId } = useOrg();
   const location = useLocation();
   const [state, setState] = useState<
@@ -17,7 +21,7 @@ export function ShellGate() {
   >({ status: "loading" });
 
   useEffect(() => {
-    if (!organizationId) {
+    if (!user || !organizationId) {
       setState({ status: "missing" });
       return;
     }
@@ -39,9 +43,16 @@ export function ShellGate() {
       cancelled = true;
     };
     // Re-read on navigation so the pending count stays truthful.
-  }, [organizationId, location.pathname]);
+  }, [user, organizationId, location.pathname]);
 
-  if (state.status === "missing") {
+  if (loading) {
+    return (
+      <div className="dfy-boot" role="status">
+        <p>Abriendo tu empresa…</p>
+      </div>
+    );
+  }
+  if (!user || state.status === "missing") {
     return <Navigate to="/" replace />;
   }
   if (state.status === "loading") {

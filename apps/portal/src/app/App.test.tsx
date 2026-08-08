@@ -3,11 +3,11 @@ import { render, screen } from "@testing-library/react";
 import { App } from "@/app/App";
 
 describe("App", () => {
-  it("renders the onboarding as the entry point", () => {
+  it("renders the login screen as the entry point (P0-A)", async () => {
     render(<App />);
 
     expect(
-      screen.getByRole("heading", { name: /cuéntame lo mínimo sobre tu empresa/i }),
+      await screen.findByRole("heading", { name: /entra en tu empresa/i }),
     ).toBeInTheDocument();
   });
 });

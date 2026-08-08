@@ -3,18 +3,18 @@ import { createBrowserRouter, Navigate } from "react-router-dom";
 import { ChatRoute } from "@/routes/ChatRoute";
 import { CompanyRoute } from "@/routes/CompanyRoute";
 import { ConnectionsRoute } from "@/routes/ConnectionsRoute";
-import { CustomerZeroRoute } from "@/routes/CustomerZeroRoute";
 import { DecisionsRoute } from "@/routes/DecisionsRoute";
 import { DepartmentsRoute } from "@/routes/DepartmentsRoute";
 import { MarketingRoute } from "@/routes/MarketingRoute";
 import { ResultsRoute } from "@/routes/ResultsRoute";
+import { RootRoute } from "@/routes/RootRoute";
 import { ShellGate } from "@/components/ShellGate";
 import { TasksRoute } from "@/routes/TasksRoute";
 
 /**
- * Sprint 59 information architecture.
+ * Sprint 59 information architecture (Phase P0-A adds the identity gate).
  *
- *   /                    → onboarding (Customer Zero)
+ *   /                    → identity + onboarding (RootRoute)
  *   /chat                → THE central conversation (the home)
  *   /tareas              → operational inbox of real work items
  *   /departamentos       → active + future departments
@@ -29,7 +29,7 @@ import { TasksRoute } from "@/routes/TasksRoute";
  */
 
 export const router = createBrowserRouter([
-  { path: "/", element: <CustomerZeroRoute /> },
+  { path: "/", element: <RootRoute /> },
   {
     element: <ShellGate />,
     children: [

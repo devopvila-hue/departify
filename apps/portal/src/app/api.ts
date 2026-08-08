@@ -200,9 +200,81 @@ export interface CommandCenterMessageResult {
   pendingToolId: string | null;
 }
 
+/* -------------------------------------------------------------------------
+ * Auth + tenant (Phase P0-A).
+ * -------------------------------------------------------------------------*/
+
+export interface MeView {
+  user: { id: string; email?: string };
+  organizations: { organizationId: string; name: string; role: string }[];
+}
+
+export interface ResearchStageView {
+  id: string;
+  label: string;
+  status: "pending" | "running" | "done" | "failed";
+  finding?: string;
+}
+
+export interface ProgressView {
+  organizationId: string;
+  status: "running" | "completed" | "failed";
+  stages: ResearchStageView[];
+  estimatedMs: number | null;
+  error?: string;
+  gapCount?: number;
+  understood: Record<string, unknown>;
+}
+
+export interface ProgressiveQuestionView {
+  id: string;
+  kind: string;
+  category?: string;
+  question: string;
+  component: string;
+  options?: string[];
+  weight: string;
+  hint?: string;
+}
+
+export interface ConversationView {
+  organizationId: string;
+  question: ProgressiveQuestionView | null;
+  ready: boolean;
+  gapCount: number;
+  connections: ConnectionCard[];
+  transcript: { questionId: string; question: string; answer: string }[];
+  intro: string;
+  handoff?: string;
+  gapsResolved?: number;
+}
+
+export interface StartView {
+  organizationId: string;
+  url?: string;
+  estimatedMs?: number | null;
+  error?: { message: string };
+}
+
+let accessToken: string | null = null;
+
+/** The portal keeps Supabase's session token in memory and attaches it to
+ *  every protected API call. Cleared on logout. */
+export function setApiAccessToken(token: string | null): void {
+  accessToken = token;
+}
+
+function buildHeaders(init?: RequestInit): Headers {
+  const headers = new Headers(init?.headers);
+  if (accessToken) {
+    headers.set("authorization", `Bearer ${accessToken}`);
+  }
+  return headers;
+}
+
 async function getJson<T>(url: string): Promise<T | null> {
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { headers: buildHeaders() });
     if (!response.ok) return null;
     return (await response.json()) as T;
   } catch {
@@ -212,11 +284,15 @@ async function getJson<T>(url: string): Promise<T | null> {
 
 async function postJson<T>(url: string, body?: unknown): Promise<T | null> {
   try {
+    const headers = buildHeaders();
+    if (body !== undefined) {
+      headers.set("content-type", "application/json");
+    }
     const response = await fetch(url, {
       method: "POST",
-      ...(body
-        ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }
-        : {}),
+      ...(body !== undefined
+        ? { headers, body: JSON.stringify(body) }
+        : { headers }),
     });
     const parsed = (await response.json()) as T;
     return response.ok ? parsed : parsed;
@@ -226,6 +302,38 @@ async function postJson<T>(url: string, body?: unknown): Promise<T | null> {
 }
 
 export const api = {
+  me: () => getJson<MeView>("/api/auth/me"),
+  start: (payload: Record<string, unknown>) =>
+    postJson<StartView>("/api/customer-zero/start", payload),
+  progress: (org: string) =>
+    getJson<ProgressView>(`/api/customer-zero/${org}/progress`),
+  nextQuestion: (org: string) =>
+    getJson<ConversationView>(`/api/customer-zero/${org}/next-question`),
+  answer: (org: string, questionId: string, answers: string[]) =>
+    postJson<ConversationView>(`/api/customer-zero/${org}/answer`, {
+      questionId,
+      answers,
+    }),
+  enterMarketing: (org: string) =>
+    postJson<{ organizationId: string; error?: { message?: string } }>(
+      `/api/customer-zero/${org}/marketing`,
+    ),
+  /** Resume helper: distinguishes a stale session (404) from a server error. */
+  statusDetailed: async (
+    org: string,
+  ): Promise<{ status: number; data: CompanyStatus | null } | null> => {
+    try {
+      const response = await fetch(`/api/customer-zero/${org}`, {
+        headers: buildHeaders(),
+      });
+      const data = response.ok
+        ? ((await response.json()) as CompanyStatus)
+        : null;
+      return { status: response.status, data };
+    } catch {
+      return null;
+    }
+  },
   overview: (org: string) => getJson<CeoOverview>(`/api/customer-zero/${org}/overview`),
   status: (org: string) => getJson<CompanyStatus>(`/api/customer-zero/${org}`),
   connections: (org: string) =>

@@ -1,6 +1,9 @@
 export {
+  authConfigSchema,
   backendConfigSchema,
+  loadAuthConfig,
   loadBackendConfig,
+  type AuthConfig,
   type BackendConfig,
   loadGoogleVertexProviderConfig,
   googleVertexProviderConfigSchema,

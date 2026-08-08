@@ -1,4 +1,5 @@
 import {
+  authConfigSchema,
   backendConfigSchema,
   googleVertexProviderConfigSchema,
   llmRouterConfigSchema,
@@ -219,5 +220,47 @@ describe("backendConfigSchema", () => {
       },
     });
     expect(JSON.stringify(config)).not.toContain("secret");
+  });
+
+  it("parses PUBLIC_BASE_URL and CORS origins (P0-A)", () => {
+    const config = backendConfigSchema.parse({
+      NODE_ENV: "test",
+      PUBLIC_BASE_URL: "https://app.departify.app",
+      CORS_ALLOWED_ORIGINS: "https://app.departify.app, https://staging.departify.app",
+    });
+
+    expect(config.publicBaseUrl).toBe("https://app.departify.app");
+    expect(config.corsAllowedOrigins).toEqual([
+      "https://app.departify.app",
+      "https://staging.departify.app",
+    ]);
+  });
+
+  it("defaults CORS origins to an empty list (same-origin only)", () => {
+    const config = backendConfigSchema.parse({ NODE_ENV: "test" });
+    expect(config.corsAllowedOrigins).toEqual([]);
+    expect(config.publicBaseUrl).toBeUndefined();
+  });
+});
+
+describe("authConfigSchema (P0-A)", () => {
+  it("loads Supabase identity config without exposing values", () => {
+    const config = authConfigSchema.parse({
+      SUPABASE_URL: "http://127.0.0.1:54321",
+      SUPABASE_PUBLISHABLE_KEY: "anon-key",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    });
+
+    expect(config).toEqual({
+      supabaseUrl: "http://127.0.0.1:54321",
+      supabaseAnonKey: "anon-key",
+      supabaseServiceRoleKey: "service-role-key",
+    });
+  });
+
+  it("rejects missing Supabase auth variables", () => {
+    expect(() => authConfigSchema.parse({})).toThrow(
+      "SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY and SUPABASE_SERVICE_ROLE_KEY",
+    );
   });
 });

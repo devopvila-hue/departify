@@ -2,22 +2,40 @@ import { describe, it, expect, beforeAll } from "vitest";
 import { buildServer } from "../src/server/server.js";
 import { loadBackendConfig } from "@departify/config";
 import type { FastifyInstance } from "fastify";
+import type { InjectOptions } from "light-my-request";
+import { makeFakeTenant } from "./helpers/fake-tenant.js";
 
 /**
  * End-to-end route test of the Customer Zero UX v2 flow. No network and no
  * real inference are required: the website fetch / LLM interpretation degrade
  * gracefully and the deterministic discovery pipeline still runs, which is
  * exactly the behaviour we want to keep honest.
+ *
+ * P0-A: every request is made as user-a through the fake tenant boundary.
  */
 describe("Customer Zero UX v2 routes", () => {
   let server: FastifyInstance;
 
   beforeAll(async () => {
-    server = await buildServer(loadBackendConfig());
+    const tenant = makeFakeTenant();
+    server = await buildServer(loadBackendConfig(), {
+      auth: tenant,
+      organizations: tenant,
+    });
   });
 
+  function authedInject(options: InjectOptions) {
+    return server.inject({
+      ...options,
+      headers: {
+        authorization: "Bearer token-a",
+        ...(options.headers ?? {}),
+      },
+    });
+  }
+
   it("rejects an unusable website with a human message", async () => {
-    const response = await server.inject({
+    const response = await authedInject({
       method: "POST",
       url: "/api/customer-zero/start",
       payload: { companyName: "Moon", hasWebsite: true, url: "no tengo web" },
@@ -27,7 +45,7 @@ describe("Customer Zero UX v2 routes", () => {
   });
 
   it("accepts a URL without protocol and normalizes it", async () => {
-    const response = await server.inject({
+    const response = await authedInject({
       method: "POST",
       url: "/api/customer-zero/start",
       payload: {
@@ -45,7 +63,7 @@ describe("Customer Zero UX v2 routes", () => {
   });
 
   it("runs the no-website path from the founder's own description", async () => {
-    const start = await server.inject({
+    const start = await authedInject({
       method: "POST",
       url: "/api/customer-zero/start",
       payload: {
@@ -60,7 +78,7 @@ describe("Customer Zero UX v2 routes", () => {
     expect(start.statusCode).toBe(200);
     const organizationId = start.json().organizationId as string;
 
-    const progress = await server.inject({
+    const progress = await authedInject({
       method: "GET",
       url: `/api/customer-zero/${organizationId}/progress`,
     });
@@ -76,7 +94,7 @@ describe("Customer Zero UX v2 routes", () => {
     expect(stages[0]?.label).toBe("Leyendo lo que nos has contado");
 
     // No description → explicit, human error instead of a fake analysis.
-    const missing = await server.inject({
+    const missing = await authedInject({
       method: "POST",
       url: "/api/customer-zero/start",
       payload: { companyName: "Sin nada", hasWebsite: false },
@@ -85,7 +103,7 @@ describe("Customer Zero UX v2 routes", () => {
   });
 
   it("asks one question at a time and connects tools in-conversation", async () => {
-    const start = await server.inject({
+    const start = await authedInject({
       method: "POST",
       url: "/api/customer-zero/start",
       payload: {
@@ -97,7 +115,7 @@ describe("Customer Zero UX v2 routes", () => {
     });
     const organizationId = start.json().organizationId as string;
 
-    const first = await server.inject({
+    const first = await authedInject({
       method: "GET",
       url: `/api/customer-zero/${organizationId}/next-question`,
     });
@@ -106,7 +124,7 @@ describe("Customer Zero UX v2 routes", () => {
     expect(question).not.toBeNull();
 
     // Tools question → Gmail + Otra.
-    const toolsAnswer = await server.inject({
+    const toolsAnswer = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${organizationId}/answer`,
       payload: { questionId: "ops:tools", answers: ["Gmail", "Otra"] },
@@ -120,19 +138,19 @@ describe("Customer Zero UX v2 routes", () => {
     expect(toolsAnswer.json().question.id).toBe("ops:tool_other");
 
     // "Otra" → we ask which one; an unknown tool is recorded honestly.
-    await server.inject({
+    await authedInject({
       method: "POST",
       url: `/api/customer-zero/${organizationId}/answer`,
       payload: { questionId: "ops:tool_other", answer: "Un CRM propio" },
     });
-    const unmapped = await server.inject({
+    const unmapped = await authedInject({
       method: "GET",
       url: `/api/customer-zero/${organizationId}/connections`,
     });
     expect(unmapped.json().unmappedTools).toContain("Un CRM propio");
 
     // CRM = no is a valid answer and does not block anything.
-    const crm = await server.inject({
+    const crm = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${organizationId}/answer`,
       payload: { questionId: "ops:crm", answer: "No utilizo CRM" },
@@ -140,7 +158,7 @@ describe("Customer Zero UX v2 routes", () => {
     expect(crm.statusCode).toBe(200);
 
     // Connection card CTA → real handshake; blocked without the credential.
-    const connect = await server.inject({
+    const connect = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${organizationId}/connections/gmail/connect`,
     });
@@ -160,7 +178,7 @@ describe("Customer Zero UX v2 routes", () => {
   });
 
   it("restores objetivo, respuestas, herramientas y conexiones after a reload", async () => {
-    const start = await server.inject({
+    const start = await authedInject({
       method: "POST",
       url: "/api/customer-zero/start",
       payload: {
@@ -173,13 +191,13 @@ describe("Customer Zero UX v2 routes", () => {
     });
     const organizationId = start.json().organizationId as string;
 
-    await server.inject({
+    await authedInject({
       method: "POST",
       url: `/api/customer-zero/${organizationId}/answer`,
       payload: { questionId: "ops:tools", answers: ["Gmail"] },
     });
 
-    const status = await server.inject({
+    const status = await authedInject({
       method: "GET",
       url: `/api/customer-zero/${organizationId}`,
     });
@@ -197,7 +215,7 @@ describe("Customer Zero UX v2 routes", () => {
   });
 
   it("hands off to Marketing carrying the CEO's initial goal", async () => {
-    const start = await server.inject({
+    const start = await authedInject({
       method: "POST",
       url: "/api/customer-zero/start",
       payload: {
@@ -209,7 +227,7 @@ describe("Customer Zero UX v2 routes", () => {
       },
     });
     const organizationId = start.json().organizationId as string;
-    const handoff = await server.inject({
+    const handoff = await authedInject({
       method: "GET",
       url: `/api/customer-zero/${organizationId}/handoff`,
     });
@@ -224,7 +242,7 @@ describe("Customer Zero UX v2 routes", () => {
     // The CEO's own company name must always win, even when the research
     // guesses a different one from the website or description. Regression for
     // the case where the LLM-derived companyName overwrote the explicit input.
-    const start = await server.inject({
+    const start = await authedInject({
       method: "POST",
       url: "/api/customer-zero/start",
       payload: {
@@ -238,7 +256,7 @@ describe("Customer Zero UX v2 routes", () => {
     expect(start.statusCode).toBe(200);
     const organizationId = start.json().organizationId as string;
 
-    const overview = await server.inject({
+    const overview = await authedInject({
       method: "GET",
       url: `/api/customer-zero/${organizationId}/overview`,
     });

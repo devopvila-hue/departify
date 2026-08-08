@@ -29,6 +29,9 @@ importers:
       '@departify/agent-tool-bridge':
         specifier: workspace:^
         version: link:../../packages/agent-tool-bridge
+      '@departify/auth':
+        specifier: workspace:^
+        version: link:../../packages/auth
       '@departify/business-discovery':
         specifier: workspace:^
         version: link:../../packages/business-discovery
@@ -77,12 +80,18 @@ importers:
       '@departify/workflows':
         specifier: workspace:^
         version: link:../../packages/workflows
+      '@fastify/cors':
+        specifier: ^10.0.0
+        version: 10.1.0
       '@fastify/swagger':
         specifier: ^9.4.0
         version: 9.8.1
       '@fastify/swagger-ui':
         specifier: ^5.2.0
         version: 5.2.6
+      '@supabase/supabase-js':
+        specifier: 2.112.1
+        version: 2.112.1(@opentelemetry/api@1.9.1)
       fastify:
         specifier: ^5.2.1
         version: 5.11.2
@@ -99,6 +108,9 @@ importers:
       globals:
         specifier: ^15.14.0
         version: 15.15.0
+      light-my-request:
+        specifier: 6.6.0
+        version: 6.6.0
       tsx:
         specifier: ^4.19.2
         version: 4.23.8
@@ -114,6 +126,9 @@ importers:
 
   apps/portal:
     dependencies:
+      '@supabase/supabase-js':
+        specifier: 2.112.1
+        version: 2.112.1(@opentelemetry/api@1.9.1)
       '@tanstack/react-query':
         specifier: ^5.62.0
         version: 5.101.4(react@19.2.8)
@@ -277,7 +292,26 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.32.0)(tsx@4.23.8)(yaml@2.9.0)
 
-  packages/auth: {}
+  packages/auth:
+    devDependencies:
+      '@eslint/js':
+        specifier: ^9.17.0
+        version: 9.39.5
+      eslint:
+        specifier: ^9.17.0
+        version: 9.39.5(jiti@2.7.0)
+      globals:
+        specifier: ^15.14.0
+        version: 15.15.0
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      typescript-eslint:
+        specifier: ^8.18.0
+        version: 8.66.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.7.0)(jsdom@25.0.1)(lightningcss@1.32.0)(tsx@4.23.8)(yaml@2.9.0)
 
   packages/business-discovery:
     devDependencies:
@@ -1582,6 +1616,9 @@ packages:
 
   '@fastify/busboy@3.2.0':
     resolution: {integrity: sha512-m9FVDXU3GT2ITSe0UaMA5rU3QkfC/UXtCU8y0gSN/GugTqtVldOBWIB5V6V3sbmenVZUIpU6f+mPEO2+m5iTaA==}
+
+  '@fastify/cors@10.1.0':
+    resolution: {integrity: sha512-MZyBCBJtII60CU9Xme/iE4aEy8G7QpzGR8zkdXZkDFt7ElEMachbE61tfhAG/bvSaULlqlf0huMT12T7iqEmdQ==}
 
   '@fastify/error@4.2.0':
     resolution: {integrity: sha512-RSo3sVDXfHskiBZKBPRgnQTtIqpi/7zhJOEmAxCiBcM7d0uwdGdxLlsCaLzGs8v8NnxIRlfG0N51p5yFaOentQ==}
@@ -5139,6 +5176,9 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
+  mnemonist@0.40.0:
+    resolution: {integrity: sha512-kdd8AFNig2AD5Rkih7EPCXhu/iMvwevQFX/uEiGhZyPZi7fHqOoF4V4kHLpCfysxXMgQ4B52kdPMCwARshKvEg==}
+
   modern-tar@0.8.1:
     resolution: {integrity: sha512-G/OFF6yTWgdGWS5IvhcrETxsgjsUdotEtHhW2nffB5vP5uCwkhnn38qRO7h6RF4uV0UlqyHx/bq2Vd5Oco4uoQ==}
     engines: {node: '>=18.0.0'}
@@ -5297,6 +5337,9 @@ packages:
   object.entries@1.1.9:
     resolution: {integrity: sha512-8u/hfXFRBD1O0hPUjioLhoWFHRmt6tKA4/vZPyckBr18l1KE9uHrFaFaUi8MDRTpi4uak2goyPTSNJLXX2k2Hw==}
     engines: {node: '>= 0.4'}
+
+  obliterator@2.0.5:
+    resolution: {integrity: sha512-42CPE9AhahZRsMNslczq0ctAEtqk8Eka26QofnqC346BZdHDySk3LWka23LI7ULIw11NmltpiLagIq8gBozxTw==}
 
   ofetch@1.5.1:
     resolution: {integrity: sha512-2W4oUZlVaqAPAil6FUg/difl6YhqhUR7x2eZY4bQCko22UXg3hptq9KLQdqFClV+Wu85UX7hNtdGTngi/1BxcA==}
@@ -7275,6 +7318,11 @@ snapshots:
       fast-uri: 3.1.5
 
   '@fastify/busboy@3.2.0': {}
+
+  '@fastify/cors@10.1.0':
+    dependencies:
+      fastify-plugin: 5.1.0
+      mnemonist: 0.40.0
 
   '@fastify/error@4.2.0': {}
 
@@ -11253,6 +11301,10 @@ snapshots:
 
   mkdirp@1.0.4: {}
 
+  mnemonist@0.40.0:
+    dependencies:
+      obliterator: 2.0.5
+
   modern-tar@0.8.1: {}
 
   module-definition@6.0.2:
@@ -11526,6 +11578,8 @@ snapshots:
       call-bound: 1.0.4
       define-properties: 1.2.1
       es-object-atoms: 1.1.2
+
+  obliterator@2.0.5: {}
 
   ofetch@1.5.1:
     dependencies:

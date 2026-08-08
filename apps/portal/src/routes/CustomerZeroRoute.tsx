@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
+import {
+  api,
+  type ConversationView,
+  type ProgressView,
+  type ProgressiveQuestionView,
+  type ResearchStageView,
+} from "@/app/api";
 import { useOrg } from "@/app/org-context";
 
 /**
@@ -13,47 +20,11 @@ import { useOrg } from "@/app/org-context";
  * never renders the department itself.
  */
 
-export interface InterpretedBusiness {
-  companyName?: string;
-  activity?: string;
-  mission?: string;
-  products?: string[];
-  services?: string[];
-  market?: string;
-  positioning?: string;
-  targetAudience?: string[];
-  tone?: string[];
-  locations?: string[];
-  valueProposition?: string;
-}
-
-export interface ResearchStage {
-  id: string;
-  label: string;
-  status: "pending" | "running" | "done" | "failed";
-  finding?: string;
-}
-
-export interface ProgressResponse {
-  organizationId: string;
-  status: "running" | "completed" | "failed";
-  stages: ResearchStage[];
-  estimatedMs: number | null;
-  error?: string;
-  gapCount?: number;
-  understood: InterpretedBusiness;
-}
-
-export interface ProgressiveQuestion {
-  id: string;
-  kind: "dna" | "tools" | "crm" | "tool_detail";
-  category?: string;
-  question: string;
-  component: "text" | "choice" | "multi_choice";
-  options?: string[];
-  weight: "blocking" | "useful" | "optional";
-  hint?: string;
-}
+/** Progress / step views come from the backend (typed in app/api). */
+export type ResearchStage = ResearchStageView;
+export type ProgressResponse = ProgressView;
+export type ProgressiveQuestion = ProgressiveQuestionView;
+export type ConversationResponse = ConversationView;
 
 export interface ConnectionCard {
   toolId: string;
@@ -64,29 +35,6 @@ export interface ConnectionCard {
   blockedReason?: string;
   missingCredentials?: string[];
   authorizationUrl?: string;
-}
-
-export interface ConversationResponse {
-  organizationId: string;
-  question: ProgressiveQuestion | null;
-  ready: boolean;
-  gapCount: number;
-  connections: ConnectionCard[];
-  transcript: { questionId: string; question: string; answer: string }[];
-  intro: string;
-  handoff?: string;
-  gapsResolved?: number;
-}
-
-export interface DepartmentSurface {
-  id: string;
-  name: string;
-  description: string;
-  directorAgentId: string | null;
-  employeeAgentIds: string[];
-  status: string;
-  connections: { kind: string; referenceId: string; label?: string }[];
-  discoveryId?: string;
 }
 
 type Step =
@@ -126,53 +74,37 @@ export function CustomerZeroRoute() {
     }
     let cancelled = false;
     (async () => {
-      try {
-        const response = await fetch(`/api/customer-zero/${parsed.organizationId}`);
-        if (response.status === 404) {
-          // The local reference no longer exists on the backend (sessions are
-          // in-memory and may have been lost on restart). Treat it as a stale
-          // local session: clear it and let the CEO start fresh — no error.
-          if (!cancelled) {
-            window.localStorage.removeItem("departify_customer_zero");
-            setOrganizationId(null);
-          }
-          return;
-        }
-        if (!response.ok) {
-          // 5xx or other server errors are recoverable: keep the reference
-          // and offer a human retry instead of a fatal error.
-          if (!cancelled) {
-            setError(
-              "No hemos podido conectar con Departify. Inténtalo de nuevo.",
-            );
-          }
-          return;
-        }
-        const status = (await response.json()) as {
-          organizationId: string;
-          department: DepartmentSurface | null;
-        };
-        if (cancelled) return;
-        if (status.department) {
-          // The company already has its department: go straight to the chat.
-          setOrganizationId(status.organizationId);
-          navigate("/chat", { replace: true });
-          return;
-        }
-        const next = await fetch(
-          `/api/customer-zero/${parsed.organizationId}/next-question`,
-        );
-        if (next.ok && !cancelled) {
-          setConversation((await next.json()) as ConversationResponse);
-          setStep({ name: "conversation", org: parsed.organizationId });
-        }
-      } catch {
+      const result = await api.statusDetailed(parsed.organizationId);
+      if (cancelled) return;
+      if (result === null) {
         // Network failure: recoverable, offer a retry with human language.
-        if (!cancelled) {
-          setError(
-            "No hemos podido conectar con Departify. Inténtalo de nuevo.",
-          );
-        }
+        setError("No hemos podido conectar con Departify. Inténtalo de nuevo.");
+        return;
+      }
+      if (result.status === 404) {
+        // The org has no session on the backend (in-memory slice). Treat it
+        // as a stale local reference and start fresh — no error.
+        window.localStorage.removeItem("departify_customer_zero");
+        setOrganizationId(null);
+        return;
+      }
+      const status = result.data;
+      if (!status) {
+        // 5xx or other server errors are recoverable: keep the reference and
+        // offer a human retry instead of a fatal error.
+        setError("No hemos podido conectar con Departify. Inténtalo de nuevo.");
+        return;
+      }
+      if (status.department) {
+        // The company already has its department: go straight to the chat.
+        setOrganizationId(status.organizationId);
+        navigate("/chat", { replace: true });
+        return;
+      }
+      const conversation = await api.nextQuestion(parsed.organizationId);
+      if (conversation && !cancelled) {
+        setConversation(conversation);
+        setStep({ name: "conversation", org: parsed.organizationId });
       }
     })();
     return () => {
@@ -192,9 +124,8 @@ export function CustomerZeroRoute() {
   }
 
   const loadConversation = useCallback(async (org: string) => {
-    const response = await fetch(`/api/customer-zero/${org}/next-question`);
-    if (!response.ok) return;
-    const body = (await response.json()) as ConversationResponse;
+    const body = await api.nextQuestion(org);
+    if (!body) return;
     setConversation(body);
     if (body.handoff) setHandoff(body.handoff);
     setStep({ name: "conversation", org });
@@ -203,17 +134,9 @@ export function CustomerZeroRoute() {
   async function startOnboarding(payload: Record<string, unknown>) {
     setError(null);
     try {
-      const response = await fetch("/api/customer-zero/start", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...payload, locale: uiLocale() }),
-      });
-      const body = (await response.json()) as {
-        organizationId?: string;
-        error?: { message: string };
-      };
-      if (!response.ok || !body.organizationId) {
-        setError(body.error?.message ?? `Error ${response.status}`);
+      const body = await api.start({ ...payload, locale: uiLocale() });
+      if (!body || !body.organizationId) {
+        setError(body?.error?.message ?? "No hemos podido empezar. Inténtalo de nuevo.");
         return;
       }
       persistSession(body.organizationId);
@@ -231,16 +154,11 @@ export function CustomerZeroRoute() {
   ) {
     setError(null);
     try {
-      const response = await fetch(`/api/customer-zero/${org}/answer`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ questionId, answers }),
-      });
-      if (!response.ok) {
-        setError(`Error ${response.status}`);
+      const body = await api.answer(org, questionId, answers);
+      if (!body) {
+        setError("No hemos podido guardar tu respuesta. Inténtalo de nuevo.");
         return;
       }
-      const body = (await response.json()) as ConversationResponse;
       setConversation(body);
       if (body.handoff) setHandoff(body.handoff);
     } catch (cause) {
@@ -251,12 +169,8 @@ export function CustomerZeroRoute() {
   async function connectTool(org: string, toolId: string) {
     setError(null);
     try {
-      const response = await fetch(
-        `/api/customer-zero/${org}/connections/${toolId}/connect`,
-        { method: "POST" },
-      );
-      const body = (await response.json()) as { connection?: ConnectionCard };
-      if (!body.connection) return;
+      const body = await api.connect(org, toolId);
+      if (!body?.connection) return;
       setConversation((prev) =>
         prev
           ? {
@@ -284,11 +198,9 @@ export function CustomerZeroRoute() {
     setEntering(true);
     setError(null);
     try {
-      const response = await fetch(`/api/customer-zero/${org}/marketing`, {
-        method: "POST",
-      });
-      if (!response.ok) {
-        setError(`Error ${response.status}`);
+      const body = await api.enterMarketing(org);
+      if (!body || body.error) {
+        setError(body?.error?.message ?? "No hemos podido preparar Marketing.");
         setEntering(false);
         return;
       }
@@ -535,10 +447,8 @@ function ResearchStep(props: {
     let cancelled = false;
     const timer = window.setInterval(async () => {
       try {
-        const response = await fetch(`/api/customer-zero/${props.org}/progress`);
-        if (!response.ok) return;
-        const body = (await response.json()) as ProgressResponse;
-        if (cancelled) return;
+        const body = await api.progress(props.org);
+        if (!body || cancelled) return;
         setProgress(body);
         if (body.status === "completed" && !done.current) {
           done.current = true;

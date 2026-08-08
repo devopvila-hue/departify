@@ -19,6 +19,19 @@ export interface BackendConfig {
     supabaseUrl?: string;
     ollamaHost?: string;
   };
+  /** Public base URL of the portal (OAuth redirects + links). */
+  publicBaseUrl?: string;
+  /** Allowed browser origins for CORS. Empty = same-origin only. */
+  corsAllowedOrigins: string[];
+}
+
+/** Auth identity configuration (Supabase Auth + service role). */
+export interface AuthConfig {
+  supabaseUrl: string;
+  /** Supabase publishable/anon key — used ONLY server-side token validation. */
+  supabaseAnonKey: string;
+  /** Supabase service-role key — backend-only, never exposed to the frontend. */
+  supabaseServiceRoleKey: string;
 }
 
 export interface OpenAIProviderConfig {
@@ -56,6 +69,7 @@ export const backendConfigSchema = envSchema.transform((env): BackendConfig => {
   const otlpEndpoint = normalizeOptional(env.OTEL_EXPORTER_OTLP_ENDPOINT);
   const supabaseUrl = normalizeOptional(env.SUPABASE_URL);
   const ollamaHost = normalizeOptional(env.OLLAMA_HOST);
+  const publicBaseUrl = normalizeOptional(env.PUBLIC_BASE_URL);
 
   return {
     environment: env.NODE_ENV,
@@ -77,11 +91,34 @@ export const backendConfigSchema = envSchema.transform((env): BackendConfig => {
       ...(supabaseUrl ? { supabaseUrl } : {}),
       ...(ollamaHost ? { ollamaHost } : {}),
     },
+    ...(publicBaseUrl ? { publicBaseUrl } : {}),
+    corsAllowedOrigins: splitOrigins(env.CORS_ALLOWED_ORIGINS),
   };
 });
 
 export function loadBackendConfig(): BackendConfig {
   return backendConfigSchema.parse(process.env);
+}
+
+export const authConfigSchema = envSchema.transform((env): AuthConfig => {
+  const supabaseUrl = normalizeOptional(env.SUPABASE_URL);
+  const supabaseAnonKey = normalizeOptional(env.SUPABASE_PUBLISHABLE_KEY);
+  const supabaseServiceRoleKey = normalizeOptional(env.SUPABASE_SERVICE_ROLE_KEY);
+  if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey) {
+    throw new Error(
+      "SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY and SUPABASE_SERVICE_ROLE_KEY " +
+        "are required for authentication.",
+    );
+  }
+  return {
+    supabaseUrl,
+    supabaseAnonKey,
+    supabaseServiceRoleKey,
+  };
+});
+
+export function loadAuthConfig(): AuthConfig {
+  return authConfigSchema.parse(process.env);
 }
 
 export const openAIProviderConfigSchema = envSchema.transform(
@@ -178,4 +215,12 @@ function normalizeOptional(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function splitOrigins(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
 }

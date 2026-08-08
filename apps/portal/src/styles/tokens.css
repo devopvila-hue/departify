@@ -761,6 +761,26 @@ select {
   font-weight: 600;
 }
 
+.dfy-topbar__logout {
+  margin-left: auto;
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-sm);
+  background: var(--dfy-color-surface);
+  color: var(--dfy-color-text);
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.auth-screen__switch {
+  display: block;
+  margin: 16px auto 0;
+  border: none;
+  background: none;
+  color: var(--dfy-color-accent);
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
 .dfy-content {
   flex: 1;
   padding: 20px;

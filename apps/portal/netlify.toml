@@ -10,3 +10,20 @@ targetPort = 5173
 [build.environment]
 NODE_VERSION = "22"
 PNPM_VERSION = "9.15.0"
+# Portal public identity config (the anon/publishable key is safe for the
+# browser; the service-role key must NEVER be set here).
+# VITE_SUPABASE_URL = "https://<project>.supabase.co"
+# VITE_SUPABASE_ANON_KEY = "eyJhbGciOi..."
+
+# Proxy every /api request to the Railway backend (api.departify.app).
+# The portal calls same-origin /api/...; Netlify forwards it server-side.
+[[redirects]]
+from = "/api/*"
+to = "https://api.departify.app/:splat"
+status = 200
+
+# SPA fallback: deep links (/chat, /conexiones, …) serve the app shell.
+[[redirects]]
+from = "/*"
+to = "/index.html"
+status = 200

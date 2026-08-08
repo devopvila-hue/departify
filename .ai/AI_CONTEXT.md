@@ -19,6 +19,8 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 `packages/application` is the official application orchestration layer. It defines commands, queries, handlers, DTOs, mappers, validation, application services, and ports. It coordinates `packages/organization-domain` and `packages/provisioning-engine` through contracts only and must not contain domain rules, infrastructure, persistence, transport code, provider SDKs, or environment access.
 
+`packages/auth` is the authorization boundary around Supabase identity (Phase P0-A). It is framework-independent: it defines `AuthenticatedUser`, `AuthContext`, `OrganizationMembership`, the `AuthError` taxonomy (401 vs 403), the `IdentityVerifier`/`MembershipResolver` ports, and `assertOrganizationAccess`. Supabase Auth is the identity authority; the backend (`apps/backend/src/auth`) adapts it to these contracts. The browser is never trusted to decide organization ownership.
+
 `packages/persistence-contracts` is the official provider-independent persistence contract layer. It defines repositories, unit of work, transaction contracts, specifications, pagination, filters, optimistic locking, and persistence errors. It must not contain adapters, storage implementations, schemas, migrations, provider SDKs, or environment access.
 
 `packages/persistence-supabase` is the first concrete persistence adapter. It implements the persistence contracts with `@supabase/supabase-js`, maps domain/provisioning snapshots to Supabase record tables, and obtains config through `packages/config` types only. It must not modify domain, application, provisioning, or persistence contracts.

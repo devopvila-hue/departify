@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
+import { useAuth } from "@/app/auth-context";
+import { useOrg } from "@/app/org-context";
 import {
   ApprovalsIcon,
   ChatIcon,
@@ -53,10 +55,19 @@ const FOOT: IconEntry[] = [
 export function AppShell(props: { companyName?: string; pendingApprovals?: number }) {
   const [open, setOpen] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
+  const { signOut } = useAuth();
+  const { setOrganizationId } = useOrg();
 
   useEffect(() => {
     setOpen(false);
   }, [location.pathname]);
+
+  async function handleLogout() {
+    await signOut();
+    setOrganizationId(null);
+    navigate("/");
+  }
 
   const renderItem = (item: IconEntryWithBadge) => {
     const Icon = item.icon;
@@ -138,6 +149,13 @@ export function AppShell(props: { companyName?: string; pendingApprovals?: numbe
           <span className="dfy-topbar__company">
             {props.companyName || "Tu empresa"}
           </span>
+          <button
+            type="button"
+            className="dfy-topbar__logout"
+            onClick={() => void handleLogout()}
+          >
+            Salir
+          </button>
         </header>
 
         <main className="dfy-content">
