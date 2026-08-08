@@ -16,6 +16,7 @@
     "@departify/agent-tool-bridge": "workspace:^",
     "@departify/business-discovery": "workspace:^",
     "@departify/business-events": "workspace:^",
+    "@departify/capability-engine": "workspace:^",
     "@departify/config": "workspace:*",
     "@departify/departments": "workspace:^",
     "@departify/executive-director": "workspace:^",

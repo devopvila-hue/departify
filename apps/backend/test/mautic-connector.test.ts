@@ -54,9 +54,13 @@ describe("Mautic adapter — HTTP (mocked server)", () => {
       if (url.pathname === "/oauth/v2/token") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ access_token: "mock_token_abc" }));
-      } else if (url.pathname === "/api/info") {
+      } else if (url.pathname === "/api/users/self") {
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ version: "5.1.0", name: "Mautic" }));
+        res.end(
+          JSON.stringify({
+            user: { id: 1, username: "mautic-admin" },
+          }),
+        );
       } else if (url.pathname === "/api/contacts") {
         const search = url.searchParams.get("search");
         if (search) {
@@ -106,7 +110,7 @@ describe("Mautic adapter — HTTP (mocked server)", () => {
   it("testConnection succeeds with valid server", async () => {
     const result = await testMauticConnection(creds(), new AbortController().signal);
     expect(result.success).toBe(true);
-    expect(result.serverInfo?.version).toBe("5.1.0");
+    expect(result.serverInfo?.name).toBe("mautic-admin");
   });
 
   it("getContactCount returns the total", async () => {
@@ -140,6 +144,19 @@ describe("Mautic adapter — HTTP (mocked server)", () => {
     const result = await testMauticConnection(badCreds, new AbortController().signal);
     expect(result.success).toBe(false);
     expect(result.message).toBeTruthy();
+  });
+
+  it("works with the Tool Runtime duck-typed cancellation signal", async () => {
+    // The Tool Runtime passes a `{ aborted, onAbort }` handle (Sprint 20
+    // sandbox abstraction) cast as AbortSignal, not a native AbortSignal.
+    // Node's fetch rejects non-AbortSignal signal values, so the adapter
+    // must bridge the duck-typed handle into a native signal.
+    const toolSignal = {
+      aborted: false,
+      onAbort: (): void => {},
+    } as unknown as AbortSignal;
+    const result = await testMauticConnection(creds(), toolSignal);
+    expect(result.success).toBe(true);
   });
 });
 

@@ -33,5 +33,9 @@ services:
       - "5173:5173"
     volumes:
       - .:/workspace
+      - portal_node_modules:/workspace/node_modules
     profiles:
       - portal
+
+volumes:
+  portal_node_modules:

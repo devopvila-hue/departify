@@ -43,10 +43,35 @@ export interface MauticContact {
   readonly email: string;
 }
 
+/**
+ * The Tool Runtime passes a duck-typed cancellation handle
+ * (`{ aborted, onAbort }`) as the executor signal (Sprint 20 sandbox
+ * abstraction), which Node's `fetch` rejects because it requires a real
+ * `AbortSignal` instance. Bridge the handle into a native `AbortSignal`
+ * while preserving cancellation semantics.
+ */
+function toNativeAbortSignal(signal: AbortSignal): AbortSignal {
+  if (signal instanceof AbortSignal) {
+    return signal;
+  }
+  const controller = new AbortController();
+  const handle = signal as unknown as {
+    readonly aborted?: boolean;
+    readonly onAbort?: (listener: (reason: string) => void) => void;
+  };
+  if (handle.aborted) {
+    controller.abort();
+  } else {
+    handle.onAbort?.(() => controller.abort());
+  }
+  return controller.signal;
+}
+
 async function requestToken(
   creds: MauticCredentials,
   signal: AbortSignal,
 ): Promise<string> {
+  signal = toNativeAbortSignal(signal);
   const url = new URL("/oauth/v2/token", creds.baseUrl);
   const body = new URLSearchParams({
     grant_type: "client_credentials",
@@ -93,6 +118,7 @@ async function mauticGet<T>(
   path: string,
   signal: AbortSignal,
 ): Promise<T> {
+  signal = toNativeAbortSignal(signal);
   const token = await requestToken(creds, signal);
   const url = new URL(path, creds.baseUrl);
 
@@ -118,11 +144,15 @@ export async function testMauticConnection(
   creds: MauticCredentials,
   signal: AbortSignal,
 ): Promise<MauticConnectionResult> {
+  signal = toNativeAbortSignal(signal);
   try {
     const token = await requestToken(creds, signal);
-    // Once authenticated, fetch the API info to confirm the server is real.
+    // Once authenticated, fetch the current user to confirm the server is
+    // real and the token is usable. Some Mautic installations do not expose
+    // `/api/info`, so the authenticated user endpoint is the reliable
+    // liveness check across deployments.
     const response = await fetch(
-      new URL("/api/info", creds.baseUrl).toString(),
+      new URL("/api/users/self", creds.baseUrl).toString(),
       {
         method: "GET",
         headers: {
@@ -140,17 +170,16 @@ export async function testMauticConnection(
       };
     }
 
-    const info = (await response.json()) as {
-      version?: string;
-      name?: string;
+    const data = (await response.json()) as {
+      user?: { id?: number; username?: string };
     };
 
     return {
       success: true,
-      message: `Connected to Mautic ${info.version ?? "unknown version"}.`,
+      message: "Connected to Mautic.",
       serverInfo: {
-        version: info.version ?? "unknown",
-        name: info.name ?? "Mautic",
+        version: "unknown",
+        name: data.user?.username ?? "Mautic",
       },
     };
   } catch (cause) {

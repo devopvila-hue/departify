@@ -122,6 +122,72 @@ describe("Command Center routing", () => {
     expect(decision.decision.intent).toBe("unknown_department");
     expect(decision.decision.departments).toContain("sales");
   });
+
+  it("routes a contact-count question to external_tool_query when Mautic is connected", () => {
+    const decision = routeCommandCenter(
+      makeInput({
+        message: "¿Cuántos contactos tenemos en Mautic?",
+        connections: [
+          {
+            toolId: "mautic",
+            label: "Mautic",
+            capability: "crm.contacts",
+            category: "CRM",
+            status: "connected",
+          },
+        ],
+      }),
+    );
+    expect(decision.decision.intent).toBe("external_tool_query");
+  });
+
+  it("routes a contact-count question to request_connection when Mautic is NOT connected", () => {
+    const decision = routeCommandCenter(
+      makeInput({ message: "¿Cuántos contactos tenemos en Mautic?" }),
+    );
+    expect(decision.decision.intent).toBe("request_connection");
+  });
+
+  it("routes 'pero ya tienes acceso al mautic' to capability_status with operational truth", () => {
+    const decision = routeCommandCenter(
+      makeInput({
+        message: "pero ya tienes acceso al mautic",
+        connections: [
+          {
+            toolId: "mautic",
+            label: "Mautic",
+            capability: "crm.contacts",
+            category: "CRM",
+            status: "connected",
+          },
+        ],
+      }),
+    );
+    expect(decision.decision.intent).toBe("capability_status");
+    expect(decision.reply).toContain("conectado y operativo");
+    // Operational truth: never a reconnection instruction.
+    expect(decision.reply).not.toContain("necesito conectarlo");
+    expect(decision.reply).not.toContain("para conectarlo");
+  });
+
+  it("routeCommandCenter answer survives the outcome builder for capability_status", () => {
+    const decision = routeCommandCenter(
+      makeInput({
+        message: "¿tienes acceso a Mautic?",
+        connections: [
+          {
+            toolId: "mautic",
+            label: "Mautic",
+            capability: "crm.contacts",
+            category: "CRM",
+            status: "connected",
+          },
+        ],
+      }),
+    );
+    expect(decision.decision.intent).toBe("capability_status");
+    expect(decision.reply).toContain("conectado");
+  });
 });
 
 describe("Integration discovery", () => {

@@ -57,7 +57,12 @@ import type { InMemoryMemoryRecordStore } from "@departify/memory";
 import {
   createToolRuntime,
   ToolRegistry as ToolRuntimeRegistry,
+  type ToolRuntime,
 } from "@departify/tool-runtime";
+import {
+  DepartmentCapabilityRegistry,
+  buildMauticCapability,
+} from "@departify/capability-engine";
 import {
   WorkflowExecution,
   type WorkflowResult,
@@ -168,6 +173,10 @@ export interface CustomerZeroSession {
   readonly businessEvents: BusinessEventService;
   /** Canonical department memory store (Sprint 60). */
   readonly memoryStore: InMemoryMemoryRecordStore;
+  /** The session's Tool Runtime (Sprint 62 capability engine source). */
+  readonly runtime: ToolRuntime;
+  /** Canonical department capability registry (Sprint 62). */
+  readonly capabilities: DepartmentCapabilityRegistry;
   state: CustomerZeroSessionState;
   reports: readonly CompanyDiscoveryReport[];
 }
@@ -232,6 +241,12 @@ export function getOrCreateCustomerZeroSession(
       runtime.registry.setStatus(def.id, "active");
     }
   }
+
+  // Sprint 62 — canonical capability registry for the Marketing department.
+  // The Mautic capability is registered; its operational status is DERIVED by
+  // the registry from the connection state + Tool Runtime (never from memory).
+  const capabilities = new DepartmentCapabilityRegistry();
+  capabilities.register(buildMauticCapability());
 
   // AgentToolBridge with the Marketing agents' permissions.
   const port: AgentToolPort = new AgentToolRuntimeAdapter({
@@ -339,6 +354,8 @@ export function getOrCreateCustomerZeroSession(
     provisioning,
     businessEvents: new BusinessEventService({ catalog }),
     memoryStore: createInMemoryMemoryRecordStore(),
+    runtime,
+    capabilities,
     state: {
       organizationId,
       rawData: {},

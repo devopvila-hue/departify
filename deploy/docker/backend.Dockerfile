@@ -4,17 +4,23 @@ WORKDIR /app
 
 RUN corepack enable
 
+# Workspace manifests: root + full packages graph. Copying all of packages/
+# keeps the install layer independent of future workspace dependency changes —
+# no per-package Dockerfile patching required.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.base.json ./
 COPY apps/backend/package.json apps/backend/package.json
-COPY packages/config/package.json packages/config/package.json
+COPY packages/ packages/
 
 RUN pnpm install --frozen-lockfile
 
+# Full source for the backend (packages source is already present).
 COPY apps/backend apps/backend
-COPY packages/config packages/config
 
-RUN pnpm --filter @departify/config build
-RUN pnpm --filter @departify/backend build
+# Build the backend together with its full transitive workspace dependency
+# graph. pnpm resolves the graph from the workspace and runs builds in
+# topological order (dependencies first), so every @departify/* package the
+# backend imports produces its dist + type declarations before backend tsc runs.
+RUN pnpm --filter @departify/backend... run build
 
 FROM node:22-alpine AS runtime
 
@@ -28,10 +34,8 @@ RUN corepack enable
 
 COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml /app/.npmrc ./
 COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/packages/config/package.json ./packages/config/package.json
-COPY --from=builder /app/packages/config/dist ./packages/config/dist
-COPY --from=builder /app/apps/backend/package.json ./apps/backend/package.json
-COPY --from=builder /app/apps/backend/dist ./apps/backend/dist
+COPY --from=builder /app/packages ./packages
+COPY --from=builder /app/apps/backend ./apps/backend
 
 EXPOSE 3210
 

@@ -176,7 +176,8 @@ export interface RoutingDecision {
     | "greeting"
     | "knowledge_query"
     | "remember_fact"
-    | "external_tool_query";
+    | "external_tool_query"
+    | "capability_status";
   /** Departments that acted or were considered. Today only `marketing`. */
   readonly departments: readonly string[];
   /** Why this decision was made. */
@@ -242,6 +243,54 @@ const ROUTING_RULES: readonly RoutingRule[] = [
       ),
   },
   {
+    intent: "external_tool_query",
+    rationale:
+      "The CEO is asking a business data question about an already-connected external tool (Mautic, CRM, etc.).",
+    match: (input) => {
+      const isDataQuery =
+        /\b(cu[áa]ntos\s+contactos?|cu[áa]ntas?\s+personas?|how many contacts|lista de contactos|busca\s+(en\s+mautic\s+)?(contactos?|clientes?)|search\s+contacts|qu[ée]\s+(hay|tenemos|tiene|cu[aá]ntos)\s+(en\s+)?mautic)\b/i.test(
+          input.message,
+        );
+      if (!isDataQuery) return false;
+      // Only route to a real query when the relevant external tool is already
+      // connected. A connected Mautic answers contact questions; otherwise the
+      // message falls through to `request_connection`.
+      const mautic = input.connections.find(
+        (c) => c.toolId === "mautic",
+      );
+      if (mautic?.status === "connected") return true;
+      return input.connections.some(
+        (c) =>
+          c.status === "connected" &&
+          (input.message.toLowerCase().includes(c.toolId) ||
+            input.message.toLowerCase().includes(c.label.toLowerCase())),
+      );
+    },
+  },
+  {
+    intent: "capability_status",
+    rationale:
+      "The CEO asserts/asks about access to a tool that is ALREADY connected — operational state outranks conversational inference.",
+    match: (input) => {
+      const lower = input.message.toLowerCase();
+      const mentionsConnectedTool = input.connections.some(
+        (connection) =>
+          connection.status === "connected" &&
+          (lower.includes(connection.toolId) ||
+            lower.includes(connection.label.toLowerCase())),
+      );
+      if (!mentionsConnectedTool) return false;
+      // Only status-assertion phrasings: "ya tienes acceso a X", "pero tienes
+      // acceso a X", "do you have access to X". A connect verb explicitly
+      // asking to connect stays a request_connection.
+      const isStatusAssertion =
+        /\b(ya\s+tienes|ya\s+ten[ée]is|tienes\s+acceso|ten[ée]is\s+acceso|do\s+you\s+have\s+access|have\s+access|acceso\s+a|t[ée]n\s+acceso|tengo\s+acceso)\b/i.test(
+          input.message,
+        );
+      return isStatusAssertion;
+    },
+  },
+  {
     intent: "request_connection",
     rationale:
       "A tool name or capability is mentioned. Departify will check whether it can connect it.",
@@ -273,15 +322,6 @@ const ROUTING_RULES: readonly RoutingRule[] = [
       "The CEO is asking what Marketing has learned or remembers.",
     match: (input) =>
       /\b(qu[ée]\s+(has|hemos|hab[ée]is)\s+aprendido|qu[ée]\s+(sabes|sab[ée]is|recuerdas|recuerdas de|conoces|conocemos)\b|what\s+(have|do)\s+(we|you)\s+(learned|know|remember)|aprendizaje|lo aprendido|hemos aprendido|has aprendido)\b/i.test(
-        input.message,
-      ),
-  },
-  {
-    intent: "external_tool_query",
-    rationale:
-      "The CEO is asking a business question that requires querying a connected external tool (Mautic, CRM, etc.).",
-    match: (input) =>
-      /\b(mautic|contactos?|contacts?|cu[áa]ntos\s+contactos?|cu[áa]ntas?\s+personas?|how many contacts|lista de contactos|busca\s+en\s+mautic|busca\s+contactos|search\s+contacts)\b/i.test(
         input.message,
       ),
   },
@@ -455,6 +495,24 @@ function buildRuleOutcome(
       };
     case "request_connection":
       return buildConnectionOutcome(input);
+    case "capability_status":
+      return buildCapabilityStatusOutcome(input);
+    case "external_tool_query":
+      // The orchestrator resolves the connected external tool and produces
+      // the real answer through the Tool Runtime; this is a pass-through so
+      // the intent reaches the handler intact.
+      return {
+        decision: {
+          intent: "external_tool_query",
+          departments: ["marketing"],
+          rationale: rule.rationale,
+        },
+        reply: t(
+          input.locale,
+          "Voy a consultarlo en el sistema conectado.",
+          "Let me query the connected system.",
+        ),
+      };
     case "unknown_department":
       return buildUnknownDepartmentOutcome(input);
     default:
@@ -478,6 +536,30 @@ function buildConnectionOutcome(input: CommandCenterInput): {
   reply: string;
   connectionSuggestion?: ConnectionSuggestion;
 } {
+  // Operational truth first: if the CEO mentions a tool that is ALREADY
+  // connected, the connection does not need to be re-established. Answer from
+  // the operational state, never a reconnection instruction.
+  const mentionedConnected = input.connections.find(
+    (connection) =>
+      connection.status === "connected" &&
+      (input.message.toLowerCase().includes(connection.toolId) ||
+        input.message.toLowerCase().includes(connection.label.toLowerCase())),
+  );
+  if (mentionedConnected) {
+    return {
+      decision: {
+        intent: "capability_status",
+        departments: ["marketing"],
+        rationale: `${mentionedConnected.label} is already connected; operational state confirms it.`,
+      },
+      reply: t(
+        input.locale,
+        `Sí. ${mentionedConnected.label} está conectado y operativo. Ya tengo acceso y puedo trabajar con ello.`,
+        `Yes. ${mentionedConnected.label} is connected and operational. I already have access and can work with it.`,
+      ),
+    };
+  }
+
   const suggestion = discoverConnection(input);
   return {
     decision: {
@@ -499,6 +581,45 @@ function buildConnectionOutcome(input: CommandCenterInput): {
           `${suggestion.label} can't be connected yet, but ${suggestion.why} When it is, Elvira can continue the work that depends on it.`,
         ),
     connectionSuggestion: suggestion,
+  };
+}
+
+function buildCapabilityStatusOutcome(input: CommandCenterInput): {
+  decision: RoutingDecision;
+  reply: string;
+  connectionSuggestion?: ConnectionSuggestion;
+} {
+  const mentioned = input.connections.find(
+    (connection) =>
+      connection.status === "connected" &&
+      (input.message.toLowerCase().includes(connection.toolId) ||
+        input.message.toLowerCase().includes(connection.label.toLowerCase())),
+  );
+  if (mentioned) {
+    return {
+      decision: {
+        intent: "capability_status",
+        departments: ["marketing"],
+        rationale: `${mentioned.label} is connected; operational state answers the CEO.`,
+      },
+      reply: t(
+        input.locale,
+        `Sí. ${mentioned.label} está conectado y operativo.`,
+        `Yes. ${mentioned.label} is connected and operational.`,
+      ),
+    };
+  }
+  return {
+    decision: {
+      intent: "capability_status",
+      departments: ["marketing"],
+      rationale: "The CEO asked about access to a tool; there is no connected tool to report.",
+    },
+    reply: t(
+      input.locale,
+      "Todavía no hay ninguna herramienta externa conectada. Puedo ayudarte a conectarla en Conexiones.",
+      "No external tool is connected yet. I can help you connect one in Connections.",
+    ),
   };
 }
 

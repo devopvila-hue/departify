@@ -77,6 +77,7 @@ import {
   type DepartmentMemoryKind,
   type DepartmentMemoryProvenance,
 } from "../../customer-zero/department-memory.js";
+import { buildSessionOperationalContext } from "../../customer-zero/operational-context.js";
 import type { CompanyDiscoveryReport } from "@departify/business-discovery";
 
 export async function registerCustomerZeroV2Routes(
@@ -465,6 +466,18 @@ export async function registerCustomerZeroV2Routes(
             (outcome.output as { success?: boolean })?.success
           ) {
             completeConnection(connection);
+            // Sprint 62 — a verified real connection certifies the capability.
+            // The registry still requires the operational source (connection +
+            // tools) to report connected before it presents READY.
+            const { certifyMauticCapability } = await import(
+              "@departify/capability-engine"
+            );
+            const current =
+              session.capabilities.get("mautic") ??
+              (await import("@departify/capability-engine")).buildMauticCapability();
+            session.capabilities.register(
+              certifyMauticCapability(current, new Date().toISOString()),
+            );
           } else {
             const msg =
               (outcome as { output?: { message?: string } })?.output
@@ -1052,11 +1065,19 @@ function buildMemoryContextForChat(
   session: CustomerZeroSession,
 ): string {
   const memories = listDepartmentMemory(session, "marketing", { limit: 5 });
-  if (memories.length === 0) return "";
-  const lines = memories.map(
-    (m) => `- ${m.content} (${provenanceLabel(m.provenance, true)})`,
-  );
-  return `\nConocimiento de Marketing:\n${lines.join("\n")}`;
+  const parts: string[] = [];
+  if (memories.length > 0) {
+    const lines = memories.map(
+      (m) => `- ${m.content} (${provenanceLabel(m.provenance, true)})`,
+    );
+    parts.push(`Conocimiento de Marketing:\n${lines.join("\n")}`);
+  }
+  // Sprint 62 — operational context is FACT. The LLM must not hallucinate a
+  // missing connection for a system the capability engine says is READY, and
+  // must not claim a system is available when it is not.
+  const operational = buildSessionOperationalContext(session);
+  parts.push(`Estado operativo de la empresa:\n${operational.promptView}`);
+  return parts.join("\n\n");
 }
 
 function provenanceLabel(
