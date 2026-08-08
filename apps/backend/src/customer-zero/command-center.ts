@@ -173,7 +173,9 @@ export interface RoutingDecision {
     | "summarize_company"
     | "needs_clarification"
     | "unknown_department"
-    | "greeting";
+    | "greeting"
+    | "knowledge_query"
+    | "remember_fact";
   /** Departments that acted or were considered. Today only `marketing`. */
   readonly departments: readonly string[];
   /** Why this decision was made. */
@@ -252,6 +254,24 @@ const ROUTING_RULES: readonly RoutingRule[] = [
       "Message clearly references a capability that is not part of an active department today.",
     match: (input) =>
       /\b(facturas|invoice|facturaci[óo]n|n[óo]minas|payroll|contabilidad|accounting|finanzas|finance|cobros|pagos|equipo de ventas|deal|deals|cerrar tratos|comercial|sales)\b/i.test(
+        input.message,
+      ),
+  },
+  {
+    intent: "remember_fact",
+    rationale:
+      "The CEO wants Marketing to remember something.",
+    match: (input) =>
+      /\b(recuerda|acuérdate|ap[úu]nta(te|me)?|guarda|anota|recuerdas|recuerdas de|no olvides|remember|note this|make a note)\b.{4,}/i.test(
+        input.message,
+      ),
+  },
+  {
+    intent: "knowledge_query",
+    rationale:
+      "The CEO is asking what Marketing has learned or remembers.",
+    match: (input) =>
+      /\b(qu[ée]\s+(has|hemos|hab[ée]is)\s+aprendido|qu[ée]\s+(sabes|sab[ée]is|recuerdas|recuerdas de|conoces|conocemos)\b|what\s+(have|do)\s+(we|you)\s+(learned|know|remember)|aprendizaje|lo aprendido|hemos aprendido|has aprendido)\b/i.test(
         input.message,
       ),
   },
@@ -836,6 +856,7 @@ export function buildProactiveOpening(
         fromDepartment: "marketing",
         title: m.title,
         content: m.content,
+        kind: m.kind,
         evidence: [m.source ?? m.kind],
         confidence: m.importance,
       }),
@@ -853,6 +874,7 @@ function dnaView(s: DnaSuggestion) {
     content: s.content,
     fromDepartment: s.fromDepartment,
     confidence: s.confidence,
+    kind: s.kind,
   };
 }
 

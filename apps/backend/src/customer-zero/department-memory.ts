@@ -69,6 +69,8 @@ export interface DnaSuggestion {
   readonly confidence: number;
   /** IDs of the canonical memory records that back this suggestion. */
   readonly sourceMemoryIds: readonly string[];
+  /** Department memory kind — determines which Company DNA field to target. */
+  readonly kind: DepartmentMemoryKind;
 }
 
 export function rememberDepartment(
@@ -158,6 +160,7 @@ export function buildDnaSuggestion(input: {
   fromDepartment: string;
   title: string;
   content: string;
+  kind: DepartmentMemoryKind;
   evidence?: readonly string[];
   confidence?: number;
   sourceMemoryIds?: readonly string[];
@@ -166,10 +169,116 @@ export function buildDnaSuggestion(input: {
     fromDepartment: input.fromDepartment,
     title: input.title,
     content: input.content,
+    kind: input.kind,
     evidence: input.evidence ?? [],
     confidence: clamp(input.confidence ?? 0.6),
     sourceMemoryIds: input.sourceMemoryIds ?? [],
   };
+}
+
+/** Maps department memory kinds to their canonical Company DNA target fields.
+ *  Kinds mapped to `null` have no semantically valid promotion path yet. */
+export const KIND_TO_DNA_TARGET: Readonly<
+  Record<DepartmentMemoryKind, string | null>
+> = {
+  audience: "idealCustomer",
+  positioning: "positioning",
+  messaging: "tone",
+  campaign: null,
+  channel: null,
+  experiment: null,
+  content: null,
+  result: "strengths",
+  decision: "objectives",
+  note: null,
+};
+
+export class DnaPromotionError extends Error {
+  constructor(public readonly kind: DepartmentMemoryKind) {
+    super(
+      `Department memory kind '${kind}' has no canonical Company DNA mapping.`,
+    );
+    this.name = "DnaPromotionError";
+  }
+}
+
+/**
+ * Produces a `RawCompanyDna`-shaped payload for the discovery pipeline.
+ * Maps the suggestion's department memory `kind` to the correct canonical
+ * Company DNA field. Kinds with no mapping throw `DnaPromotionError`.
+ */
+export function buildDnaRawDataFromSuggestion(
+  suggestion: Pick<
+    DnaSuggestion,
+    "title" | "content" | "fromDepartment" | "kind"
+  >,
+): Readonly<Record<string, unknown>> {
+  const target = KIND_TO_DNA_TARGET[suggestion.kind];
+  if (!target) {
+    throw new DnaPromotionError(suggestion.kind);
+  }
+
+  const text = suggestion.title
+    ? `[Promovido desde ${suggestion.fromDepartment}] ${suggestion.title}: ${suggestion.content}`
+    : suggestion.content;
+
+  switch (target) {
+    case "idealCustomer":
+      return {
+        idealCustomer: {
+          demographics: [text],
+          psychographics: [],
+          painPoints: [],
+          buyingBehavior: [],
+          confidence: "medium",
+        },
+      };
+    case "positioning":
+      return {
+        positioning: {
+          statement: text,
+          differentiation: [],
+          confidence: "medium",
+        },
+      };
+    case "tone":
+      return {
+        tone: {
+          personality: [],
+          voice: text,
+          styleExamples: [],
+          confidence: "medium",
+        },
+      };
+    case "strengths":
+      return {
+        strengths: [
+          {
+            id: `str_prom_${Date.now().toString(36)}`,
+            category: suggestion.fromDepartment,
+            description: text,
+            evidence: [],
+            confidence: "medium",
+          },
+        ],
+      };
+    case "objectives":
+      return {
+        objectives: [
+          {
+            id: `obj_prom_${Date.now().toString(36)}`,
+            title: suggestion.title,
+            description: suggestion.content,
+            timeframe: "current",
+            priority: "medium" as const,
+            status: "planned" as const,
+            confidence: "medium",
+          },
+        ],
+      };
+    default:
+      throw new DnaPromotionError(suggestion.kind);
+  }
 }
 
 /* -------------------------------------------------------------------------

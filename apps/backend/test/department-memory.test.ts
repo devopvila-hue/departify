@@ -129,7 +129,7 @@ describe("DNA suggestion provenance", () => {
       fromDepartment: "marketing",
       title: "Segmento principal Barcelona 25-35",
       content: "El 70% de las conversiones vienen de Barcelona 25-35.",
-      evidence: ["12 campanas analizadas"],
+      kind: "result", evidence: ["12 campanas analizadas"],
       confidence: 0.85,
     });
     expect(suggestion.fromDepartment).toBe("marketing");
@@ -141,7 +141,7 @@ describe("DNA suggestion provenance", () => {
       fromDepartment: "marketing",
       title: "X",
       content: "Y",
-      evidence: ["a", "b"],
+      kind: "result", evidence: ["a", "b"],
     });
     expect(suggestion.evidence).toEqual(["a", "b"]);
     expect(suggestion.content).toBe("Y");
@@ -182,6 +182,7 @@ describe("DNA safety — Sprint 60", () => {
       fromDepartment: "marketing",
       title: "Target segment",
       content: "Segment X is the most profitable",
+      kind: "result",
       evidence: ["campaign A", "campaign B"],
       confidence: 0.9,
       sourceMemoryIds: ["mem_1", "mem_2"],
@@ -195,7 +196,7 @@ describe("DNA safety — Sprint 60", () => {
       fromDepartment: "marketing",
       title: "X",
       content: "Y",
-      sourceMemoryIds: ["mem_a", "mem_b"],
+      kind: "result", sourceMemoryIds: ["mem_a", "mem_b"],
     });
     expect(suggestion.sourceMemoryIds).toEqual(["mem_a", "mem_b"]);
   });

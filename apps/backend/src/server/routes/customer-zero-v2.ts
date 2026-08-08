@@ -70,6 +70,13 @@ import {
   routeCommandCenter,
   type CommandCenterEvent,
 } from "../../customer-zero/command-center.js";
+import {
+  buildDnaRawDataFromSuggestion,
+  listDepartmentMemory,
+  rememberDepartment,
+  type DepartmentMemoryKind,
+  type DepartmentMemoryProvenance,
+} from "../../customer-zero/department-memory.js";
 import type { CompanyDiscoveryReport } from "@departify/business-discovery";
 
 export async function registerCustomerZeroV2Routes(
@@ -669,8 +676,7 @@ export async function registerCustomerZeroV2Routes(
       const input = buildCommandCenterInput(session, message);
       const routed = routeCommandCenter(input);
 
-      // Persist the CEO turn in the transcript; the assistant reply is
-      // appended once we've resolved any marketing delegation.
+      const isEs = session.state.locale !== "en";
       let assistantReply = routed.reply;
       let marketingTurn: { role: "user" | "assistant"; content: string } | null = null;
 
@@ -685,6 +691,7 @@ export async function registerCustomerZeroV2Routes(
               organizationId,
               message,
               history: session.state.conversation,
+              extraContext: buildMemoryContextForChat(session),
             },
           });
           if (outcome.status === "completed") {
@@ -699,9 +706,48 @@ export async function registerCustomerZeroV2Routes(
             }
           }
         } catch {
-          // Marketing Director failed: keep the routing reply. The CEO
-          // already saw the "I'll pass it to Elvira" acknowledgement.
+          // Marketing Director failed: keep the routing reply.
         }
+      }
+
+      if (routed.decision.intent === "knowledge_query") {
+        const memories = listDepartmentMemory(session, "marketing");
+        if (memories.length === 0) {
+          assistantReply = isEs
+            ? "Todavía no tengo aprendizajes guardados de Marketing. Cuando aprendamos algo relevante, lo guardaré como conocimiento del departamento."
+            : "I don't have any Marketing learnings saved yet. When we learn something relevant, I will store it as department knowledge.";
+        } else {
+          const lines = memories.slice(0, 5).map((m) => {
+            const prefix = provenanceLabel(m.provenance, isEs);
+            return `• ${m.content} (${prefix})`;
+          });
+          assistantReply = isEs
+            ? `Esto es lo que hemos aprendido en Marketing:\n\n${lines.join("\n")}`
+            : `This is what we have learned in Marketing:\n\n${lines.join("\n")}`;
+        }
+        marketingTurn = { role: "assistant", content: assistantReply };
+      }
+
+      if (routed.decision.intent === "remember_fact") {
+        const kind = inferKindFromMessage(message);
+        const title = inferTitleFromMessage(message);
+        const content = message.replace(
+          /^(recuerda|acuérdate|ap[úu]nta(te|me)?|guarda|anota|no olvides|remember|note this|make a note)(\s+para\s+(marketing|ventas|finanzas|operaciones))?\s*(que)?\s*/i,
+          "",
+        ).trim();
+
+        rememberDepartment(session, "marketing", {
+          kind,
+          title: title || content.slice(0, 80),
+          content,
+          provenance: "ceo_statement",
+          importance: 0.7,
+        });
+
+        assistantReply = isEs
+          ? `Lo guardo. He apuntado esto como conocimiento del departamento de Marketing.`
+          : `Saved. I have stored this as Marketing department knowledge.`;
+        marketingTurn = { role: "assistant", content: assistantReply };
       }
 
       session.state.conversation = [
@@ -754,6 +800,7 @@ export async function registerCustomerZeroV2Routes(
                 title: { type: "string" },
                 content: { type: "string" },
                 fromDepartment: { type: "string" },
+                kind: { type: "string" },
                 sourceMemoryIds: { type: "array" },
               },
             },
@@ -772,7 +819,13 @@ export async function registerCustomerZeroV2Routes(
       const { organizationId } = request.params as { organizationId: string };
       const { action, suggestion } = request.body as {
         action: string;
-        suggestion: { title: string; content: string; fromDepartment?: string; sourceMemoryIds?: string[] };
+        suggestion: {
+          title: string;
+          content: string;
+          fromDepartment?: string;
+          kind?: string;
+          sourceMemoryIds?: string[];
+        };
       };
       const session = getCustomerZeroSession(organizationId);
       if (!session) {
@@ -803,8 +856,34 @@ export async function registerCustomerZeroV2Routes(
         });
       }
 
-      // APPROVE: use the canonical Company DNA write path.
-      const rawData = buildDnaRawDataFromSuggestion(suggestion);
+      // APPROVE: use the canonical Company DNA write path with semantic mapping.
+      const dnaKind = (suggestion.kind ?? "result") as DepartmentMemoryKind;
+      let rawData: Readonly<Record<string, unknown>>;
+      try {
+        rawData = buildDnaRawDataFromSuggestion({
+          title: suggestion.title,
+          content: suggestion.content,
+          fromDepartment: suggestion.fromDepartment ?? "marketing",
+          kind: dnaKind,
+        });
+      } catch (cause) {
+        const message =
+          cause instanceof Error ? cause.message : "Cannot promote this memory kind.";
+        session.state.conversation = [
+          ...session.state.conversation,
+          {
+            role: "user",
+            content: isEs ? "Incorporar al DNA" : "Incorporate into DNA",
+          },
+          {
+            role: "assistant",
+            content: isEs
+              ? `No puedo promocionar este tipo de conocimiento al DNA de la empresa. ${message}`
+              : `I cannot promote this type of knowledge to Company DNA. ${message}`,
+          },
+        ];
+        return reply.code(400).send({ error: message });
+      }
       try {
         await runDiscoveryForSession(session, rawData);
       } catch (cause) {
@@ -840,23 +919,51 @@ export async function registerCustomerZeroV2Routes(
   );
 }
 
-/** Converts a DNA suggestion into rawData for the discovery pipeline (the
- *  canonical Company DNA write path). The mergeRawDna mechanism in
- *  business-discovery handles the actual merge. */
-function buildDnaRawDataFromSuggestion(suggestion: {
-  title: string;
-  content: string;
-  fromDepartment?: string;
-}): Readonly<Record<string, unknown>> {
-  return {
-    objectives: [
-      {
-        statement: `Aprendizaje promovido desde ${suggestion.fromDepartment ?? "un departamento"}: ${suggestion.title}. ${suggestion.content}`,
-        provenance: "department_result",
-        confidence: "medium",
-      },
-    ],
+/** Builds Marketing-relevant department memory context for the chat tool. */
+function buildMemoryContextForChat(
+  session: CustomerZeroSession,
+): string {
+  const memories = listDepartmentMemory(session, "marketing", { limit: 5 });
+  if (memories.length === 0) return "";
+  const lines = memories.map(
+    (m) => `- ${m.content} (${provenanceLabel(m.provenance, true)})`,
+  );
+  return `\nConocimiento de Marketing:\n${lines.join("\n")}`;
+}
+
+function provenanceLabel(
+  provenance: DepartmentMemoryProvenance,
+  isEs: boolean,
+): string {
+  const labels: Record<DepartmentMemoryProvenance, string> = {
+    ceo_statement: isEs ? "Dicho por ti" : "You said",
+    conversation: isEs ? "Conversación" : "Conversation",
+    internal_analysis: isEs ? "Aprendido de Marketing" : "Marketing insight",
+    external_tool: isEs ? "Resultado externo" : "External result",
+    discovery: isEs ? "Discovery inicial" : "Initial discovery",
   };
+  return labels[provenance] ?? provenance;
+}
+
+function inferKindFromMessage(message: string): DepartmentMemoryKind {
+  const lower = message.toLowerCase();
+  if (lower.includes("público") || lower.includes("audiencia") || lower.includes("cliente ideal") || lower.includes("target") || lower.includes("icp") || lower.includes("audience")) return "audience";
+  if (lower.includes("posicionam") || lower.includes("compet") || lower.includes("positioning")) return "positioning";
+  if (lower.includes("mensaje") || lower.includes("tono") || lower.includes("voz") || lower.includes("messaging") || lower.includes("tone")) return "messaging";
+  if (lower.includes("campaña") || lower.includes("anuncio") || lower.includes("campaign") || lower.includes("ad")) return "campaign";
+  if (lower.includes("canal") || lower.includes("canales") || lower.includes("channel")) return "channel";
+  if (lower.includes("decid") || lower.includes("decisi") || lower.includes("decision") || lower.includes("decidido")) return "decision";
+  if (lower.includes("experiment") || lower.includes("test") || lower.includes("prueba")) return "experiment";
+  if (lower.includes("resultado") || lower.includes("result") || lower.includes("convirtió") || lower.includes("conversión")) return "result";
+  if (lower.includes("contenido") || lower.includes("content") || lower.includes("redacci")) return "content";
+  return "note";
+}
+
+function inferTitleFromMessage(message: string): string {
+  const cleaned = message
+    .replace(/^(recuerda|acuérdate|ap[úu]nta(te|me)?|guarda|anota|no olvides|remember|note this|make a note)(\s+para\s+(marketing|ventas|finanzas|operaciones))?\s*(que)?\s*/i, "")
+    .trim();
+  return cleaned.slice(0, 80);
 }
 
 /**
