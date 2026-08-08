@@ -728,6 +728,135 @@ export async function registerCustomerZeroV2Routes(
       });
     },
   );
+
+  /** DNA suggestion approval/rejection — Sprint 60. Only explicit CEO
+   *  approval invokes the canonical Company DNA mutation path. */
+  server.post(
+    "/api/customer-zero/:organizationId/command-center/dna-suggestion",
+    {
+      schema: {
+        tags: ["command-center"],
+        summary: "Approve or reject a DNA suggestion from a department",
+        params: {
+          type: "object",
+          required: ["organizationId"],
+          properties: { organizationId: { type: "string" } },
+        },
+        body: {
+          type: "object",
+          required: ["action", "suggestion"],
+          properties: {
+            action: { type: "string", enum: ["approve", "reject"] },
+            suggestion: {
+              type: "object",
+              required: ["title", "content"],
+              properties: {
+                title: { type: "string" },
+                content: { type: "string" },
+                fromDepartment: { type: "string" },
+                sourceMemoryIds: { type: "array" },
+              },
+            },
+          },
+          additionalProperties: false,
+        },
+        response: {
+          200: { type: "object", additionalProperties: true },
+          400: { type: "object", properties: { error: { type: "string" } } },
+          404: { type: "object", properties: { error: { type: "string" } } },
+          500: { type: "object", properties: { error: { type: "string" } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId } = request.params as { organizationId: string };
+      const { action, suggestion } = request.body as {
+        action: string;
+        suggestion: { title: string; content: string; fromDepartment?: string; sourceMemoryIds?: string[] };
+      };
+      const session = getCustomerZeroSession(organizationId);
+      if (!session) {
+        return reply.code(404).send({ error: "Session not found." });
+      }
+      if (action !== "approve" && action !== "reject") {
+        return reply.code(400).send({ error: "Action must be 'approve' or 'reject'." });
+      }
+
+      const isEs = session.state.locale !== "en";
+      if (action === "reject") {
+        session.state.conversation = [
+          ...session.state.conversation,
+          { role: "user", content: isEs ? "No incorporar" : "Don't incorporate" },
+          {
+            role: "assistant",
+            content: isEs
+              ? "De acuerdo. No modificaré lo que sabemos de la empresa. El aprendizaje se queda como conocimiento del departamento de Marketing."
+              : "Understood. I will not change what we know about the company. The learning stays as Marketing department knowledge.",
+          },
+        ];
+        return reply.code(200).send({
+          organizationId,
+          action: "rejected",
+          reply: isEs
+            ? "La información se queda como conocimiento de Marketing. El DNA de la empresa no ha cambiado."
+            : "The information stays as Marketing knowledge. Company DNA unchanged.",
+        });
+      }
+
+      // APPROVE: use the canonical Company DNA write path.
+      const rawData = buildDnaRawDataFromSuggestion(suggestion);
+      try {
+        await runDiscoveryForSession(session, rawData);
+      } catch (cause) {
+        return reply.code(500).send({
+          error: cause instanceof Error ? cause.message : "Could not update Company DNA.",
+        });
+      }
+      const updatedDna = mostRecentReport(session)?.companyDna ?? null;
+
+      session.state.conversation = [
+        ...session.state.conversation,
+        {
+          role: "user",
+          content: isEs ? "Incorporar al DNA" : "Incorporate into DNA",
+        },
+        {
+          role: "assistant",
+          content: isEs
+            ? `Hecho. He incorporado «${suggestion.title}» al conocimiento compartido de la empresa.`
+            : `Done. I have incorporated "${suggestion.title}" into the company's shared knowledge.`,
+        },
+      ];
+
+      return reply.code(200).send({
+        organizationId,
+        action: "approved",
+        reply: isEs
+          ? `Conocimiento incorporado al DNA de la empresa.`
+          : `Knowledge incorporated into Company DNA.`,
+        dnaUpdated: Boolean(updatedDna),
+      });
+    },
+  );
+}
+
+/** Converts a DNA suggestion into rawData for the discovery pipeline (the
+ *  canonical Company DNA write path). The mergeRawDna mechanism in
+ *  business-discovery handles the actual merge. */
+function buildDnaRawDataFromSuggestion(suggestion: {
+  title: string;
+  content: string;
+  fromDepartment?: string;
+}): Readonly<Record<string, unknown>> {
+  return {
+    objectives: [
+      {
+        statement: `Aprendizaje promovido desde ${suggestion.fromDepartment ?? "un departamento"}: ${suggestion.title}. ${suggestion.content}`,
+        provenance: "department_result",
+        confidence: "medium",
+      },
+    ],
+  };
 }
 
 /**

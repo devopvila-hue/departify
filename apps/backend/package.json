@@ -23,6 +23,8 @@
     "@departify/llm-provider-openai": "workspace:^",
     "@departify/llm-router": "workspace:^",
     "@departify/marketing-director": "workspace:*",
+    "@departify/memory": "workspace:*",
+    "@departify/memory-engine": "workspace:*",
     "@departify/platform-composition": "workspace:^",
     "@departify/tool-catalog": "workspace:^",
     "@departify/tool-runtime": "workspace:^",

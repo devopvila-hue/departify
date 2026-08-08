@@ -13,6 +13,7 @@ import { assertMemoryValid } from "../validation/memory-error.js";
 export interface MemoryRecordSnapshot {
   id: string;
   organizationId: string;
+  departmentId?: string;
   ownerId?: string;
   sessionId?: string;
   kind: MemoryKind;
@@ -29,6 +30,7 @@ export interface MemoryRecordSnapshot {
 export interface CreateMemoryInput {
   id: string;
   organizationId: string;
+  departmentId?: string;
   ownerId?: string;
   sessionId?: string;
   kind: MemoryKind;
@@ -70,6 +72,10 @@ export class MemoryRecord {
     }
     if (sessionId) {
       snapshot.sessionId = sessionId;
+    }
+    const departmentId = normalizeOptional(input.departmentId);
+    if (departmentId) {
+      snapshot.departmentId = departmentId;
     }
     if (input.expiresAt) {
       snapshot.expiresAt = input.expiresAt;
@@ -114,6 +120,10 @@ export class MemoryRecord {
     }
     if (sessionId) {
       restored.sessionId = sessionId;
+    }
+    const departmentId = normalizeOptional(snapshot.departmentId);
+    if (departmentId) {
+      restored.departmentId = departmentId;
     }
     if (snapshot.expiresAt) {
       restored.expiresAt = snapshot.expiresAt;
@@ -214,6 +224,11 @@ export class MemoryRecord {
     assertMemoryValid(
       this.snapshot.scope !== "session" || Boolean(this.snapshot.sessionId),
       "Session memory requires sessionId.",
+    );
+    assertMemoryValid(
+      this.snapshot.scope !== "department" ||
+        Boolean(this.snapshot.departmentId),
+      "Department memory requires departmentId.",
     );
   }
 

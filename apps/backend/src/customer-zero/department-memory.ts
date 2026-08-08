@@ -1,30 +1,20 @@
 /**
- * Department Memory — Sprint 59.
+ * Department Memory — Sprint 60.
  *
- * Department memory is NOT another Company DNA. It is a scoped,
- * domain-specific working knowledge that a Department carries across
- * sessions. Marketing remembers previous campaigns, channel performance,
- * messaging tests, audiences, positioning experiments, content history,
- * campaign results, marketing decisions. Finance will eventually carry
- * different knowledge.
+ * Canonical memory architecture. ALL department knowledge flows through
+ * the canonical `packages/memory-engine` `MemoryRecord` aggregate and
+ * persists through the `InMemoryMemoryRecordStore` adapter (the concrete
+ * implementation of `MemoryRecordStore`).
  *
- * The architecture decision (Sprint 59) is:
+ * The Sprint 59 `WeakMap`-based store is removed. Every memory write
+ * creates a `MemoryRecord` with `scope: "department"` and tags that
+ * encode the DepartmentMemoryKind and DepartmentMemoryProvenance.
  *
- *   - Reuse the existing memory-engine port pattern (`MemoryRecordStore`).
- *   - Add a `department` memory scope (already added to memory scopes).
- *   - Department memories are keyed by `organizationId + departmentId`.
- *   - The store is in-memory only — same constraint as the rest of the
- *     Customer Zero flow. Persistence is a future port.
- *   - The store advertises `provenance`: every memory entry carries the
- *     source (CEO statement, internal analysis, external tool result).
- *     CEO-visible updates always come as a SUGGESTION, never as a silent
- *     mutation of Company DNA.
- *
- * The Company DNA (`packages/business-discovery` `CompanyDNA`) remains
- * the shared truth; department memory is department-local. Updates to
- * Company DNA go through the existing discovery pipeline.
+ * Company DNA is NEVER mutated from department memory. DNA promotion
+ * produces a `DnaSuggestion`; only explicit CEO approval invokes the
+ * canonical Company DNA mutation path.
  */
-
+import { MemoryRecord } from "@departify/memory-engine";
 import type { CustomerZeroSession } from "./customer-zero-session.js";
 
 export type DepartmentMemoryKind =
@@ -47,7 +37,6 @@ export type DepartmentMemoryProvenance =
   | "discovery";
 
 export interface DepartmentMemoryEntry {
-  /** Stable id within the (organizationId, departmentId) namespace. */
   readonly id: string;
   readonly organizationId: string;
   readonly departmentId: string;
@@ -56,7 +45,6 @@ export interface DepartmentMemoryEntry {
   readonly content: string;
   readonly provenance: DepartmentMemoryProvenance;
   readonly source?: string;
-  /** Free-form importance score, 0..1. */
   readonly importance: number;
   readonly tags: readonly string[];
   readonly createdAt: Date;
@@ -70,39 +58,67 @@ export interface DepartmentMemoryUpsert {
   provenance: DepartmentMemoryProvenance;
   importance?: number;
   tags?: readonly string[];
-  /** Optional explicit source. Default is the kind string. */
   source?: string;
 }
 
-/**
- * Add an entry to a department's memory. The Company DNA is NEVER
- * mutated here. If a department-level entry is a candidate for the
- * shared truth, the caller must produce a `dnaSuggestion` and surface
- * it to the CEO through the chat.
- */
+export interface DnaSuggestion {
+  readonly title: string;
+  readonly content: string;
+  readonly evidence: readonly string[];
+  readonly fromDepartment: string;
+  readonly confidence: number;
+  /** IDs of the canonical memory records that back this suggestion. */
+  readonly sourceMemoryIds: readonly string[];
+}
+
 export function rememberDepartment(
   session: CustomerZeroSession,
   departmentId: string,
   upsert: DepartmentMemoryUpsert,
 ): DepartmentMemoryEntry {
-  const store = getStore(session);
-  const now = new Date();
-  const entry: DepartmentMemoryEntry = {
-    id: `dpm_${now.getTime().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+  const store = session.memoryStore;
+  const importance = clamp(upsert.importance ?? 0.5);
+  const id = `mem_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+
+  const tags = buildCanonicalTags(
+    upsert.kind,
+    upsert.provenance,
+    upsert.tags,
+  );
+
+  const fullContent = upsert.title && upsert.title !== upsert.content
+    ? `[${upsert.title}] ${upsert.content}`
+    : upsert.content;
+
+  const record = MemoryRecord.create({
+    id,
     organizationId: session.organizationId,
     departmentId,
+    kind: "department",
+    scope: "department",
+    content: fullContent,
+    priority: toPriority(importance),
+    tags,
+  });
+
+  void store.create(record.toSnapshot());
+
+  const snapshot = record.toSnapshot();
+  const now = new Date();
+  return {
+    id: snapshot.id,
+    organizationId: snapshot.organizationId,
+    departmentId: snapshot.departmentId ?? departmentId,
     kind: upsert.kind,
     title: upsert.title,
     content: upsert.content,
     provenance: upsert.provenance,
     source: upsert.source ?? upsert.kind,
-    importance: clamp(upsert.importance ?? 0.5),
+    importance,
     tags: upsert.tags ?? [],
-    createdAt: now,
+    createdAt: snapshot.createdAt,
     updatedAt: now,
   };
-  store.push(entry);
-  return entry;
 }
 
 export function listDepartmentMemory(
@@ -110,22 +126,18 @@ export function listDepartmentMemory(
   departmentId: string,
   options?: { kind?: DepartmentMemoryKind; limit?: number },
 ): DepartmentMemoryEntry[] {
-  const store = getStore(session);
-  const filtered = store.filter((entry) => {
-    if (entry.departmentId !== departmentId) return false;
-    if (options?.kind && entry.kind !== options.kind) return false;
-    return true;
+  const store = session.memoryStore;
+  const snapshots = store.list({
+    organizationId: session.organizationId,
+    departmentId,
+    scope: "department",
+    ...(options?.kind ? { tag: kindTag(options.kind) } : {}),
+    limit: options?.limit ?? 50,
   });
-  return filtered
-    .sort((a, b) => b.importance - a.importance || b.updatedAt.getTime() - a.updatedAt.getTime())
-    .slice(0, options?.limit ?? 50);
+
+  return snapshots.map(mapSnapshotToEntry);
 }
 
-/**
- * Builds a list of human-readable department memory entries as a
- * small Markdown-ish block. The CEO never sees this raw; only the
- * central chat reads it. Today it returns the title of each entry.
- */
 export function summariseDepartmentMemory(
   session: CustomerZeroSession,
   departmentId: string,
@@ -134,26 +146,21 @@ export function summariseDepartmentMemory(
   return listDepartmentMemory(session, departmentId, { limit });
 }
 
-export interface DnaSuggestion {
-  readonly title: string;
-  readonly content: string;
-  readonly evidence: readonly string[];
-  /** Department that discovered the candidate insight. */
-  readonly fromDepartment: string;
-  readonly confidence: number;
+export function findSimilarDepartmentMemory(
+  session: CustomerZeroSession,
+  departmentId: string,
+  content: string,
+): boolean {
+  return session.memoryStore.hasSimilar(departmentId, content);
 }
 
-/**
- * A `DnaSuggestion` is what a Department would LIKE to commit to the
- * shared Company DNA. Approval is the CEO's. The Department NEVER
- * writes it directly to the discovery report.
- */
 export function buildDnaSuggestion(input: {
   fromDepartment: string;
   title: string;
   content: string;
   evidence?: readonly string[];
   confidence?: number;
+  sourceMemoryIds?: readonly string[];
 }): DnaSuggestion {
   return {
     fromDepartment: input.fromDepartment,
@@ -161,29 +168,97 @@ export function buildDnaSuggestion(input: {
     content: input.content,
     evidence: input.evidence ?? [],
     confidence: clamp(input.confidence ?? 0.6),
+    sourceMemoryIds: input.sourceMemoryIds ?? [],
   };
 }
 
 /* -------------------------------------------------------------------------
- * Internal — the in-memory store is attached to the session so it
- * survives reload within the same process, the same way the rest of
- * the Customer Zero flow operates. Persistence is a future port.
+ * Internal — tag encoding for DepartmentMemoryKind and provenance.
+ * The canonical Memory Engine tags must match /^[a-z][a-z0-9._-]{1,47}$/
  * -------------------------------------------------------------------------*/
 
-const STORE = new WeakMap<CustomerZeroSession, DepartmentMemoryEntry[]>();
-
-function getStore(session: CustomerZeroSession): DepartmentMemoryEntry[] {
-  let entry = STORE.get(session);
-  if (!entry) {
-    entry = [];
-    STORE.set(session, entry);
-  }
-  return entry;
+function kindTag(kind: DepartmentMemoryKind): string {
+  return `kind.${kind}`;
 }
 
-function clamp(value: number): number {
+function provenanceTag(provenance: DepartmentMemoryProvenance): string {
+  return `prov.${provenance}`;
+}
+
+function buildCanonicalTags(
+  kind: DepartmentMemoryKind,
+  provenance: DepartmentMemoryProvenance,
+  extraTags: readonly string[] | undefined,
+): readonly string[] {
+  const tags = [kindTag(kind), provenanceTag(provenance)];
+  if (extraTags) {
+    for (const tag of extraTags) {
+      tags.push(tag.trim().toLowerCase());
+    }
+  }
+  return tags;
+}
+
+function mapSnapshotToEntry(
+  snapshot: ReturnType<MemoryRecord["toSnapshot"]>,
+): DepartmentMemoryEntry {
+  const tags = snapshot.tags;
+  const kind = extractKindFromTags(tags) ?? "note";
+  const provenance = extractProvenanceFromTags(tags) ?? "conversation";
+  const userTags = tags.filter(
+    (t: string) => !t.startsWith("kind.") && !t.startsWith("prov."),
+  );
+  const content = snapshot.content.replace(/^\[.*?\]\s*/, "");
+  const titleMatch = snapshot.content.match(/^\[(.*?)\]\s*/);
+
+  return {
+    id: snapshot.id,
+    organizationId: snapshot.organizationId,
+    departmentId: snapshot.departmentId ?? "unknown",
+    kind,
+    title: titleMatch ? titleMatch[1] ?? "" : "",
+    content,
+    provenance,
+    importance: fromPriority(snapshot.priority),
+    tags: userTags,
+    createdAt: snapshot.createdAt,
+    updatedAt: snapshot.updatedAt,
+  };
+}
+
+function extractKindFromTags(
+  tags: readonly string[],
+): DepartmentMemoryKind | null {
+  for (const tag of tags) {
+    if (tag.startsWith("kind.")) {
+      const kind = tag.slice(5) as DepartmentMemoryKind;
+      if (kind.length > 0) return kind;
+    }
+  }
+  return null;
+}
+
+function extractProvenanceFromTags(
+  tags: readonly string[],
+): DepartmentMemoryProvenance | null {
+  for (const tag of tags) {
+    if (tag.startsWith("prov.")) {
+      const prov = tag.slice(5) as DepartmentMemoryProvenance;
+      if (prov.length > 0) return prov;
+    }
+  }
+  return null;
+}
+
+function toPriority(importance: number): number {
+  return clamp(Math.round(importance * 100), 1, 100);
+}
+
+function fromPriority(priority: number): number {
+  return clamp(priority / 100);
+}
+
+function clamp(value: number, min = 0, max = 1): number {
   if (Number.isNaN(value)) return 0.5;
-  if (value < 0) return 0;
-  if (value > 1) return 1;
-  return value;
+  return Math.max(min, Math.min(max, value));
 }

@@ -46,6 +46,10 @@ import {
   type TeamFormationResult,
 } from "@departify/marketing-director";
 import {
+  createInMemoryMemoryRecordStore,
+} from "@departify/memory";
+import type { InMemoryMemoryRecordStore } from "@departify/memory";
+import {
   createToolRuntime,
   ToolRegistry as ToolRuntimeRegistry,
 } from "@departify/tool-runtime";
@@ -157,6 +161,8 @@ export interface CustomerZeroSession {
   readonly port: AgentToolPort;
   readonly provisioning: BusinessProvisioningService;
   readonly businessEvents: BusinessEventService;
+  /** Canonical department memory store (Sprint 60). */
+  readonly memoryStore: InMemoryMemoryRecordStore;
   state: CustomerZeroSessionState;
   reports: readonly CompanyDiscoveryReport[];
 }
@@ -313,6 +319,7 @@ export function getOrCreateCustomerZeroSession(
     port,
     provisioning,
     businessEvents: new BusinessEventService({ catalog }),
+    memoryStore: createInMemoryMemoryRecordStore(),
     state: {
       organizationId,
       rawData: {},
@@ -346,7 +353,11 @@ export function listCustomerZeroSessions(): readonly string[] {
  */
 export async function runDiscoveryForSession(
   session: CustomerZeroSession,
+  extraRawData?: Readonly<Record<string, unknown>>,
 ): Promise<CompanyDiscoveryReport> {
+  const mergedRawData = extraRawData
+    ? { ...session.state.rawData, ...extraRawData }
+    : session.state.rawData;
   const result = await session.discoveryWorkflow.run({
     organizationId: session.organizationId,
     requestedBy: "system",
@@ -356,8 +367,8 @@ export async function runDiscoveryForSession(
       includeMarketAnalysis: false,
       depth: "standard",
     },
-    ...(Object.keys(session.state.rawData).length > 0
-      ? { rawData: session.state.rawData }
+    ...(Object.keys(mergedRawData).length > 0
+      ? { rawData: mergedRawData }
       : {}),
   });
 
