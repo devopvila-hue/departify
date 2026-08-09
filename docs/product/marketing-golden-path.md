@@ -63,5 +63,6 @@ CEO
 - ENGINE 03 — PASS (23/23 tests real engine).
 - ENGINE 04 — PASS (Control Plane funcional, 23/23 tests portal).
 - MARKETING — LOCAL E2E PASS.
-- DEPLOYMENT — READY (falta el sprint de despliegue real).
-- GOLDEN DEPARTMENT — solo tras funcionar realmente desplegado.
+- DEPLOY 01 — PRODUCTION PASS (engine/backend/portal deployed, Golden Path
+  verificado end-to-end en producción — ver `docs/deploy/deploy01-production-test.md`).
+- GOLDEN DEPARTMENT — OPERATIVE en producción.

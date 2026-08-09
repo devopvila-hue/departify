@@ -127,3 +127,32 @@ pnpm exec netlify dev --filter @departify/portal
 pnpm exec railway link
 docker compose up --build
 ```
+
+## Production deployment (DEPLOY 01)
+
+| Surface | Host | Endpoint |
+| ------- | ---- | -------- |
+| Backend | Railway `departify-api` (sfo) | https://api.departify.app |
+| Engine (OpenClaw Gateway) | Railway `departify-engine` (us-east-1) | private `ws://departify-engine.railway.internal:18889` |
+| Portal | Netlify `business-os-client` | https://app.departify.app |
+| Docs | Netlify `departify` | https://docs.departify.app |
+| Supabase | managed | https://qygssfuqkqzrhwduafft.supabase.co |
+
+The Marketing path is fully production-operational: onboarding → research →
+Elvira (Marketing) via EngineAdapter → OpenClaw Gateway → Google Vertex
+(`google-vertex/gemini-2.5-flash`) → durable state in Supabase
+(`marketing_objectives` / `marketing_activity` / `marketing_approvals`).
+`ENGINE_RUNTIME_POLICY=strict` on the backend: an engine failure surfaces as
+"Marketing no está disponible temporalmente" (no legacy fallback).
+
+Operational notes:
+- The engine device identity is an Ed25519 key. In production the backend
+  passes it inline as `OPENCLAW_DEVICE_KEY_PEM` (secret). Device pairing
+  persists in the engine volume (`/home/node/.openclaw/devices/paired.json`).
+- Railway healthcheck probes the `PORT` env port, not `EXPOSE`: `PORT` must
+  equal the gateway port (18889).
+- The backend client resets the gateway challenge (nonce/timestamp) on every
+  connect so reconnects after a gateway restart never sign with a stale
+  timestamp (`DEVICE_AUTH_SIGNATURE_EXPIRED`).
+- Runbooks and test evidence: `docs/deploy/deploy01-runbook.md`,
+  `docs/deploy/deploy01-production-test.md`.

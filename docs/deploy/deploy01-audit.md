@@ -1,6 +1,7 @@
 # DEPLOY 01 — Pre-deploy audit
 
-Status: AUDIT — read before changing production.
+Status: AUDIT COMPLETE — deployment executed. See `deploy01-runbook.md` and
+`deploy01-production-test.md` for the executed state and verification.
 
 ## Current state
 
@@ -77,10 +78,16 @@ token, timeouts, device key path, model), `GOOGLE_CLOUD_PROJECT/LOCATION`,
 
 ## Known blockers
 
-- No engine or portal deployed yet.
-- Backend must switch to EngineAdapter + Vertex (not the legacy OpenAI path).
-- Durable Marketing state does not exist yet (in-memory).
-- Vertex production auth (service account) not configured.
+- ~~No engine or portal deployed yet.~~ Resolved: engine online (Railway,
+  private network), portal live (Netlify app.departify.app).
+- ~~Backend must switch to EngineAdapter + Vertex (not the legacy OpenAI
+  path).~~ Resolved: `ENGINE_PROVIDER=openclaw`, `ENGINE_RUNTIME_POLICY=strict`,
+  model `google-vertex/gemini-2.5-flash`.
+- ~~Durable Marketing state does not exist yet (in-memory).~~ Resolved:
+  Supabase `marketing_objectives`/`marketing_activity`/`marketing_approvals`
+  active in production.
+- ~~Vertex production auth (service account) not configured.~~ Resolved:
+  SA `departify-vertex-runtime` with `roles/aiplatform.user`.
 
 ## Deployment plan
 
