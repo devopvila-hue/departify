@@ -49,10 +49,14 @@ import {
   buildConnectionState,
   buildConnectionStateWithLifecycle,
   completeConnection,
+  domainsFor,
+  hasWorkingConnector,
   resolveTool,
   startConnection,
   TOOL_CATALOG,
   type ConnectionState,
+  type ToolDescriptor,
+  type ToolDomain,
 } from "../../customer-zero/connections.js";
 import {
   isReadyForMarketing,
@@ -461,9 +465,7 @@ export async function registerCustomerZeroV2Routes(
       const session = await requireSession(organizationId, deps);
       return reply.code(200).send({
         organizationId,
-        connections: [...session.state.connections.values()].map((connection) =>
-          buildToolConnectionView(connection, session.state.locale),
-        ),
+        connections: buildCatalogConnectionViews(session, session.state.locale),
         unmappedTools: session.state.unmappedTools,
       });
     },
@@ -645,6 +647,52 @@ export async function registerCustomerZeroV2Routes(
       }
       completeConnection(connection);
       return reply.code(200).send({ organizationId, connection });
+    },
+  );
+
+  server.post(
+    "/api/customer-zero/:organizationId/connections/:toolId/declare",
+    {
+      schema: {
+        tags: ["customer-zero"],
+        summary:
+          "Declare a catalog tool for the organization (durable, never connected)",
+        params: {
+          type: "object",
+          required: ["organizationId", "toolId"],
+          properties: {
+            organizationId: { type: "string" },
+            toolId: { type: "string" },
+          },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["organizationId", "connection"],
+            properties: {
+              organizationId: { type: "string" },
+              connection: { type: "object", additionalProperties: true },
+            },
+          },
+          404: { type: "object", properties: { error: { type: "string" } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId, toolId } = request.params as {
+        organizationId: string;
+        toolId: string;
+      };
+      const session = await requireSession(organizationId, deps);
+      const tool = TOOL_CATALOG.find((entry) => entry.id === toolId);
+      if (!tool) {
+        return reply.code(404).send({ error: "Tool not found in catalog." });
+      }
+      await declareCatalogTool(session, tool);
+      const view = buildCatalogConnectionViews(session, session.state.locale).find(
+        (entry) => entry.toolId === toolId,
+      );
+      return reply.code(200).send({ organizationId, connection: view });
     },
   );
 
@@ -1553,22 +1601,7 @@ async function registerTools(
       }
       continue;
     }
-    const existing = session.state.connections.get(tool.id);
-    if (!existing) {
-      const declared = buildDeclaredToolState(
-        session.organizationId,
-        tool.id,
-        tool.label,
-        tool.capability,
-      );
-      session.state.connections.set(
-        tool.id,
-        buildConnectionStateWithLifecycle(tool, locale, declared.status, {
-          ...(declared.configSource ? { configSource: declared.configSource } : {}),
-        }),
-      );
-      await persistToolState(session, declared);
-    }
+    await declareCatalogTool(session, tool);
   }
 }
 
@@ -1600,55 +1633,75 @@ function publicBaseUrl(): string {
   return process.env.PUBLIC_BASE_URL ?? "http://localhost:3000";
 }
 
-/** The /conexiones view: durable lifecycle + human label + honest action. */
+/** The /conexiones view: catalog availability + durable lifecycle. */
 export interface ToolConnectionView {
   readonly toolId: string;
   readonly label: string;
-  readonly capability?: string;
+  readonly capability: string;
   readonly category: string;
-  readonly status: ToolLifecycleStatus;
+  /** Business domains this tool belongs to (primary first). */
+  readonly domains: readonly ToolDomain[];
+  /** "available" when the org has no state for the tool. */
+  readonly state: ToolLifecycleStatus | "available";
+  readonly hasState: boolean;
   readonly humanLabel: string;
-  readonly action: "connect" | "verify" | "retry" | null;
+  readonly action: "prepare" | "connect" | "verify" | "retry" | null;
   readonly verifiedAt?: string;
   readonly blockedReason?: string;
 }
 
-function buildToolConnectionView(
-  connection: ConnectionState,
+/**
+ * The full /conexiones surface: every catalog tool with its organization
+ * state. "Not selected during onboarding" means AVAILABLE, not absent.
+ */
+function buildCatalogConnectionViews(
+  session: CustomerZeroSession,
   locale: SupportedLocale,
-): ToolConnectionView {
-  const lifecycle: ToolLifecycleStatus =
-    connection.lifecycle ??
-    (connection.status === "connected"
-      ? "connected"
-      : connection.status === "blocked"
-        ? "unavailable"
-        : "needs_connection");
-  const tool = TOOL_CATALOG.find((entry) => entry.id === connection.toolId);
-  return {
-    toolId: connection.toolId,
-    label: connection.label,
-    ...(connection.capability ? { capability: connection.capability } : {}),
-    category: connection.category,
-    status: lifecycle,
-    humanLabel: humanLifecycleLabel(lifecycle, locale),
-    action: connectionAction(
-      connection.toolId,
-      tool?.connectable ?? false,
-      lifecycle,
-    ),
-    ...(connection.verifiedAt ? { verifiedAt: connection.verifiedAt } : {}),
-    ...(connection.blockedReason ? { blockedReason: connection.blockedReason } : {}),
-  };
+): ToolConnectionView[] {
+  const connected = session.state.connections;
+  return TOOL_CATALOG.map((tool) => {
+    const connection = connected.get(tool.id);
+    const category = locale === "en" ? tool.categoryEn : tool.categoryEs;
+    if (!connection) {
+      return {
+        toolId: tool.id,
+        label: tool.label,
+        capability: tool.capability,
+        category,
+        domains: domainsFor(tool.id),
+        state: "available",
+        hasState: false,
+        humanLabel: t(locale, "Disponible", "Available"),
+        action: "prepare",
+      };
+    }
+    const lifecycle: ToolLifecycleStatus =
+      connection.lifecycle ??
+      (connection.status === "connected" ? "connected" : "needs_connection");
+    return {
+      toolId: tool.id,
+      label: tool.label,
+      capability: tool.capability,
+      category,
+      domains: domainsFor(tool.id),
+      state: lifecycle,
+      hasState: true,
+      humanLabel: humanLifecycleLabel(lifecycle, locale),
+      action: catalogAction(tool, lifecycle),
+      ...(connection.verifiedAt ? { verifiedAt: connection.verifiedAt } : {}),
+      ...(connection.blockedReason ? { blockedReason: connection.blockedReason } : {}),
+    };
+  });
 }
 
-/** Only real connectors get an actionable button; no fake OAuth for the rest. */
-function connectionAction(
-  toolId: string,
-  connectable: boolean,
-  lifecycle: ToolLifecycleStatus,
+/** Only real actions: Mautic can verify/connect; everything else may be
+ *  prepared (declared durably) but never fakes a connector. */
+function catalogAction(
+  tool: { id: string },
+  lifecycle: ToolLifecycleStatus | "available",
 ): ToolConnectionView["action"] {
-  if (toolId !== "mautic" || !connectable) return null;
+  if (lifecycle === "available") return "prepare";
+  if (!hasWorkingConnector(tool.id)) return null;
   switch (lifecycle) {
     case "configured":
       return "verify";
@@ -1663,7 +1716,27 @@ function connectionAction(
   }
 }
 
-/** Projects a session connection into a durable OrganizationToolState. */
+/** Declares a catalog tool for the organization (durable, never connected). */
+async function declareCatalogTool(
+  session: CustomerZeroSession,
+  tool: ToolDescriptor,
+): Promise<void> {
+  if (session.state.connections.has(tool.id)) return;
+  const declared = buildDeclaredToolState(
+    session.organizationId,
+    tool.id,
+    tool.label,
+    tool.capability,
+  );
+  session.state.connections.set(
+    tool.id,
+    buildConnectionStateWithLifecycle(tool, session.state.locale, declared.status, {
+      ...(declared.configSource ? { configSource: declared.configSource } : {}),
+    }),
+  );
+  await persistToolState(session, declared);
+}
+
 function toolStateFromConnection(
   session: CustomerZeroSession,
   connection: ConnectionState,

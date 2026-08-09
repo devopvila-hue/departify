@@ -37,6 +37,7 @@
  */
 import { t, type SupportedLocale } from "./locale.js";
 import {
+  hasWorkingConnector,
   resolveTool,
   type ToolDescriptor,
   type ConnectionState,
@@ -561,15 +562,19 @@ function buildConnectionOutcome(input: CommandCenterInput): {
   }
 
   const suggestion = discoverConnection(input);
+  // Honest product direction: only tools with a REAL connector are promised as
+  // connectable. Everything else points the CEO to /conexiones to prepare the
+  // access — never claims a connection that cannot be established.
+  const working = hasWorkingConnector(suggestion.toolId ?? "");
   return {
     decision: {
       intent: "request_connection",
       departments: ["marketing"],
-      rationale: suggestion.connectable
+      rationale: working
         ? `Integration discovery identified ${suggestion.label} as a connectable capability.`
         : `Integration discovery identified ${suggestion.label} but it cannot be connected today.`,
     },
-    reply: suggestion.connectable
+    reply: working
       ? t(
           input.locale,
           `${suggestion.label} puede entrar en tu empresa. ${suggestion.why} Te indico qué necesito para conectarlo.`,
@@ -577,10 +582,10 @@ function buildConnectionOutcome(input: CommandCenterInput): {
         )
       : t(
           input.locale,
-          `${suggestion.label} todavía no lo podemos conectar, pero ${suggestion.why} En cuanto esté, Elvira puede seguir con el trabajo que depende de ello.`,
-          `${suggestion.label} can't be connected yet, but ${suggestion.why} When it is, Elvira can continue the work that depends on it.`,
+          `${suggestion.label} todavía no está conectado. Lo encontrarás en Conexiones para preparar el acceso.`,
+          `${suggestion.label} is not connected yet. You will find it in Connections to prepare access.`,
         ),
-    connectionSuggestion: suggestion,
+    connectionSuggestion: { ...suggestion, connectable: working },
   };
 }
 
@@ -1031,7 +1036,7 @@ function projectConnectionSuggestion(
     label: conn.label,
     capability: conn.capability,
     why: whyForCapability(conn.capability, locale),
-    connectable: tool?.connectable ?? false,
+    connectable: hasWorkingConnector(conn.toolId),
     requiredCredentials: tool?.requiredCredentials ?? [],
     rawInput: conn.toolId,
   };

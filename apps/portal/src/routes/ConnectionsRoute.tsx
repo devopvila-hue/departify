@@ -5,13 +5,29 @@ import { useOrg } from "@/app/org-context";
 import { Badge, Card, EmptyState } from "@/components/primitives";
 
 /**
- * Conexiones — the tools the company works with (durable organization state,
- * Phase P-B).
+ * Conexiones — the company's capability/tool catalog + durable state
+ * (Phase P-B production fix).
  *
- * Capability-first and honest: SELECTED/CONFIGURED/CONNECTED/DEGRADED are
- * shown in human language. Only real connectors get an actionable button —
- * no fake OAuth for tools without an implementation.
+ * The catalog is the permanent surface: tools declared during onboarding,
+ * configured/connected tools, AND relevant available tools that can be added
+ * later. "Not selected during onboarding" never means "absent forever".
+ *
+ * Honest by construction: only real actions are offered. Mautic can be
+ * verified/connected; everything else can only be prepared (declared) —
+ * never a fake OAuth button.
  */
+
+const DOMAIN_LABELS: Record<string, string> = {
+  crm: "CRM",
+  email: "Correo",
+  calendar: "Calendario",
+  documents: "Documentos",
+  marketing: "Marketing",
+  team: "Equipo",
+};
+
+const DOMAIN_ORDER = ["crm", "email", "calendar", "documents", "marketing", "team"];
+
 export function ConnectionsRoute() {
   const { organizationId } = useOrg();
   const [connections, setConnections] = useState<ToolConnectionView[]>([]);
@@ -31,14 +47,26 @@ export function ConnectionsRoute() {
     void load();
   }, [load]);
 
-  async function connect(toolId: string) {
+  async function runAction(tool: ToolConnectionView) {
     if (!organizationId) return;
-    setBusy(toolId);
-    await api.connect(organizationId, toolId);
+    setBusy(tool.toolId);
+    if (tool.action === "prepare") {
+      await api.declareTool(organizationId, tool.toolId);
+    } else {
+      await api.connect(organizationId, tool.toolId);
+    }
     setBusy(null);
-    // The connect/verify action mutates durable state; re-read it.
     await load();
   }
+
+  const primaryDomain = (tool: ToolConnectionView): string =>
+    tool.domains[0] ?? "crm";
+
+  const groups = DOMAIN_ORDER.map((domain) => ({
+    domain,
+    label: DOMAIN_LABELS[domain] ?? domain,
+    tools: connections.filter((tool) => primaryDomain(tool) === domain),
+  })).filter((group) => group.tools.length > 0);
 
   return (
     <div className="dfy-page">
@@ -46,53 +74,34 @@ export function ConnectionsRoute() {
         <p className="dfy-eyebrow">Conexiones</p>
         <h1>Las herramientas de tu empresa</h1>
         <p className="dfy-hero__lead">
-          Cuantas más conectes, más cosas podrá hacer tu equipo por su cuenta.
+          Tu catálogo de capacidades. Selecciona las que usa la empresa y
+          conecta las que Departify puede operar.
         </p>
       </section>
 
-      {connections.length === 0 ? (
+      {groups.length === 0 ? (
         <Card>
           <EmptyState
             title="Sin herramientas todavía"
-            description="Cuéntale a tu jefa de Marketing qué usáis en el día a día y te lo conectará."
+            description="El catálogo se está preparando. Vuelve en un momento."
           />
         </Card>
       ) : (
-        <div className="dfy-grid">
-          {connections.map((connection) => (
-            <Card key={connection.toolId}>
-              <div className="dfy-work__head">
-                <strong>{connection.label}</strong>
-                <Badge tone={toneFor(connection.status)}>
-                  {connection.humanLabel}
-                </Badge>
-              </div>
-              <p className="dfy-muted dfy-muted--small">{connection.category}</p>
-              {connection.action && (
-                <button
-                  type="button"
-                  className="dfy-button dfy-button--small"
-                  disabled={busy === connection.toolId}
-                  onClick={() => void connect(connection.toolId)}
-                >
-                  {busy === connection.toolId
-                    ? "Comprobando…"
-                    : actionLabel(connection)}
-                </button>
-              )}
-              {connection.action === null &&
-                connection.status !== "connected" && (
-                  <p className="dfy-note">
-                    Todavía no podemos conectar {connection.label}. Tu equipo lo
-                    tiene en cuenta; te avisaremos cuando esté listo.
-                  </p>
-                )}
-              {connection.status === "connected" && connection.verifiedAt && (
-                <p className="dfy-note">Verificado {fecha(connection.verifiedAt)}.</p>
-              )}
-            </Card>
-          ))}
-        </div>
+        groups.map((group) => (
+          <section key={group.domain} className="dfy-catalog-group">
+            <h2 className="dfy-catalog-group__title">{group.label}</h2>
+            <div className="dfy-grid">
+              {group.tools.map((connection) => (
+                <ToolCard
+                  key={connection.toolId}
+                  connection={connection}
+                  busy={busy === connection.toolId}
+                  onAction={() => void runAction(connection)}
+                />
+              ))}
+            </div>
+          </section>
+        ))
       )}
 
       {unmapped.length > 0 && (
@@ -100,8 +109,7 @@ export function ConnectionsRoute() {
           <p className="dfy-muted">{unmapped.join(", ")}</p>
           <p className="dfy-muted dfy-muted--small">
             Tu equipo lo tiene en cuenta. Si alguna es razonablemente integrable
-            la añadiremos; si no, te diremos qué necesitas sin cambiar de
-            CRM por capricho.
+            la añadiremos al catálogo.
           </p>
         </Card>
       )}
@@ -109,8 +117,63 @@ export function ConnectionsRoute() {
   );
 }
 
+function ToolCard(props: {
+  connection: ToolConnectionView;
+  busy: boolean;
+  onAction: () => void;
+}) {
+  const { connection } = props;
+  const secondaryDomains = connection.domains.slice(1);
+  return (
+    <Card>
+      <div className="dfy-work__head">
+        <strong>{connection.label}</strong>
+        <Badge tone={toneFor(connection)}>{connection.humanLabel}</Badge>
+      </div>
+      <p className="dfy-muted dfy-muted--small">
+        {connection.category}
+        {secondaryDomains.length > 0 &&
+          ` · También: ${secondaryDomains
+            .map((domain) => DOMAIN_LABELS[domain] ?? domain)
+            .join(", ")}`}
+      </p>
+
+      {props.connection.action && (
+        <button
+          type="button"
+          className="dfy-button dfy-button--small"
+          disabled={props.busy}
+          onClick={props.onAction}
+        >
+          {props.busy ? "Comprobando…" : actionLabel(props.connection)}
+        </button>
+      )}
+
+      {props.connection.action === null && connection.state !== "available" && (
+        <p className="dfy-note">
+          {connection.state === "needs_connection" ||
+          connection.state === "selected"
+            ? "Seleccionada. La conexión estará disponible pronto."
+            : "Todavía no podemos operar esta herramienta."}
+        </p>
+      )}
+      {connection.state === "available" && (
+        <p className="dfy-note">
+          Disponible para añadir a la empresa. Al seleccionarla la guardamos y
+          podremos preparar el acceso cuando esté listo.
+        </p>
+      )}
+      {connection.state === "connected" && connection.verifiedAt && (
+        <p className="dfy-note">Verificado {fecha(connection.verifiedAt)}.</p>
+      )}
+    </Card>
+  );
+}
+
 function actionLabel(connection: ToolConnectionView): string {
   switch (connection.action) {
+    case "prepare":
+      return "Preparar conexión";
     case "verify":
       return "Verificar conexión";
     case "retry":
@@ -130,9 +193,9 @@ function fecha(iso: string): string {
 }
 
 function toneFor(
-  status: ToolConnectionView["status"],
+  connection: ToolConnectionView,
 ): "neutral" | "accent" | "warning" | "danger" | "success" {
-  switch (status) {
+  switch (connection.state) {
     case "connected":
       return "success";
     case "configured":
@@ -143,5 +206,8 @@ function toneFor(
     case "needs_connection":
     case "selected":
       return "warning";
+    case "available":
+    default:
+      return "neutral";
   }
 }

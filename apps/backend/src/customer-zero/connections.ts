@@ -25,6 +25,82 @@ export type ConnectionStatus =
   | "connected"
   | "blocked";
 
+/** Business domains used to organize the /conexiones catalog. */
+export type ToolDomain =
+  | "crm"
+  | "email"
+  | "calendar"
+  | "documents"
+  | "marketing"
+  | "team";
+
+export const CATALOG_DOMAINS: readonly ToolDomain[] = [
+  "crm",
+  "email",
+  "calendar",
+  "documents",
+  "marketing",
+  "team",
+];
+
+/** Domain membership per tool (a tool may belong to several domains). */
+export const TOOL_DOMAINS: Readonly<Record<string, readonly ToolDomain[]>> = {
+  gmail: ["email"],
+  google_workspace: ["documents"],
+  outlook: ["email"],
+  microsoft_365: ["documents"],
+  whatsapp: ["team"],
+  telegram: ["team"],
+  hubspot: ["crm", "marketing"],
+  salesforce: ["crm"],
+  pipedrive: ["crm"],
+  zoho: ["crm"],
+  mautic: ["crm", "marketing"],
+  mailchimp: ["marketing", "email"],
+  slack: ["team"],
+  notion: ["documents"],
+  google_calendar: ["calendar"],
+  microsoft_calendar: ["calendar"],
+  google_drive: ["documents"],
+  onedrive: ["documents"],
+  dropbox: ["documents"],
+  brevo: ["marketing", "email"],
+  microsoft_teams: ["team"],
+};
+
+export function domainsFor(toolId: string): readonly ToolDomain[] {
+  return TOOL_DOMAINS[toolId] ?? [];
+}
+
+export function domainLabel(
+  domain: ToolDomain,
+  locale: SupportedLocale,
+): string {
+  const es = locale !== "en";
+  switch (domain) {
+    case "crm":
+      return es ? "CRM" : "CRM";
+    case "email":
+      return es ? "Correo" : "Email";
+    case "calendar":
+      return es ? "Calendario" : "Calendar";
+    case "documents":
+      return es ? "Documentos" : "Documents";
+    case "marketing":
+      return es ? "Marketing" : "Marketing";
+    case "team":
+      return es ? "Equipo" : "Team";
+  }
+}
+
+/**
+ * Whether Departify has a REAL, working connector (verification handshake)
+ * for the tool. Today only Mautic. Catalog presence alone is NOT a connector.
+ */
+export function hasWorkingConnector(toolId: string): boolean {
+  return toolId === "mautic";
+}
+
 export interface ToolDescriptor {
   /** Stable internal id, used as the connector id. */
   readonly id: string;

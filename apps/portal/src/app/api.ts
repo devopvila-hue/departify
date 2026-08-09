@@ -32,14 +32,26 @@ export type ToolLifecycleStatus =
   | "degraded"
   | "unavailable";
 
+export type ToolDomain =
+  | "crm"
+  | "email"
+  | "calendar"
+  | "documents"
+  | "marketing"
+  | "team";
+
 export interface ToolConnectionView {
   toolId: string;
   label: string;
-  capability?: string;
+  capability: string;
   category: string;
-  status: ToolLifecycleStatus;
+  /** Business domains this tool belongs to (primary first). */
+  domains: ToolDomain[];
+  /** "available" when the organization has no state for the tool. */
+  state: ToolLifecycleStatus | "available";
+  hasState: boolean;
   humanLabel: string;
-  action: "connect" | "verify" | "retry" | null;
+  action: "prepare" | "connect" | "verify" | "retry" | null;
   verifiedAt?: string;
   blockedReason?: string;
 }
@@ -382,6 +394,10 @@ export const api = {
   connections: (org: string) =>
     getJson<{ connections: ToolConnectionView[]; unmappedTools: string[] }>(
       `/api/customer-zero/${org}/connections`,
+    ),
+  declareTool: (org: string, toolId: string) =>
+    postJson<{ connection: ToolConnectionView }>(
+      `/api/customer-zero/${org}/connections/${toolId}/declare`,
     ),
   connect: (org: string, toolId: string) =>
     postJson<{ connection: ConnectionCard }>(

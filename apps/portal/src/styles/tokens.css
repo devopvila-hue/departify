@@ -2100,3 +2100,17 @@ select {
 .dfy-chat-history__archive:hover {
   color: var(--dfy-color-danger, #c0392b);
 }
+
+/* Phase P-B fix — catalog groups */
+.dfy-catalog-group {
+  display: grid;
+  gap: 10px;
+}
+.dfy-catalog-group__title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--dfy-color-muted);
+  margin: 4px 0 0;
+}
