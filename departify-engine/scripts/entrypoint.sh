@@ -39,12 +39,20 @@ if [ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" ] && [ -n "${GOOGLE_VERTEX_SA_JSON
   printf '%s' "$GOOGLE_VERTEX_SA_JSON" > "$SA_FILE"
   chmod 600 "$SA_FILE"
   export GOOGLE_APPLICATION_CREDENTIALS="$SA_FILE"
+  if [ "$(id -u)" = "0" ]; then
+    chown node:node "$SA_FILE" 2>/dev/null || true
+  fi
   echo "[departify-engine] materialised Google Vertex credentials to $SA_FILE (mode B: env secret)"
 fi
 if [ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ] && [ ! -f "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
   echo "[departify-engine] FATAL: GOOGLE_APPLICATION_CREDENTIALS points to a missing file" >&2
   exit 1
 fi
+
+# 0c. Pin the OpenClaw state HOME for the runtime (the node base image
+#     defaults HOME=/root; the engine state must live under /home/node).
+export HOME=/home/node
+export OPENCLAW_HOME=/home/node
 
 # 1. Render config.
 if [ -f "$RENDER_SCRIPT" ]; then
@@ -82,19 +90,22 @@ forward_signal() {
 }
 trap 'forward_signal TERM; exit 0' TERM INT
 
-# 5. Launch official OpenClaw gateway.
+# 5. Launch official OpenClaw gateway. If running as root (Railway volume
+#    ownership), drop to the non-root `node` user (uid 1000) via setpriv.
 cd "$ENGINE_HOME"
 echo "[departify-engine] launching gateway on ${OPENCLAW_GATEWAY_BIND:-lan}:${OPENCLAW_GATEWAY_PORT:-18789}"
 
-# Write PID for signal forwarding.
-(
+if [ "$(id -u)" = "0" ]; then
+  echo "[departify-engine] running as root; dropping to node (uid 1000)"
+  exec setpriv --reuid=1000 --regid=1000 --clear-groups -- \
+    node openclaw.mjs gateway \
+    --bind "${OPENCLAW_GATEWAY_BIND:-lan}" \
+    --port "${OPENCLAW_GATEWAY_PORT:-18789}"
+else
   exec node openclaw.mjs gateway \
     --bind "${OPENCLAW_GATEWAY_BIND:-lan}" \
     --port "${OPENCLAW_GATEWAY_PORT:-18789}"
-) &
-OPENCLAW_PID=$!
-echo "$OPENCLAW_PID" > /tmp/openclaw.pid
+fi
 
-# 6. Wait, propagating signals.
-wait "$OPENCLAW_PID"
-exit $?
+# Unreachable: exec replaces the shell. Kept for lint/static completeness.
+exit 0

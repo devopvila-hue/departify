@@ -51,13 +51,13 @@ COPY --chown=root:root --chmod=0755 scripts/healthcheck.sh /usr/local/bin/health
 ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/app/scripts/entrypoint.sh"]
 CMD []
 
-# We keep the default WORKDIR (/app) from the upstream image. State lives in
-# /home/node/.openclaw which must be supplied as a volume at runtime.
-
-# Quick metadata layer for image inspectors. Lives under /app (writable as node user).
-USER root
+# Quick metadata layer for image inspectors.
 RUN echo "departify-engine ${ENGINE_VERSION} (openclaw ${OPENCLAW_VERSION})" \
       > /app/.departify-engine-release && \
     chmod 0644 /app/.departify-engine-release
-# Drop back to the official image's default user.
-USER node
+
+# The container runs as root ONLY for the entrypoint so it can chown Railway
+# volume mounts (which are root-owned by default) to the `node` user. The
+# entrypoint drops to `node` (uid 1000) via setpriv before launching the
+# gateway, so the OpenClaw process itself is non-root.
+USER root
