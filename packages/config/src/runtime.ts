@@ -242,6 +242,7 @@ export const engineAdapterConfigSchema = envSchema.transform(
     const gatewayUrl = normalizeOptional(env.OPENCLAW_GATEWAY_URL);
     const gatewayToken = normalizeOptional(env.OPENCLAW_GATEWAY_TOKEN);
     const deviceKeyPath = normalizeOptional(env.OPENCLAW_DEVICE_KEY_PATH);
+    const deviceKeyPem = normalizeOptional(env.OPENCLAW_DEVICE_KEY_PEM);
     const model = normalizeOptional(env.OPENCLAW_MODEL);
     return {
       provider: env.ENGINE_PROVIDER,
@@ -251,7 +252,8 @@ export const engineAdapterConfigSchema = envSchema.transform(
       connectTimeoutMs: env.OPENCLAW_CONNECT_TIMEOUT_MS,
       retryLimit: env.OPENCLAW_RETRY_LIMIT,
       maxRetryDelayMs: env.OPENCLAW_MAX_RETRY_DELAY_MS,
-      ...(deviceKeyPath ? { deviceKeyPath } : {}),
+      ...(deviceKeyPem ? { deviceKeyPem } : {}),
+      ...(deviceKeyPath && !deviceKeyPem ? { deviceKeyPath } : {}),
       ...(model ? { model } : {}),
       runtimePolicy: env.ENGINE_RUNTIME_POLICY,
     };

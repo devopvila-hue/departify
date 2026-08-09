@@ -99,6 +99,9 @@ export const envSchema = z.object({
     .default(8_000),
   /** Optional path to a persisted Ed25519 PEM key for gateway device auth. */
   OPENCLAW_DEVICE_KEY_PATH: z.string().optional().or(z.literal("")),
+  /** Optional inline Ed25519 PEM key (secret-injected). Takes precedence over
+   * OPENCLAW_DEVICE_KEY_PATH when both are present. */
+  OPENCLAW_DEVICE_KEY_PEM: z.string().optional().or(z.literal("")),
   /** Optional model override sent with every message (provider/model). */
   OPENCLAW_MODEL: z.string().optional().or(z.literal("")),
 });
