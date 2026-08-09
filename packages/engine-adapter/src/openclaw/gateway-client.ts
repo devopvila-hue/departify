@@ -162,6 +162,13 @@ export class OpenClawGatewayClient {
    */
   async connect(): Promise<void> {
     if (this.isConnected) return;
+    // Each connection has a fresh server challenge. Never reuse the previous
+    // connection's nonce/timestamp: after a gateway restart the old
+    // timestamp is stale and the device signature is rejected
+    // (DEVICE_AUTH_SIGNATURE_EXPIRED). Reset so waitForChallenge below waits
+    // for the new challenge.
+    this.nonce = null;
+    this.challengeTs = 0;
     const ws = new WebSocket(this.opts.url);
     this.ws = ws;
     this.closedByUs = false;

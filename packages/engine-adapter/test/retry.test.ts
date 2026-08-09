@@ -89,6 +89,49 @@ describe("request() retry loop", () => {
     // Rate limit with retryable=false should not loop.
     expect(calls).toBe(1);
   });
+
+  it("reset-challenge-state on every connect (DEVICE_AUTH_SIGNATURE_EXPIRED regression)", async () => {
+    // After a gateway restart the server issues a fresh challenge. If the
+    // client reused the previous connection's nonce/timestamp the device
+    // signature is rejected as stale. connect() must clear the cached
+    // challenge so waitForChallenge captures the new one.
+    const client = buildClient({
+      deviceKeyPem:
+        "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIHtzzZqKwVnJm2H5kA6qG6MzYkMfBQsZQeP7JgX3BlDc\n-----END PRIVATE KEY-----",
+    });
+    const anyClient = client as unknown as {
+      nonce: string | null;
+      challengeTs: number;
+      requestOnce: (m: string, p: unknown) => Promise<unknown>;
+      waitForChallenge: () => Promise<void>;
+      connect: () => Promise<void>;
+    };
+
+    // First connect: challenge cached (as if the first connection completed).
+    anyClient.nonce = "nonce-1";
+    anyClient.challengeTs = 1111;
+    let connectParams: unknown = null;
+    vi.spyOn(anyClient, "requestOnce").mockImplementation(
+      async (method, params) => {
+        connectParams = params;
+        return { type: "hello-ok", protocol: 4 };
+      },
+    );
+    vi.spyOn(anyClient, "waitForChallenge").mockImplementation(async () => {
+      // Simulate the server sending a fresh challenge on this new connection.
+      anyClient.nonce = "nonce-2";
+      anyClient.challengeTs = 2222;
+    });
+
+    await anyClient.connect();
+
+    // The connect frame must be signed against the FRESH challenge (nonce-2),
+    // not the stale nonce-1 from the previous connection.
+    const device = (connectParams as { device?: { nonce: string; signedAt: number } }).device;
+    expect(device).toBeDefined();
+    expect(device!.nonce).toBe("nonce-2");
+    expect(device!.signedAt).toBe(2222);
+  });
 });
 
 describe("error metadata", () => {
