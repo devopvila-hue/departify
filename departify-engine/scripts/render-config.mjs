@@ -98,6 +98,10 @@ const resetMode = optional("OPENCLAW_SESSION_RESET_MODE", "none");
 const resetAtHour = int("OPENCLAW_SESSION_RESET_AT_HOUR", 4);
 const resetIdleMinutes = int("OPENCLAW_SESSION_RESET_IDLE_MINUTES", 120);
 const logLevel = optional("OPENCLAW_LOG_LEVEL", "info");
+// Admin HTTP RPC (bundled plugin) — opt-in for headless provisioning flows
+// (e.g. one-time device pairing approval). Disabled by default in production.
+// Never leave enabled; remove the env var after use.
+const enableAdminHttpRpc = bool("OPENCLAW_ENABLE_ADMIN_HTTP_RPC", false);
 const maxTokens = int("OPENCLAW_MAX_TOKENS", 2048);
 const contextTokens = int("OPENCLAW_CONTEXT_TOKENS", 131072);
 const temperature = Number.parseFloat(optional("OPENCLAW_TEMPERATURE", "0.2"));
@@ -304,7 +308,16 @@ const config = {
   discovery: {
     mdns: { mode: "off" },
   },
-  plugins: { allow: ["codex", "diagnostics-otel"] },
+  plugins: {
+    allow: [
+      "codex",
+      "diagnostics-otel",
+      ...(enableAdminHttpRpc ? ["admin-http-rpc"] : []),
+    ],
+    ...(enableAdminHttpRpc
+      ? { entries: { "admin-http-rpc": { enabled: true } } }
+      : {}),
+  },
   logging: { level: logLevel },
 };
 
