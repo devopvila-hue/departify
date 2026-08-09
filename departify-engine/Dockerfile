@@ -61,3 +61,6 @@ RUN echo "departify-engine ${ENGINE_VERSION} (openclaw ${OPENCLAW_VERSION})" \
 # entrypoint drops to `node` (uid 1000) via setpriv before launching the
 # gateway, so the OpenClaw process itself is non-root.
 USER root
+
+# Railway uses EXPOSE to map the healthcheck port.
+EXPOSE 18889
