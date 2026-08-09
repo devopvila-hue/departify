@@ -532,9 +532,25 @@ describe("Sprint 59 — Conversational Operating System", () => {
     expect(screen.getByText(/tres competidores/i)).toBeInTheDocument();
   });
 
-  it("15. Reload restores transcript — the chat re-hydrates from session", async () => {
+  it("15. Reload restores transcript — the chat re-hydrates from the durable conversation", async () => {
     mockFetch((url) => {
       if (url.includes("/command-center/opening")) return { organizationId: "org_moon", events: [] };
+      if (url.endsWith("/conversations/conv_1")) {
+        return {
+          conversation: { id: "conv_1", organizationId: "org_moon", title: "Hola", status: "active", createdAt: "2026-08-09T00:00:00.000Z", updatedAt: "2026-08-09T00:00:00.000Z" },
+          messages: [
+            { id: "m1", conversationId: "conv_1", role: "user", content: "Hola", createdAt: "2026-08-09T00:00:00.000Z" },
+            { id: "m2", conversationId: "conv_1", role: "assistant", content: "Hola, ¿qué necesitas?", createdAt: "2026-08-09T00:00:00.001Z" },
+          ],
+        };
+      }
+      if (url.endsWith("/conversations")) {
+        return {
+          conversations: [
+            { id: "conv_1", organizationId: "org_moon", title: "Hola", status: "active", createdAt: "2026-08-09T00:00:00.000Z", updatedAt: "2026-08-09T00:00:00.000Z" },
+          ],
+        };
+      }
       if (url.endsWith("/org_moon")) {
         return {
           organizationId: "org_moon",
@@ -558,7 +574,8 @@ describe("Sprint 59 — Conversational Operating System", () => {
     );
     await waitFor(() => expect(screen.getByText(/hola, ¿qué necesitas?/i)).toBeInTheDocument());
     unmount();
-    // Re-mount to simulate a reload.
+    // Re-mount to simulate a reload; the transcript must be restored from the
+    // durable conversation, not from in-memory session state.
     render(
       <MemoryRouter initialEntries={["/chat"]}>
         <OrgProvider>

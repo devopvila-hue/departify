@@ -127,7 +127,7 @@ describe("Customer Zero UX v2 routes", () => {
     const toolsAnswer = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${organizationId}/answer`,
-      payload: { questionId: "ops:tools", answers: ["Gmail", "Otra"] },
+      payload: { questionId: "tools:email", answers: ["Gmail", "Otra"] },
     });
     expect(toolsAnswer.statusCode).toBe(200);
     const connections = toolsAnswer.json().connections as {
@@ -194,7 +194,7 @@ describe("Customer Zero UX v2 routes", () => {
     await authedInject({
       method: "POST",
       url: `/api/customer-zero/${organizationId}/answer`,
-      payload: { questionId: "ops:tools", answers: ["Gmail"] },
+      payload: { questionId: "tools:email", answers: ["Gmail"] },
     });
 
     const status = await authedInject({
@@ -209,7 +209,7 @@ describe("Customer Zero UX v2 routes", () => {
     };
     expect(body.locale).toBe("es");
     expect(body.onboarding.goal).toContain("Duplicar las ventas");
-    expect(body.discoveryTranscript[0]?.questionId).toBe("ops:tools");
+    expect(body.discoveryTranscript[0]?.questionId).toBe("tools:email");
     expect(body.connections[0]?.toolId).toBe("gmail");
     expect(body.connections[0]?.status).toBe("not_connected");
   });

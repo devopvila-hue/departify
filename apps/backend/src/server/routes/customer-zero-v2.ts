@@ -23,8 +23,9 @@ import {
   type InterpretedBusiness,
 } from "../../customer-zero/web-analysis.js";
 import {
-  getCustomerZeroSession,
   getOrCreateCustomerZeroSession,
+  hydrateSessionToolState,
+  persistToolState,
   runDiscoveryForSession,
   produceDiagnosisForSession,
   produceTeamForSession,
@@ -46,6 +47,7 @@ import {
 } from "../../customer-zero/research-progress.js";
 import {
   buildConnectionState,
+  buildConnectionStateWithLifecycle,
   completeConnection,
   resolveTool,
   startConnection,
@@ -69,7 +71,15 @@ import {
   buildProactiveOpening,
   routeCommandCenter,
   type CommandCenterEvent,
+  type ConnectionSuggestion,
+  type RoutingDecision,
 } from "../../customer-zero/command-center.js";
+import {
+  boundedConversationHistory,
+  DEFAULT_CONVERSATION_TITLE,
+  deriveConversationTitle,
+  type ConversationRecord,
+} from "../../customer-zero/conversation-store.js";
 import {
   buildDnaRawDataFromSuggestion,
   listDepartmentMemory,
@@ -80,6 +90,12 @@ import {
 import { buildSessionOperationalContext } from "../../customer-zero/operational-context.js";
 import type { CompanyDiscoveryReport } from "@departify/business-discovery";
 import type { ServerDeps } from "../deps.js";
+import {
+  buildDeclaredToolState,
+  humanLifecycleLabel,
+  type OrganizationToolState,
+  type ToolLifecycleStatus,
+} from "../../customer-zero/tool-state.js";
 
 export async function registerCustomerZeroV2Routes(
   server: FastifyInstance,
@@ -240,7 +256,12 @@ export async function registerCustomerZeroV2Routes(
           },
         });
       }
-      const session = getOrCreateCustomerZeroSession(organizationId, { locale });
+      const session = getOrCreateCustomerZeroSession(organizationId, {
+        locale,
+        ...(deps.toolState ? { toolState: deps.toolState } : {}),
+        ...(deps.conversations ? { conversations: deps.conversations } : {}),
+      });
+      await hydrateSessionToolState(session);
       session.state.locale = locale;
       session.state.companyName = body.companyName;
       if (normalizedUrl) {
@@ -295,8 +316,8 @@ export async function registerCustomerZeroV2Routes(
     },
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
-      const session = getCustomerZeroSession(organizationId);
-      if (!session?.state.progress) {
+      const session = await requireSession(organizationId, deps);
+      if (!session.state.progress) {
         return reply.code(404).send({ error: "Session not found." });
       }
       const progress = session.state.progress;
@@ -332,10 +353,7 @@ export async function registerCustomerZeroV2Routes(
     },
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
-      const session = getCustomerZeroSession(organizationId);
-      if (!session) {
-        return reply.code(404).send({ error: "Session not found." });
-      }
+      const session = await requireSession(organizationId, deps);
       return reply.code(200).send(buildConversationPayload(session));
     },
   );
@@ -374,10 +392,7 @@ export async function registerCustomerZeroV2Routes(
         answer?: string;
         answers?: string[];
       };
-      const session = getCustomerZeroSession(organizationId);
-      if (!session) {
-        return reply.code(404).send({ error: "Session not found." });
-      }
+      const session = await requireSession(organizationId, deps);
 
       const locale = session.state.locale;
       const values = (body.answers ?? (body.answer ? [body.answer] : []))
@@ -398,11 +413,11 @@ export async function registerCustomerZeroV2Routes(
         // Recompute the REAL gaps: one answer can close several of them.
         await runDiscoveryForSession(session);
       } else if (
-        body.questionId === "ops:tools" ||
+        body.questionId.startsWith("tools:") ||
         body.questionId === "ops:crm" ||
         body.questionId === "ops:tool_other"
       ) {
-        registerTools(session, values, locale);
+        await registerTools(session, values, locale);
       }
 
       session.state.discovery.answered.add(body.questionId);
@@ -443,13 +458,12 @@ export async function registerCustomerZeroV2Routes(
     },
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
-      const session = getCustomerZeroSession(organizationId);
-      if (!session) {
-        return reply.code(404).send({ error: "Session not found." });
-      }
+      const session = await requireSession(organizationId, deps);
       return reply.code(200).send({
         organizationId,
-        connections: [...session.state.connections.values()],
+        connections: [...session.state.connections.values()].map((connection) =>
+          buildToolConnectionView(connection, session.state.locale),
+        ),
         unmappedTools: session.state.unmappedTools,
       });
     },
@@ -480,10 +494,7 @@ export async function registerCustomerZeroV2Routes(
         organizationId: string;
         toolId: string;
       };
-      const session = getCustomerZeroSession(organizationId);
-      if (!session) {
-        return reply.code(404).send({ error: "Session not found." });
-      }
+      const session = await requireSession(organizationId, deps);
       const tool = TOOL_CATALOG.find((entry) => entry.id === toolId);
       if (!tool) {
         return reply.code(404).send({ error: "Tool not found." });
@@ -504,12 +515,14 @@ export async function registerCustomerZeroV2Routes(
 
         if (!baseUrl || !clientId || !clientSecret) {
           connection.status = "blocked";
+          connection.lifecycle = "needs_connection";
           connection.blockedReason = connIsEs
             ? `Faltan las credenciales para conectar Mautic: MAUTIC_BASE_URL, MAUTIC_CLIENT_ID o MAUTIC_CLIENT_SECRET.`
             : `Missing credentials to connect Mautic: MAUTIC_BASE_URL, MAUTIC_CLIENT_ID, or MAUTIC_CLIENT_SECRET.`;
           connection.missingCredentials = ["MAUTIC_BASE_URL", "MAUTIC_CLIENT_ID", "MAUTIC_CLIENT_SECRET"].filter(
             (key) => !env[key]?.trim(),
           );
+          await persistToolState(session, toolStateFromConnection(session, connection));
           return reply.code(200).send({ organizationId, connection });
         }
 
@@ -528,6 +541,9 @@ export async function registerCustomerZeroV2Routes(
             (outcome.output as { success?: boolean })?.success
           ) {
             completeConnection(connection);
+            connection.lifecycle = "connected";
+            connection.verifiedAt = new Date().toISOString();
+            await persistToolState(session, toolStateFromConnection(session, connection));
             // Sprint 62 — a verified real connection certifies the capability.
             // The registry still requires the operational source (connection +
             // tools) to report connected before it presents READY.
@@ -545,15 +561,21 @@ export async function registerCustomerZeroV2Routes(
               (outcome as { output?: { message?: string } })?.output
                 ?.message ?? "Connection test failed.";
             connection.status = "blocked";
+            connection.lifecycle =
+              connection.lifecycle === "connected" ? "degraded" : "unavailable";
             connection.blockedReason = connIsEs
               ? `No se pudo validar la conexión con Mautic: ${msg}`
               : `Could not validate Mautic connection: ${msg}`;
+            await persistToolState(session, toolStateFromConnection(session, connection));
           }
         } catch (cause) {
           connection.status = "blocked";
+          connection.lifecycle =
+            connection.lifecycle === "connected" ? "degraded" : "unavailable";
           connection.blockedReason = connIsEs
             ? `Error al conectar con Mautic: ${cause instanceof Error ? cause.message : "Error desconocido"}`
             : `Error connecting to Mautic: ${cause instanceof Error ? cause.message : "Unknown error"}`;
+          await persistToolState(session, toolStateFromConnection(session, connection));
         }
         return reply.code(200).send({ organizationId, connection });
       }
@@ -604,10 +626,7 @@ export async function registerCustomerZeroV2Routes(
         organizationId: string;
         toolId: string;
       };
-      const session = getCustomerZeroSession(organizationId);
-      if (!session) {
-        return reply.code(404).send({ error: "Session not found." });
-      }
+      const session = await requireSession(organizationId, deps);
       const connection = session.state.connections.get(toolId);
       if (!connection) {
         return reply.code(404).send({ error: "Connection not started." });
@@ -648,10 +667,7 @@ export async function registerCustomerZeroV2Routes(
     },
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
-      const session = getCustomerZeroSession(organizationId);
-      if (!session) {
-        return reply.code(404).send({ error: "Session not found." });
-      }
+      const session = await requireSession(organizationId, deps);
       return reply.code(200).send({
         organizationId,
         message: buildHandoffMessage(session),
@@ -683,10 +699,7 @@ export async function registerCustomerZeroV2Routes(
     },
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
-      const session = getCustomerZeroSession(organizationId);
-      if (!session) {
-        return reply.code(404).send({ error: "Session not found." });
-      }
+      const session = await requireSession(organizationId, deps);
       return reply.code(200).send({
         organizationId,
         ...buildCeoOverview(session),
@@ -745,10 +758,7 @@ export async function registerCustomerZeroV2Routes(
     },
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
-      const session = getCustomerZeroSession(organizationId);
-      if (!session) {
-        return reply.code(404).send({ error: "Session not found." });
-      }
+      const session = await requireSession(organizationId, deps);
       const events = buildProactiveOpening(session);
       return reply.code(200).send({ organizationId, events });
     },
@@ -770,6 +780,7 @@ export async function registerCustomerZeroV2Routes(
           required: ["message"],
           properties: {
             message: { type: "string", minLength: 1 },
+            conversationId: { type: "string" },
           },
           additionalProperties: false,
         },
@@ -787,6 +798,7 @@ export async function registerCustomerZeroV2Routes(
                 additionalProperties: true,
               },
               pendingToolId: { type: ["string", "null"] },
+              conversationId: { type: "string" },
             },
           },
           404: { type: "object", properties: { error: { type: "string" } } },
@@ -795,186 +807,14 @@ export async function registerCustomerZeroV2Routes(
     },
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
-      const { message } = request.body as { message: string };
-      const session = getCustomerZeroSession(organizationId);
-      if (!session) {
-        return reply.code(404).send({ error: "Session not found." });
-      }
-
-      const input = buildCommandCenterInput(session, message);
-      const routed = routeCommandCenter(input);
-
-      const isEs = session.state.locale !== "en";
-      let assistantReply = routed.reply;
-      let marketingTurn: { role: "user" | "assistant"; content: string } | null = null;
-
-      if (routed.decision.intent === "delegate_marketing") {
-        try {
-          const outcome = await session.port.executeAction({
-            actionId: `act_cc_${shortId()}`,
-            agentId: "agent_marketing_director",
-            organizationId,
-            toolId: "marketing.chat",
-            args: {
-              organizationId,
-              message,
-              history: session.state.conversation,
-              extraContext: buildMemoryContextForChat(session),
-            },
-          });
-          if (outcome.status === "completed") {
-            const output = outcome.output as { reply?: string } | undefined;
-            const marketingReply = output?.reply;
-            if (marketingReply && marketingReply.trim().length > 0) {
-              assistantReply = marketingReply;
-              marketingTurn = {
-                role: "assistant",
-                content: marketingReply,
-              };
-            }
-          }
-        } catch {
-          // Marketing Director failed: keep the routing reply.
-        }
-      }
-
-      if (routed.decision.intent === "knowledge_query") {
-        const memories = listDepartmentMemory(session, "marketing");
-        if (memories.length === 0) {
-          assistantReply = isEs
-            ? "Todavía no tengo aprendizajes guardados de Marketing. Cuando aprendamos algo relevante, lo guardaré como conocimiento del departamento."
-            : "I don't have any Marketing learnings saved yet. When we learn something relevant, I will store it as department knowledge.";
-        } else {
-          const lines = memories.slice(0, 5).map((m) => {
-            const prefix = provenanceLabel(m.provenance, isEs);
-            return `• ${m.content} (${prefix})`;
-          });
-          assistantReply = isEs
-            ? `Esto es lo que hemos aprendido en Marketing:\n\n${lines.join("\n")}`
-            : `This is what we have learned in Marketing:\n\n${lines.join("\n")}`;
-        }
-        marketingTurn = { role: "assistant", content: assistantReply };
-      }
-
-      if (routed.decision.intent === "remember_fact") {
-        const kind = inferKindFromMessage(message);
-        const title = inferTitleFromMessage(message);
-        const content = message.replace(
-          /^(recuerda|acuérdate|ap[úu]nta(te|me)?|guarda|anota|no olvides|remember|note this|make a note)(\s+para\s+(marketing|ventas|finanzas|operaciones))?\s*(que)?\s*/i,
-          "",
-        ).trim();
-
-        rememberDepartment(session, "marketing", {
-          kind,
-          title: title || content.slice(0, 80),
-          content,
-          provenance: "ceo_statement",
-          importance: 0.7,
-        });
-
-        assistantReply = isEs
-          ? `Lo guardo. He apuntado esto como conocimiento del departamento de Marketing.`
-          : `Saved. I have stored this as Marketing department knowledge.`;
-        marketingTurn = { role: "assistant", content: assistantReply };
-      }
-
-      if (routed.decision.intent === "external_tool_query") {
-        const mauticConn = session.state.connections.get("mautic");
-        const mauticConnected = mauticConn?.status === "connected";
-
-        if (!mauticConnected) {
-          assistantReply = isEs
-            ? "Para responderte necesito acceder a Mautic. Todavía no está conectado. Puedes conectarlo en Conexiones."
-            : "To answer that I need access to Mautic. It is not connected yet. You can connect it in Connections.";
-          marketingTurn = { role: "assistant", content: assistantReply };
-        } else {
-          const msg = message.toLowerCase();
-          const isSearch =
-            /\b(busca|buscar|search|find|encuentra|busco)\b/i.test(msg);
-          const toolId = isSearch
-            ? "mautic.contacts.search"
-            : "mautic.contacts.count";
-
-          const toolArgs = isSearch
-            ? {
-                query: message
-                  .replace(
-                    /\b(busca|buscar|search|find|encuentra|busco)\s+(en\s+mautic\s+)?(contactos?\s+)?/i,
-                    "",
-                  )
-                  .trim(),
-              }
-            : {};
-
-          try {
-            const outcome = await session.port.executeAction({
-              actionId: `act_mautic_${shortId()}`,
-              agentId: "agent_marketing_director",
-              organizationId,
-              toolId,
-              args: toolArgs,
-            });
-
-            if (outcome.status === "completed") {
-              const output = outcome.output as { success?: boolean; count?: number; contacts?: Array<{ firstname: string; lastname: string; email: string }>; message?: string } | undefined;
-
-              if (output?.success) {
-                if (isSearch && output.contacts) {
-                  const lines = output.contacts.map(
-                    (c) =>
-                      `• ${[c.firstname, c.lastname].filter(Boolean).join(" ")} — ${c.email}`,
-                  );
-                  assistantReply = isEs
-                    ? `He encontrado ${output.count} contacto(s) en Mautic:\n\n${lines.join("\n")}`
-                    : `I found ${output.count} contact(s) in Mautic:\n\n${lines.join("\n")}`;
-                } else {
-                  assistantReply = isEs
-                    ? `En este momento hay ${output.count ?? 0} contactos en Mautic.`
-                    : `There are currently ${output.count ?? 0} contacts in Mautic.`;
-                }
-              } else {
-                assistantReply = isEs
-                  ? `No he podido consultar Mautic: ${output?.message ?? "Error desconocido."}`
-                  : `I could not query Mautic: ${output?.message ?? "Unknown error."}`;
-              }
-            } else {
-              const reason =
-                "reason" in outcome ? String(outcome.reason).slice(0, 100) : "execution failed";
-              assistantReply = isEs
-                ? `No he podido consultar Mautic: ${reason}`
-                : `I could not query Mautic: ${reason}`;
-            }
-          } catch {
-            assistantReply = isEs
-              ? "No he podido consultar Mautic ahora mismo. Puedo seguir con el resto del trabajo."
-              : "I could not query Mautic right now. I can continue with the rest of the work.";
-          }
-          marketingTurn = { role: "assistant", content: assistantReply };
-        }
-      }
-
-      session.state.conversation = [
-        ...session.state.conversation,
-        { role: "user", content: message },
-        marketingTurn ?? { role: "assistant", content: assistantReply },
-      ];
-
-      // Re-build proactive events so the portal can refresh cards after
-      // any state change the message might have triggered.
-      const events: CommandCenterEvent[] = buildProactiveOpening(session);
-
-      return reply.code(200).send({
-        organizationId,
-        reply: assistantReply,
-        events,
-        routing: routed.decision,
-        ...(routed.connectionSuggestion
-          ? { connectionSuggestion: routed.connectionSuggestion }
-          : { connectionSuggestion: null }),
-        ...(routed.pendingToolId !== undefined
-          ? { pendingToolId: routed.pendingToolId }
-          : { pendingToolId: null }),
-      });
+      const body = request.body as { message: string; conversationId?: string };
+      const session = await requireSession(organizationId, deps);
+      const result = await processCeoMessage(
+        session,
+        body.message,
+        body.conversationId,
+      );
+      return reply.code(200).send(result);
     },
   );
 
@@ -1030,10 +870,7 @@ export async function registerCustomerZeroV2Routes(
           sourceMemoryIds?: string[];
         };
       };
-      const session = getCustomerZeroSession(organizationId);
-      if (!session) {
-        return reply.code(404).send({ error: "Session not found." });
-      }
+      const session = await requireSession(organizationId, deps);
       if (action !== "approve" && action !== "reject") {
         return reply.code(400).send({ error: "Action must be 'approve' or 'reject'." });
       }
@@ -1301,6 +1138,293 @@ function currentQuestion(
     mostRecentReport(session),
     session.state.discovery,
     session.state.locale,
+    [...session.state.connections.keys()],
+  );
+}
+
+/**
+ * P-B: read/entry paths auto-create the session and hydrate durable tool
+ * state, so a Railway restart never strands an existing organization (no
+ * 404 → portal reset loop, connections survive).
+ */
+export async function requireSession(
+  organizationId: string,
+  deps: ServerDeps,
+): Promise<CustomerZeroSession> {
+  const session = getOrCreateCustomerZeroSession(organizationId, {
+    ...(deps.toolState ? { toolState: deps.toolState } : {}),
+    ...(deps.conversations ? { conversations: deps.conversations } : {}),
+  });
+  await hydrateSessionToolState(session);
+  return session;
+}
+
+/** Result of processing one CEO message within a durable conversation. */
+export interface CeoMessageResult {
+  readonly organizationId: string;
+  readonly reply: string;
+  readonly events: readonly CommandCenterEvent[];
+  readonly routing: RoutingDecision;
+  readonly connectionSuggestion: ConnectionSuggestion | null;
+  readonly pendingToolId: string | null;
+  readonly conversationId: string;
+}
+
+/**
+ * P-B part 15 — one authoritative chat turn. The user message and the
+ * assistant reply are persisted to a durable, organization-scoped
+ * conversation. The LLM context uses a BOUNDED window of recent messages, not
+ * an ever-growing transcript. Company memory (department memories, DNA) is
+ * intentionally separate from conversation history.
+ */
+export async function processCeoMessage(
+  session: CustomerZeroSession,
+  message: string,
+  conversationId?: string,
+): Promise<CeoMessageResult> {
+  const conversation = await ensureConversation(session, message, conversationId);
+  const organizationId = session.organizationId;
+
+  await session.conversations.addMessage(conversation.id, "user", message);
+
+  const input = buildCommandCenterInput(session, message);
+  const routed = routeCommandCenter(input);
+
+  const isEs = session.state.locale !== "en";
+  let assistantReply = routed.reply;
+  let marketingTurn: { role: "user" | "assistant"; content: string } | null = null;
+
+  if (routed.decision.intent === "delegate_marketing") {
+    try {
+      const recentMessages = await session.conversations.listMessages(
+        organizationId,
+        conversation.id,
+        20,
+      );
+      const outcome = await session.port.executeAction({
+        actionId: `act_cc_${shortId()}`,
+        agentId: "agent_marketing_director",
+        organizationId,
+        toolId: "marketing.chat",
+        args: {
+          organizationId,
+          message,
+          history: boundedConversationHistory(recentMessages),
+          extraContext: buildMemoryContextForChat(session),
+        },
+      });
+      if (outcome.status === "completed") {
+        const output = outcome.output as { reply?: string } | undefined;
+        const marketingReply = output?.reply;
+        if (marketingReply && marketingReply.trim().length > 0) {
+          assistantReply = marketingReply;
+          marketingTurn = {
+            role: "assistant",
+            content: marketingReply,
+          };
+        }
+      }
+    } catch {
+      // Marketing Director failed: keep the routing reply.
+    }
+  }
+
+  if (routed.decision.intent === "knowledge_query") {
+    const memories = listDepartmentMemory(session, "marketing");
+    if (memories.length === 0) {
+      assistantReply = isEs
+        ? "Todavía no tengo aprendizajes guardados de Marketing. Cuando aprendamos algo relevante, lo guardaré como conocimiento del departamento."
+        : "I don't have any Marketing learnings saved yet. When we learn something relevant, I will store it as department knowledge.";
+    } else {
+      const lines = memories.slice(0, 5).map((m) => {
+        const prefix = provenanceLabel(m.provenance, isEs);
+        return `• ${m.content} (${prefix})`;
+      });
+      assistantReply = isEs
+        ? `Esto es lo que hemos aprendido en Marketing:\n\n${lines.join("\n")}`
+        : `This is what we have learned in Marketing:\n\n${lines.join("\n")}`;
+    }
+    marketingTurn = { role: "assistant", content: assistantReply };
+  }
+
+  if (routed.decision.intent === "remember_fact") {
+    const kind = inferKindFromMessage(message);
+    const title = inferTitleFromMessage(message);
+    const content = message.replace(
+      /^(recuerda|acuérdate|ap[úu]nta(te|me)?|guarda|anota|no olvides|remember|note this|make a note)(\s+para\s+(marketing|ventas|finanzas|operaciones))?\s*(que)?\s*/i,
+      "",
+    ).trim();
+
+    rememberDepartment(session, "marketing", {
+      kind,
+      title: title || content.slice(0, 80),
+      content,
+      provenance: "ceo_statement",
+      importance: 0.7,
+    });
+
+    assistantReply = isEs
+      ? `Lo guardo. He apuntado esto como conocimiento del departamento de Marketing.`
+      : `Saved. I have stored this as Marketing department knowledge.`;
+    marketingTurn = { role: "assistant", content: assistantReply };
+  }
+
+  if (routed.decision.intent === "external_tool_query") {
+    const mauticConn = session.state.connections.get("mautic");
+    const mauticLifecycle: ToolLifecycleStatus =
+      mauticConn?.lifecycle ??
+      (mauticConn?.status === "connected" ? "connected" : "needs_connection");
+
+    if (mauticLifecycle !== "connected") {
+      assistantReply = mauticNotOperationalReply(mauticLifecycle, isEs);
+      marketingTurn = { role: "assistant", content: assistantReply };
+    } else {
+      const msg = message.toLowerCase();
+      const isSearch =
+        /\b(busca|buscar|search|find|encuentra|busco)\b/i.test(msg);
+      const toolId = isSearch
+        ? "mautic.contacts.search"
+        : "mautic.contacts.count";
+
+      const toolArgs = isSearch
+        ? {
+            query: message
+              .replace(
+                /\b(busca|buscar|search|find|encuentra|busco)\s+(en\s+mautic\s+)?(contactos?\s+)?/i,
+                "",
+              )
+              .trim(),
+          }
+        : {};
+
+      try {
+        const outcome = await session.port.executeAction({
+          actionId: `act_mautic_${shortId()}`,
+          agentId: "agent_marketing_director",
+          organizationId,
+          toolId,
+          args: toolArgs,
+        });
+
+        if (outcome.status === "completed") {
+          const output = outcome.output as { success?: boolean; count?: number; contacts?: Array<{ firstname: string; lastname: string; email: string }>; message?: string } | undefined;
+
+          if (output?.success) {
+            if (isSearch && output.contacts) {
+              const lines = output.contacts.map(
+                (c) =>
+                  `• ${[c.firstname, c.lastname].filter(Boolean).join(" ")} — ${c.email}`,
+              );
+              assistantReply = isEs
+                ? `He encontrado ${output.count} contacto(s) en Mautic:\n\n${lines.join("\n")}`
+                : `I found ${output.count} contact(s) in Mautic:\n\n${lines.join("\n")}`;
+            } else {
+              assistantReply = isEs
+                ? `En este momento hay ${output.count ?? 0} contactos en Mautic.`
+                : `There are currently ${output.count ?? 0} contacts in Mautic.`;
+            }
+          } else {
+            assistantReply = isEs
+              ? `No he podido consultar Mautic: ${output?.message ?? "Error desconocido."}`
+              : `I could not query Mautic: ${output?.message ?? "Unknown error."}`;
+          }
+        } else {
+          const reason =
+            "reason" in outcome ? String(outcome.reason).slice(0, 100) : "execution failed";
+          assistantReply = isEs
+            ? `No he podido consultar Mautic: ${reason}`
+            : `I could not query Mautic: ${reason}`;
+        }
+      } catch {
+        assistantReply = isEs
+          ? "No he podido consultar Mautic ahora mismo. Puedo seguir con el resto del trabajo."
+          : "I could not query Mautic right now. I can continue with the rest of the work.";
+      }
+      marketingTurn = { role: "assistant", content: assistantReply };
+    }
+  }
+
+  await session.conversations.addMessage(
+    conversation.id,
+    "assistant",
+    marketingTurn?.content ?? assistantReply,
+  );
+
+  // Legacy in-memory transcript (kept for back-compat; NOT the source of
+  // truth — durable conversations are).
+  session.state.conversation = [
+    ...session.state.conversation,
+    { role: "user", content: message },
+    marketingTurn ?? { role: "assistant", content: assistantReply },
+  ];
+
+  const events: CommandCenterEvent[] = buildProactiveOpening(session);
+
+  return {
+    organizationId,
+    reply: assistantReply,
+    events,
+    routing: routed.decision,
+    connectionSuggestion: routed.connectionSuggestion ?? null,
+    pendingToolId: routed.pendingToolId ?? null,
+    conversationId: conversation.id,
+  };
+}
+
+/** Resolves (and creates when needed) the conversation a turn belongs to. */
+export async function ensureConversation(
+  session: CustomerZeroSession,
+  message: string,
+  conversationId?: string,
+): Promise<ConversationRecord> {
+  const organizationId = session.organizationId;
+
+  if (conversationId) {
+    const existing = await session.conversations.get(organizationId, conversationId);
+    if (existing) {
+      session.state.currentConversationId = existing.id;
+      await renameIfUntitled(session, existing, message);
+      return existing;
+    }
+  }
+
+  if (session.state.currentConversationId) {
+    const current = await session.conversations.get(
+      organizationId,
+      session.state.currentConversationId,
+    );
+    if (current) {
+      await renameIfUntitled(session, current, message);
+      return current;
+    }
+  }
+
+  const recent = await session.conversations.listForOrg(organizationId);
+  if (recent[0]) {
+    session.state.currentConversationId = recent[0].id;
+    await renameIfUntitled(session, recent[0], message);
+    return recent[0];
+  }
+
+  const created = await session.conversations.create(
+    organizationId,
+    DEFAULT_CONVERSATION_TITLE,
+  );
+  session.state.currentConversationId = created.id;
+  await renameIfUntitled(session, created, message);
+  return created;
+}
+
+async function renameIfUntitled(
+  session: CustomerZeroSession,
+  conversation: ConversationRecord,
+  message: string,
+): Promise<void> {
+  if (conversation.title !== DEFAULT_CONVERSATION_TITLE) return;
+  await session.conversations.rename(
+    session.organizationId,
+    conversation.id,
+    deriveConversationTitle(message),
   );
 }
 
@@ -1400,15 +1524,15 @@ function buildHandoffMessage(session: CustomerZeroSession): string {
 }
 
 /**
- * Capability-first: the CEO's tool answers become internal connectors and
- * connection cards. Anything Departify has no capability for is recorded
- * honestly instead of being pretended.
+ * Capability-first: the CEO's tool answers become durable, organization-scoped
+ * declarations. Selection NEVER means connected: the lifecycle is derived from
+ * real configuration + verification.
  */
-function registerTools(
+async function registerTools(
   session: CustomerZeroSession,
   values: readonly string[],
   locale: SupportedLocale,
-): void {
+): Promise<void> {
   const other = otherOptionLabel(locale).toLowerCase();
   const noCrm = noCrmOptionLabel(locale).toLowerCase();
 
@@ -1429,17 +1553,138 @@ function registerTools(
       }
       continue;
     }
-    if (!session.state.connections.has(tool.id)) {
+    const existing = session.state.connections.get(tool.id);
+    if (!existing) {
+      const declared = buildDeclaredToolState(
+        session.organizationId,
+        tool.id,
+        tool.label,
+        tool.capability,
+      );
       session.state.connections.set(
         tool.id,
-        buildConnectionState(tool, locale),
+        buildConnectionStateWithLifecycle(tool, locale, declared.status, {
+          ...(declared.configSource ? { configSource: declared.configSource } : {}),
+        }),
       );
+      await persistToolState(session, declared);
     }
+  }
+}
+
+/** Honest, lifecycle-aware Mautic answer when it is NOT operationally usable. */
+function mauticNotOperationalReply(
+  lifecycle: ToolLifecycleStatus,
+  isEs: boolean,
+): string {
+  switch (lifecycle) {
+    case "configured":
+      return isEs
+        ? "Mautic está configurado pero todavía no se ha verificado la conexión. Puedes verificarla en Conexiones y enseguida consulto los contactos."
+        : "Mautic is configured but the connection has not been verified yet. You can verify it in Connections and I will check the contacts right away.";
+    case "degraded":
+    case "unavailable":
+      return isEs
+        ? "Ahora mismo hay un problema de conexión con Mautic. Cuando se recupere, podré consultar los contactos."
+        : "There is currently a connection problem with Mautic. Once it recovers, I can look up the contacts.";
+    case "needs_connection":
+    case "selected":
+    default:
+      return isEs
+        ? "Para responderte necesito acceder a Mautic. Todavía no está conectado. Puedes conectarlo en Conexiones."
+        : "To answer that I need access to Mautic. It is not connected yet. You can connect it in Connections.";
   }
 }
 
 function publicBaseUrl(): string {
   return process.env.PUBLIC_BASE_URL ?? "http://localhost:3000";
+}
+
+/** The /conexiones view: durable lifecycle + human label + honest action. */
+export interface ToolConnectionView {
+  readonly toolId: string;
+  readonly label: string;
+  readonly capability?: string;
+  readonly category: string;
+  readonly status: ToolLifecycleStatus;
+  readonly humanLabel: string;
+  readonly action: "connect" | "verify" | "retry" | null;
+  readonly verifiedAt?: string;
+  readonly blockedReason?: string;
+}
+
+function buildToolConnectionView(
+  connection: ConnectionState,
+  locale: SupportedLocale,
+): ToolConnectionView {
+  const lifecycle: ToolLifecycleStatus =
+    connection.lifecycle ??
+    (connection.status === "connected"
+      ? "connected"
+      : connection.status === "blocked"
+        ? "unavailable"
+        : "needs_connection");
+  const tool = TOOL_CATALOG.find((entry) => entry.id === connection.toolId);
+  return {
+    toolId: connection.toolId,
+    label: connection.label,
+    ...(connection.capability ? { capability: connection.capability } : {}),
+    category: connection.category,
+    status: lifecycle,
+    humanLabel: humanLifecycleLabel(lifecycle, locale),
+    action: connectionAction(
+      connection.toolId,
+      tool?.connectable ?? false,
+      lifecycle,
+    ),
+    ...(connection.verifiedAt ? { verifiedAt: connection.verifiedAt } : {}),
+    ...(connection.blockedReason ? { blockedReason: connection.blockedReason } : {}),
+  };
+}
+
+/** Only real connectors get an actionable button; no fake OAuth for the rest. */
+function connectionAction(
+  toolId: string,
+  connectable: boolean,
+  lifecycle: ToolLifecycleStatus,
+): ToolConnectionView["action"] {
+  if (toolId !== "mautic" || !connectable) return null;
+  switch (lifecycle) {
+    case "configured":
+      return "verify";
+    case "needs_connection":
+    case "selected":
+      return "connect";
+    case "degraded":
+    case "unavailable":
+      return "retry";
+    case "connected":
+      return null;
+  }
+}
+
+/** Projects a session connection into a durable OrganizationToolState. */
+function toolStateFromConnection(
+  session: CustomerZeroSession,
+  connection: ConnectionState,
+): OrganizationToolState {
+  return {
+    organizationId: session.organizationId,
+    toolId: connection.toolId,
+    label: connection.label,
+    ...(connection.capability ? { capability: connection.capability } : {}),
+    declared: true,
+    status: connection.lifecycle ?? "needs_connection",
+    ...(connection.configSource ? { configSource: connection.configSource } : {}),
+    ...(connection.verifiedAt ? { verifiedAt: connection.verifiedAt } : {}),
+    ...(connection.lifecycle === "connected"
+      ? { health: "operational" as const }
+      : connection.lifecycle === "degraded"
+        ? { health: "degraded" as const }
+        : connection.lifecycle === "unavailable"
+          ? { health: "down" as const }
+          : {}),
+  };
 }
 
 function mostRecentReport(session: {

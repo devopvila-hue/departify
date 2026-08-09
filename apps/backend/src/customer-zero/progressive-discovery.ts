@@ -166,21 +166,52 @@ const CHOICE_OPTIONS: Readonly<
   },
 };
 
-/** The tools question is a visual multi-select, never a free-text schema chore. */
-const TOOL_OPTION_IDS: readonly string[] = [
-  "gmail",
-  "outlook",
-  "whatsapp",
-  "telegram",
-  "google_workspace",
-  "microsoft_365",
-];
-
+/** Capability-first tool discovery (Phase P-B): one business question per
+ *  domain. The CEO never chooses a "plugin"; Departify decides the connector. */
 const CRM_OPTION_IDS: readonly string[] = [
+  "mautic",
   "hubspot",
   "salesforce",
   "pipedrive",
   "zoho",
+];
+
+const EMAIL_OPTION_IDS: readonly string[] = ["gmail", "outlook"];
+
+const CALENDAR_OPTION_IDS: readonly string[] = [
+  "google_calendar",
+  "microsoft_calendar",
+];
+
+const DOCUMENTS_OPTION_IDS: readonly string[] = [
+  "google_drive",
+  "onedrive",
+  "dropbox",
+];
+
+const MARKETING_OPTION_IDS: readonly string[] = [
+  "mautic",
+  "mailchimp",
+  "brevo",
+  "hubspot",
+];
+
+const TEAM_OPTION_IDS: readonly string[] = [
+  "whatsapp",
+  "slack",
+  "telegram",
+  "microsoft_teams",
+  "notion",
+];
+
+/** The questions required before onboarding can hand off to the department. */
+export const TOOL_DISCOVERY_QUESTION_IDS: readonly string[] = [
+  "ops:crm",
+  "tools:email",
+  "tools:calendar",
+  "tools:documents",
+  "tools:marketing",
+  "tools:team",
 ];
 
 export function otherOptionLabel(locale: SupportedLocale): string {
@@ -191,43 +222,114 @@ export function noCrmOptionLabel(locale: SupportedLocale): string {
   return t(locale, "No utilizo CRM", "I don't use a CRM");
 }
 
-export function buildToolsQuestion(locale: SupportedLocale): ProgressiveQuestion {
-  const labels = TOOL_OPTION_IDS.map(
+function optionLabels(ids: readonly string[]): string[] {
+  return ids.map(
     (id) => TOOL_CATALOG.find((tool) => tool.id === id)?.label ?? id,
   );
-  return {
-    id: "ops:tools",
-    kind: "tools",
-    question: t(
-      locale,
-      "¿Qué herramientas utilizas más durante el día?",
-      "Which tools do you use most during the day?",
-    ),
-    component: "multi_choice",
-    options: [...labels, otherOptionLabel(locale)],
-    weight: "useful",
-    hint: t(
-      locale,
-      "Puedes elegir varias. Si conectas alguna, Marketing podrá trabajar con ella.",
-      "Pick as many as you like. If you connect one, Marketing can work with it.",
-    ),
-  };
 }
 
 export function buildCrmQuestion(locale: SupportedLocale): ProgressiveQuestion {
-  const labels = CRM_OPTION_IDS.map(
-    (id) => TOOL_CATALOG.find((tool) => tool.id === id)?.label ?? id,
-  );
   return {
     id: "ops:crm",
     kind: "crm",
     question: t(
       locale,
-      "¿Dónde gestionas tus clientes?",
-      "Where do you manage your customers?",
+      "¿Qué CRM utilizáis?",
+      "Which CRM do you use?",
     ),
     component: "choice",
-    options: [noCrmOptionLabel(locale), ...labels, otherOptionLabel(locale)],
+    options: [
+      noCrmOptionLabel(locale),
+      ...optionLabels(CRM_OPTION_IDS),
+      otherOptionLabel(locale),
+    ],
+    weight: "useful",
+  };
+}
+
+export function buildEmailQuestion(locale: SupportedLocale): ProgressiveQuestion {
+  return {
+    id: "tools:email",
+    kind: "tools",
+    question: t(
+      locale,
+      "¿Dónde gestionáis el correo?",
+      "Where do you manage email?",
+    ),
+    component: "choice",
+    options: [...optionLabels(EMAIL_OPTION_IDS), otherOptionLabel(locale)],
+    weight: "useful",
+  };
+}
+
+export function buildCalendarQuestion(
+  locale: SupportedLocale,
+): ProgressiveQuestion {
+  return {
+    id: "tools:calendar",
+    kind: "tools",
+    question: t(
+      locale,
+      "¿Qué calendario utilizáis?",
+      "Which calendar do you use?",
+    ),
+    component: "choice",
+    options: [...optionLabels(CALENDAR_OPTION_IDS), otherOptionLabel(locale)],
+    weight: "useful",
+  };
+}
+
+export function buildDocumentsQuestion(
+  locale: SupportedLocale,
+): ProgressiveQuestion {
+  return {
+    id: "tools:documents",
+    kind: "tools",
+    question: t(
+      locale,
+      "¿Dónde guardáis documentos?",
+      "Where do you store documents?",
+    ),
+    component: "choice",
+    options: [...optionLabels(DOCUMENTS_OPTION_IDS), otherOptionLabel(locale)],
+    weight: "useful",
+  };
+}
+
+export function buildMarketingQuestion(
+  locale: SupportedLocale,
+  declaredToolIds?: readonly string[],
+): ProgressiveQuestion {
+  const options = MARKETING_OPTION_IDS.filter(
+    (id) => !declaredToolIds?.includes(id),
+  );
+  return {
+    id: "tools:marketing",
+    kind: "tools",
+    question: t(
+      locale,
+      "¿Qué herramientas de marketing utilizáis?",
+      "Which marketing tools do you use?",
+    ),
+    component: "multi_choice",
+    options: [...optionLabels(options), otherOptionLabel(locale)],
+    weight: "useful",
+  };
+}
+
+export function buildTeamQuestion(
+  locale: SupportedLocale,
+): ProgressiveQuestion {
+  return {
+    id: "tools:team",
+    kind: "tools",
+    question: t(
+      locale,
+      "¿Qué herramientas utiliza vuestro equipo?",
+      "Which tools does your team use?",
+    ),
+    component: "multi_choice",
+    options: [...optionLabels(TEAM_OPTION_IDS), otherOptionLabel(locale)],
     weight: "useful",
   };
 }
@@ -291,6 +393,7 @@ export function selectNextQuestion(
   report: CompanyDiscoveryReport | null,
   state: DiscoveryConversationState,
   locale: SupportedLocale,
+  declaredToolIds?: readonly string[],
 ): ProgressiveQuestion | null {
   if (state.pendingToolDetail && !state.answered.has("ops:tool_other")) {
     return buildToolDetailQuestion(locale);
@@ -301,14 +404,34 @@ export function selectNextQuestion(
     return dnaQuestion;
   }
 
-  if (!state.answered.has("ops:tools")) {
-    return buildToolsQuestion(locale);
-  }
+  // Capability-first tool discovery (Phase P-B): one domain at a time.
   if (!state.answered.has("ops:crm")) {
     return buildCrmQuestion(locale);
   }
+  if (!state.answered.has("tools:email")) {
+    return buildEmailQuestion(locale);
+  }
+  if (!state.answered.has("tools:calendar")) {
+    return buildCalendarQuestion(locale);
+  }
+  if (!state.answered.has("tools:documents")) {
+    return buildDocumentsQuestion(locale);
+  }
+  if (!state.answered.has("tools:marketing")) {
+    return buildMarketingQuestion(locale, declaredToolIds);
+  }
+  if (!state.answered.has("tools:team")) {
+    return buildTeamQuestion(locale);
+  }
 
   return dnaQuestion;
+}
+
+/** True when every required tool-discovery question has been answered. */
+export function isToolDiscoveryComplete(
+  state: DiscoveryConversationState,
+): boolean {
+  return TOOL_DISCOVERY_QUESTION_IDS.every((id) => state.answered.has(id));
 }
 
 function selectDnaQuestion(

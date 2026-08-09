@@ -602,7 +602,19 @@ function ConversationStep(props: {
             </div>
           )}
 
-          {question.component === "choice" && (
+          {question.component === "choice" && isToolQuestion(question) && (
+            <ToolChoiceGrid
+              mode="single"
+              options={question.options ?? []}
+              selected={selected}
+              onToggle={toggle}
+              onPick={(option) => props.onAnswer(question.id, [option])}
+              onContinue={() => props.onAnswer(question.id, selected)}
+              continueDisabled={selected.length === 0}
+            />
+          )}
+
+          {question.component === "choice" && !isToolQuestion(question) && (
             <div className="customer-zero__choices">
               {(question.options ?? []).map((option) => (
                 <button
@@ -617,7 +629,19 @@ function ConversationStep(props: {
             </div>
           )}
 
-          {question.component === "multi_choice" && (
+          {question.component === "multi_choice" && isToolQuestion(question) && (
+            <ToolChoiceGrid
+              mode="multiple"
+              options={question.options ?? []}
+              selected={selected}
+              onToggle={toggle}
+              onPick={(option) => props.onAnswer(question.id, [option])}
+              onContinue={() => props.onAnswer(question.id, selected)}
+              continueDisabled={selected.length === 0}
+            />
+          )}
+
+          {question.component === "multi_choice" && !isToolQuestion(question) && (
             <>
               <div className="customer-zero__choices">
                 {(question.options ?? []).map((option) => (
@@ -673,4 +697,71 @@ function connectionLabel(connection: ConnectionCard): string {
     default:
       return "○ No conectado";
   }
+}
+
+function isToolQuestion(question: ProgressiveQuestion): boolean {
+  return question.kind === "tools" || question.kind === "crm";
+}
+
+/**
+ * Compact card/grid tool selection (Phase P-B). Recognizable tool identity is
+ * rendered as a neutral initial tile — never an invented approximation of a
+ * brand logo. Selected state is obvious; "Otra" is a first-class option.
+ */
+function ToolChoiceGrid(props: {
+  mode: "single" | "multiple";
+  options: readonly string[];
+  selected: readonly string[];
+  onToggle: (option: string) => void;
+  onPick: (option: string) => void;
+  onContinue: () => void;
+  continueDisabled: boolean;
+}) {
+  return (
+    <div className="customer-zero__tool-grid">
+      {props.options.map((option) => {
+        const isOther =
+          option.toLowerCase() === "otra" || option.toLowerCase() === "otro";
+        const selectedFlag = props.selected.includes(option);
+        return (
+          <button
+            key={option}
+            type="button"
+            className={`customer-zero__tool${selectedFlag ? " customer-zero__tool--selected" : ""}`}
+            onClick={() =>
+              props.mode === "single"
+                ? props.onPick(option)
+                : props.onToggle(option)
+            }
+          >
+            <span className="customer-zero__tool-tile" aria-hidden="true">
+              {isOther ? "+" : initialFor(option)}
+            </span>
+            <span className="customer-zero__tool-label">{option}</span>
+            {props.mode === "multiple" && selectedFlag && (
+              <span className="customer-zero__tool-check" aria-hidden="true">
+                ✓
+              </span>
+            )}
+          </button>
+        );
+      })}
+      {props.mode === "multiple" && (
+        <button
+          type="button"
+          className="customer-zero__submit"
+          disabled={props.continueDisabled}
+          onClick={props.onContinue}
+        >
+          Continuar
+        </button>
+      )}
+    </div>
+  );
+}
+
+function initialFor(option: string): string {
+  const trimmed = option.trim();
+  if (trimmed.length === 0) return "?";
+  return trimmed.charAt(0).toUpperCase();
 }

@@ -23,6 +23,27 @@ export interface ConnectionCard {
   authorizationUrl?: string;
 }
 
+/** Durable /conexiones view (Phase P-B). */
+export type ToolLifecycleStatus =
+  | "selected"
+  | "needs_connection"
+  | "configured"
+  | "connected"
+  | "degraded"
+  | "unavailable";
+
+export interface ToolConnectionView {
+  toolId: string;
+  label: string;
+  capability?: string;
+  category: string;
+  status: ToolLifecycleStatus;
+  humanLabel: string;
+  action: "connect" | "verify" | "retry" | null;
+  verifiedAt?: string;
+  blockedReason?: string;
+}
+
 export interface DecisionView {
   id: string;
   head: HeadIdentity;
@@ -256,6 +277,28 @@ export interface StartView {
   error?: { message: string };
 }
 
+/* -------------------------------------------------------------------------
+ * Durable conversations (Phase P-B part 15).
+ * -------------------------------------------------------------------------*/
+
+export interface ConversationView {
+  id: string;
+  organizationId: string;
+  title: string;
+  status: "active" | "archived";
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt?: string;
+}
+
+export interface MessageView {
+  id: string;
+  conversationId: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+}
+
 let accessToken: string | null = null;
 
 /** The portal keeps Supabase's session token in memory and attaches it to
@@ -337,7 +380,7 @@ export const api = {
   overview: (org: string) => getJson<CeoOverview>(`/api/customer-zero/${org}/overview`),
   status: (org: string) => getJson<CompanyStatus>(`/api/customer-zero/${org}`),
   connections: (org: string) =>
-    getJson<{ connections: ConnectionCard[]; unmappedTools: string[] }>(
+    getJson<{ connections: ToolConnectionView[]; unmappedTools: string[] }>(
       `/api/customer-zero/${org}/connections`,
     ),
   connect: (org: string, toolId: string) =>
@@ -367,9 +410,32 @@ export const api = {
     getJson<CommandCenterOpening>(
       `/api/customer-zero/${org}/command-center/opening`,
     ),
-  commandCenterMessage: (org: string, message: string) =>
-    postJson<CommandCenterMessageResult>(
+  commandCenterMessage: (org: string, message: string, conversationId?: string) =>
+    postJson<CommandCenterMessageResult & { conversationId?: string }>(
       `/api/customer-zero/${org}/command-center/message`,
+      conversationId ? { message, conversationId } : { message },
+    ),
+  // Durable conversations (Phase P-B part 15).
+  conversations: (org: string) =>
+    getJson<{ conversations: ConversationView[] }>(
+      `/api/customer-zero/${org}/conversations`,
+    ),
+  createConversation: (org: string, title?: string) =>
+    postJson<{ conversation: ConversationView }>(
+      `/api/customer-zero/${org}/conversations`,
+      title ? { title } : undefined,
+    ),
+  conversation: (org: string, conversationId: string) =>
+    getJson<{ conversation: ConversationView; messages: MessageView[] }>(
+      `/api/customer-zero/${org}/conversations/${conversationId}`,
+    ),
+  sendConversationMessage: (org: string, conversationId: string, message: string) =>
+    postJson<CommandCenterMessageResult & { conversationId: string }>(
+      `/api/customer-zero/${org}/conversations/${conversationId}/messages`,
       { message },
+    ),
+  archiveConversation: (org: string, conversationId: string) =>
+    postJson<{ ok: boolean }>(
+      `/api/customer-zero/${org}/conversations/${conversationId}/archive`,
     ),
 };

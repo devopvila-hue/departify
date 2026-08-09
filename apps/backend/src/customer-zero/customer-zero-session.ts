@@ -76,6 +76,19 @@ import {
   type DiscoveryConversationState,
 } from "./progressive-discovery.js";
 import type { ConnectionState } from "./connections.js";
+import { TOOL_CATALOG, buildConnectionStateWithLifecycle } from "./connections.js";
+import { resolveMauticCredentials } from "./mautic-adapter.js";
+import {
+  InMemoryToolStateStore,
+  lifecycleToConnectionStatus,
+  type OrganizationToolState,
+  type ToolLifecycleStatus,
+  type ToolStateStore,
+} from "./tool-state.js";
+import {
+  InMemoryConversationStore,
+  type ConversationStore,
+} from "./conversation-store.js";
 
 const ONBOARDING_DIRECTOR_AGENT_ID = "agent_marketing_director";
 const ONBOARDING_EMPLOYEE_AGENT_ID = "agent_content_strategist";
@@ -106,6 +119,10 @@ export interface CustomerZeroSessionState {
   unmappedTools: string[];
   /** What the research really understood about the business. */
   understood?: Readonly<Record<string, unknown>>;
+  /** Whether durable tool/connection state was hydrated (Phase P-B). */
+  toolHydrated?: boolean;
+  /** The organization's current/selected conversation (Phase P-B part 15). */
+  currentConversationId?: string;
   /** Marketing Director's diagnosis of the business. */
   marketingDiagnosis?: MarketingDiagnosis;
   /** The team Elvira formed for the current goal. */
@@ -177,6 +194,10 @@ export interface CustomerZeroSession {
   readonly runtime: ToolRuntime;
   /** Canonical department capability registry (Sprint 62). */
   readonly capabilities: DepartmentCapabilityRegistry;
+  /** Durable organization tool/connection state (Phase P-B). */
+  readonly toolState: ToolStateStore;
+  /** Durable organization-scoped conversations (Phase P-B part 15). */
+  readonly conversations: ConversationStore;
   state: CustomerZeroSessionState;
   reports: readonly CompanyDiscoveryReport[];
 }
@@ -186,6 +207,10 @@ const sessions = new Map<string, CustomerZeroSession>();
 export interface CustomerZeroSessionOptions {
   readonly llm?: LlmRuntime;
   readonly locale?: SupportedLocale;
+  /** Durable tool/connection store (Supabase in production). */
+  readonly toolState?: ToolStateStore;
+  /** Durable conversation store (Supabase in production). */
+  readonly conversations?: ConversationStore;
 }
 
 /**
@@ -356,6 +381,8 @@ export function getOrCreateCustomerZeroSession(
     memoryStore: createInMemoryMemoryRecordStore(),
     runtime,
     capabilities,
+    toolState: options.toolState ?? new InMemoryToolStateStore(),
+    conversations: options.conversations ?? new InMemoryConversationStore(),
     state: {
       organizationId,
       rawData: {},
@@ -382,6 +409,87 @@ export function getCustomerZeroSession(
 export function listCustomerZeroSessions(): readonly string[] {
   return [...sessions.keys()];
 }
+
+/** Test support: clears the in-process session registry (simulates a restart). */
+export function resetCustomerZeroSessionsForTest(): void {
+  sessions.clear();
+}
+
+/**
+ * Loads the organization's durable tool/connection state into the session.
+ * Customer Zero bootstrap: when the required MAUTIC_* env configuration exists
+ * but the org has no durable Mautic record yet, Mautic is represented as
+ * CONFIGURED (never CONNECTED — verification is separate).
+ */
+export async function hydrateSessionToolState(
+  session: CustomerZeroSession,
+): Promise<void> {
+  if (session.state.toolHydrated) return;
+  session.state.toolHydrated = true;
+  const records = await session.toolState.listForOrg(session.organizationId);
+
+  if (!records.some((record) => record.toolId === "mautic")) {
+    const bootstrap = buildMauticBootstrapRecord(session.organizationId);
+    if (bootstrap) {
+      await session.toolState.upsert(bootstrap);
+      records.push(bootstrap);
+    }
+  }
+
+  for (const record of records) {
+    if (session.state.connections.has(record.toolId)) continue;
+    const tool = TOOL_CATALOG.find((entry) => entry.id === record.toolId);
+    const connection = tool
+      ? buildConnectionStateWithLifecycle(tool, session.state.locale, record.status, {
+          ...(record.configSource ? { configSource: record.configSource } : {}),
+          ...(record.verifiedAt ? { verifiedAt: record.verifiedAt } : {}),
+        })
+      : buildFallbackConnection(record);
+    session.state.connections.set(record.toolId, connection);
+  }
+}
+
+/** Persists a declaration/connection update to the durable store. */
+export async function persistToolState(
+  session: CustomerZeroSession,
+  state: OrganizationToolState,
+): Promise<void> {
+  await session.toolState.upsert(state);
+}
+
+/** Builds the CONFIGURED Mautic bootstrap record from Railway env, if present. */
+export function buildMauticBootstrapRecord(
+  organizationId: string,
+): OrganizationToolState | null {
+  if (!resolveMauticCredentials()) return null;
+  const tool = TOOL_CATALOG.find((entry) => entry.id === "mautic");
+  return {
+    organizationId,
+    toolId: "mautic",
+    label: tool?.label ?? "Mautic",
+    ...(tool?.capability ? { capability: tool.capability } : {}),
+    declared: true,
+    status: "configured",
+    configSource: "env:mautic",
+  };
+}
+
+function buildFallbackConnection(
+  record: OrganizationToolState,
+): ConnectionState {
+  return {
+    toolId: record.toolId,
+    label: record.label,
+    capability: record.capability ?? "unknown",
+    category: "Herramientas",
+    status: lifecycleToConnectionStatus(record.status),
+    lifecycle: record.status,
+    ...(record.configSource ? { configSource: record.configSource } : {}),
+    ...(record.verifiedAt ? { verifiedAt: record.verifiedAt } : {}),
+  };
+}
+
+export type { ToolLifecycleStatus };
 
 /**
  * Runs the Executive Discovery Workflow with the session's real rawData and

@@ -8,6 +8,8 @@ import { loadEnvFile } from "node:process";
 import { buildServer } from "./server/server.js";
 import { registerGracefulShutdown } from "./server/shutdown.js";
 import { SupabaseTenantService } from "./auth/supabase-tenant-service.js";
+import { SupabaseToolStateStore } from "./customer-zero/supabase-tool-state-store.js";
+import { SupabaseConversationStore } from "./customer-zero/supabase-conversation-store.js";
 import type { ServerDeps } from "./server/deps.js";
 
 // Load the local environment file when present. The backend does not ship
@@ -30,6 +32,8 @@ try {
   const tenant = new SupabaseTenantService(authConfig);
   deps.auth = tenant;
   deps.organizations = tenant;
+  deps.toolState = new SupabaseToolStateStore(authConfig);
+  deps.conversations = new SupabaseConversationStore(authConfig);
 } catch (cause) {
   const message = cause instanceof Error ? cause.message : String(cause);
   if (config.environment === "production") {

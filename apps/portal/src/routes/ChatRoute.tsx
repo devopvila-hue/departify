@@ -5,6 +5,7 @@ import {
   api,
   type CommandCenterEvent,
   type CommandCenterMessageResult,
+  type ConversationView,
 } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import { readable } from "@/app/readable";
@@ -12,6 +13,7 @@ import {
   CheckIcon,
   CompanyIcon,
   DepartmentsIcon,
+  MenuIcon,
   PlugIcon,
   PlusIcon,
   ResultsIcon,
@@ -22,20 +24,12 @@ import {
 import { useNavigate } from "react-router-dom";
 
 /**
- * The Conversation — Sprint 59.
+ * The Conversation — Sprint 59 (Phase P-B part 15: durable sessions).
  *
- * The chat IS the application. The CEO lands here after Customer Zero.
- * The screen is dominated by the conversation; the composer is the
- * primary action.
- *
- * The first thing the CEO sees is a proactive opening from Departify
- * with a goal-grounded strategy. Subsequent turns go through the
- * Command Center router. Marketing Director V1 is invoked through
- * the existing `marketing.chat` tool when the message is delegated.
- *
- * Business events (approval requests, results, connection needs,
- * work updates) are rendered as cards INSIDE the conversation.
- * No dashboard widgets around the chat.
+ * The chat IS the application. Conversations and messages are durable and
+ * organization-scoped: the CEO can start a new conversation, reopen a past
+ * one, archive one, and always return to a clean chat — without losing the
+ * company knowledge, connections or departments.
  */
 export function ChatRoute() {
   const { organizationId } = useOrg();
@@ -45,6 +39,9 @@ export function ChatRoute() {
     { role: "user" | "assistant"; content: string }[]
   >([]);
   const [events, setEvents] = useState<readonly CommandCenterEvent[]>([]);
+  const [conversations, setConversations] = useState<ConversationView[]>([]);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [opening, setOpening] = useState(true);
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
@@ -57,22 +54,40 @@ export function ChatRoute() {
     return params.get("focus");
   }, [location.search]);
 
+  const loadConversation = useCallback(async (conversationId: string) => {
+    const data = await api.conversation(organizationId!, conversationId);
+    if (!data) return;
+    setTranscript(
+      data.messages.map((message) => ({
+        role: message.role as "user" | "assistant",
+        content: message.content,
+      })),
+    );
+    setCurrentConversationId(conversationId);
+  }, [organizationId]);
+
+  const refreshConversations = useCallback(async () => {
+    if (!organizationId) return;
+    const data = await api.conversations(organizationId);
+    if (data) setConversations(data.conversations ?? []);
+  }, [organizationId]);
+
   const load = useCallback(async () => {
     if (!organizationId) return;
-    const [openingData, statusData] = await Promise.all([
-      api.commandCenterOpening(organizationId),
-      api.status(organizationId),
-    ]);
+    await refreshConversations();
+    const [openingData] = await Promise.all([api.commandCenterOpening(organizationId)]);
     if (openingData) setEvents(openingData.events);
-    if (statusData) {
-      const conv = statusData.conversation.map((turn) => ({
-        role: turn.role as "user" | "assistant",
-        content: turn.content,
-      }));
-      setTranscript(conv);
+    // Reopen the most recent conversation if there is one; otherwise a clean chat.
+    const data = await api.conversations(organizationId);
+    const first = data?.conversations?.[0];
+    if (first) {
+      await loadConversation(first.id);
+    } else {
+      setTranscript([]);
+      setCurrentConversationId(null);
     }
     setOpening(false);
-  }, [organizationId]);
+  }, [organizationId, refreshConversations, loadConversation]);
 
   useEffect(() => {
     void load();
@@ -85,6 +100,26 @@ export function ChatRoute() {
     node.scrollTop = node.scrollHeight;
   }, [transcript, events]);
 
+  async function newConversation() {
+    if (!organizationId) return;
+    const created = await api.createConversation(organizationId);
+    if (!created?.conversation) return;
+    setCurrentConversationId(created.conversation.id);
+    setTranscript([]);
+    setEvents([]);
+    await refreshConversations();
+  }
+
+  async function archiveConversation(conversationId: string) {
+    if (!organizationId) return;
+    await api.archiveConversation(organizationId, conversationId);
+    await refreshConversations();
+    if (currentConversationId === conversationId) {
+      setCurrentConversationId(null);
+      setTranscript([]);
+    }
+  }
+
   async function send() {
     const value = input.trim();
     if (!organizationId || !value || busy) return;
@@ -93,8 +128,10 @@ export function ChatRoute() {
     setProcessStatus("Departify está pensando…");
     setInput("");
     setTranscript((prev) => [...prev, { role: "user", content: value }]);
-    const result: CommandCenterMessageResult | null =
-      await api.commandCenterMessage(organizationId, value);
+    const result: (CommandCenterMessageResult & { conversationId?: string }) | null =
+      currentConversationId
+        ? await api.sendConversationMessage(organizationId, currentConversationId, value)
+        : await api.commandCenterMessage(organizationId, value);
     setBusy(false);
     setProcessStatus(null);
     if (!result) {
@@ -103,22 +140,13 @@ export function ChatRoute() {
       );
       return;
     }
+    if (result.conversationId) setCurrentConversationId(result.conversationId);
     setTranscript((prev) => [
       ...prev,
       { role: "assistant", content: result.reply },
     ]);
     setEvents(result.events);
-    // Refresh the opening/proactive events from the server (the round-trip
-    // may have produced new approvals, results, connection needs). The local
-    // transcript is preserved because the server already has the latest
-    // turn appended to session.state.conversation.
-    void refreshEvents();
-  }
-
-  async function refreshEvents() {
-    if (!organizationId) return;
-    const openingData = await api.commandCenterOpening(organizationId);
-    if (openingData) setEvents(openingData.events);
+    await refreshConversations();
   }
 
   // If the URL passed a focus, prepopulate the composer (only once).
@@ -133,6 +161,55 @@ export function ChatRoute() {
 
   return (
     <div className="dfy-chat-page">
+      <div className="dfy-chat-topbar">
+        <button
+          type="button"
+          className="dfy-chat-history-toggle"
+          aria-expanded={historyOpen}
+          onClick={() => setHistoryOpen((value) => !value)}
+        >
+          <MenuIcon /> Conversaciones
+        </button>
+        <button
+          type="button"
+          className="dfy-chat-new"
+          onClick={() => void newConversation()}
+        >
+          <PlusIcon /> Nueva conversación
+        </button>
+      </div>
+
+      {historyOpen && (
+        <div className="dfy-chat-history" aria-label="Conversaciones recientes">
+          {conversations.length === 0 ? (
+            <p className="dfy-muted">Todavía no tienes conversaciones.</p>
+          ) : (
+            conversations.map((conversation) => (
+              <div
+                key={conversation.id}
+                className={`dfy-chat-history__row${conversation.id === currentConversationId ? " dfy-chat-history__row--active" : ""}`}
+              >
+                <button
+                  type="button"
+                  className="dfy-chat-history__open"
+                  onClick={() => void loadConversation(conversation.id)}
+                >
+                  {conversation.title}
+                </button>
+                <button
+                  type="button"
+                  className="dfy-chat-history__archive"
+                  aria-label={`Archivar ${conversation.title}`}
+                  onClick={() => void archiveConversation(conversation.id)}
+                >
+                  Archivar
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
       <div className="dfy-chat-scroller" ref={scrollerRef}>
         <ConversationList
           transcript={transcript}

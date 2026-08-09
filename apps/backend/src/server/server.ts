@@ -10,6 +10,7 @@ import { registerHealthRoutes } from "./routes/health.js";
 import { registerVersionRoutes } from "./routes/version.js";
 import { registerCustomerZeroRoutes } from "./routes/customer-zero.js";
 import { registerCustomerZeroV2Routes } from "./routes/customer-zero-v2.js";
+import { registerConversationRoutes } from "./routes/conversations.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import type { ServerDeps } from "./deps.js";
 
@@ -50,8 +51,9 @@ export async function buildServer(
   await registerOpenApi(server, config);
   await registerHealthRoutes(server);
   await registerVersionRoutes(server, config);
-  await registerCustomerZeroRoutes(server);
+  await registerCustomerZeroRoutes(server, deps);
   await registerCustomerZeroV2Routes(server, deps);
+  await registerConversationRoutes(server, deps);
   await registerAuthRoutes(server, deps.organizations);
 
   return server;

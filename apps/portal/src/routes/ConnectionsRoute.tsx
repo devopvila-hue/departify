@@ -1,19 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { api, type ConnectionCard } from "@/app/api";
+import { api, type ToolConnectionView } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import { Badge, Card, EmptyState } from "@/components/primitives";
 
 /**
- * Conexiones — the tools the company works with.
+ * Conexiones — the tools the company works with (durable organization state,
+ * Phase P-B).
  *
- * Capability-first: the CEO told us which tools he uses and Departify decided
- * internally what to connect. No OAuth client ids, no provider names, no
- * plugin catalog: only "Gmail · Correo · Conectado".
+ * Capability-first and honest: SELECTED/CONFIGURED/CONNECTED/DEGRADED are
+ * shown in human language. Only real connectors get an actionable button —
+ * no fake OAuth for tools without an implementation.
  */
 export function ConnectionsRoute() {
   const { organizationId } = useOrg();
-  const [connections, setConnections] = useState<ConnectionCard[]>([]);
+  const [connections, setConnections] = useState<ToolConnectionView[]>([]);
   const [unmapped, setUnmapped] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -33,18 +34,10 @@ export function ConnectionsRoute() {
   async function connect(toolId: string) {
     if (!organizationId) return;
     setBusy(toolId);
-    const result = await api.connect(organizationId, toolId);
+    await api.connect(organizationId, toolId);
     setBusy(null);
-    if (result?.connection) {
-      setConnections((prev) =>
-        prev.map((connection) =>
-          connection.toolId === toolId ? result.connection : connection,
-        ),
-      );
-      if (result.connection.authorizationUrl) {
-        window.open(result.connection.authorizationUrl, "_blank", "noopener");
-      }
-    }
+    // The connect/verify action mutates durable state; re-read it.
+    await load();
   }
 
   return (
@@ -61,7 +54,7 @@ export function ConnectionsRoute() {
         <Card>
           <EmptyState
             title="Sin herramientas todavía"
-            description="Cuéntale a tu jefa de Marketing qué usas en el día a día y te ofrecerá conectarlo."
+            description="Cuéntale a tu jefa de Marketing qué usáis en el día a día y te lo conectará."
           />
         </Card>
       ) : (
@@ -71,11 +64,11 @@ export function ConnectionsRoute() {
               <div className="dfy-work__head">
                 <strong>{connection.label}</strong>
                 <Badge tone={toneFor(connection.status)}>
-                  {labelFor(connection.status)}
+                  {connection.humanLabel}
                 </Badge>
               </div>
               <p className="dfy-muted dfy-muted--small">{connection.category}</p>
-              {connection.status !== "connected" && (
+              {connection.action && (
                 <button
                   type="button"
                   className="dfy-button dfy-button--small"
@@ -83,16 +76,19 @@ export function ConnectionsRoute() {
                   onClick={() => void connect(connection.toolId)}
                 >
                   {busy === connection.toolId
-                    ? "Conectando…"
-                    : `Conectar ${connection.label}`}
+                    ? "Comprobando…"
+                    : actionLabel(connection)}
                 </button>
               )}
-              {connection.status === "blocked" && (
-                <p className="dfy-note">
-                  {connection.blockedReason ??
-                    "Nos falta un permiso del proveedor para poder conectarlo."}{" "}
-                  Nos encargamos nosotros: te avisaremos en cuanto esté listo.
-                </p>
+              {connection.action === null &&
+                connection.status !== "connected" && (
+                  <p className="dfy-note">
+                    Todavía no podemos conectar {connection.label}. Tu equipo lo
+                    tiene en cuenta; te avisaremos cuando esté listo.
+                  </p>
+                )}
+              {connection.status === "connected" && connection.verifiedAt && (
+                <p className="dfy-note">Verificado {fecha(connection.verifiedAt)}.</p>
               )}
             </Card>
           ))}
@@ -100,7 +96,7 @@ export function ConnectionsRoute() {
       )}
 
       {unmapped.length > 0 && (
-        <Card title="También utilizas estas herramientas">
+        <Card title="También utilizáis estas herramientas">
           <p className="dfy-muted">{unmapped.join(", ")}</p>
           <p className="dfy-muted dfy-muted--small">
             Tu equipo lo tiene en cuenta. Si alguna es razonablemente integrable
@@ -113,30 +109,39 @@ export function ConnectionsRoute() {
   );
 }
 
-function labelFor(status: ConnectionCard["status"]): string {
-  switch (status) {
-    case "connected":
-      return "Conectado";
-    case "connecting":
-      return "Conectando";
-    case "blocked":
-      return "Necesita configuración";
+function actionLabel(connection: ToolConnectionView): string {
+  switch (connection.action) {
+    case "verify":
+      return "Verificar conexión";
+    case "retry":
+      return "Reintentar";
+    case "connect":
     default:
-      return "No conectado";
+      return `Conectar ${connection.label}`;
+  }
+}
+
+function fecha(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString("es-ES");
+  } catch {
+    return iso;
   }
 }
 
 function toneFor(
-  status: ConnectionCard["status"],
+  status: ToolConnectionView["status"],
 ): "neutral" | "accent" | "warning" | "danger" | "success" {
   switch (status) {
     case "connected":
       return "success";
-    case "connecting":
+    case "configured":
       return "accent";
-    case "blocked":
+    case "degraded":
+    case "unavailable":
+      return "danger";
+    case "needs_connection":
+    case "selected":
       return "warning";
-    default:
-      return "neutral";
   }
 }

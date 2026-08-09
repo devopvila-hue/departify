@@ -76,7 +76,7 @@ export function buildSessionOperationalContext(
   const work = session.state.marketingWork;
   const head = getMarketingHead();
 
-  return buildOperationalContext({
+  const context = buildOperationalContext({
     company: {
       name: session.state.companyName ?? session.state.onboarding?.companyName ?? "Tu empresa",
       ...(session.state.onboarding?.goal ? { goal: session.state.onboarding.goal } : {}),
@@ -113,4 +113,49 @@ export function buildSessionOperationalContext(
       }),
     ),
   });
+
+  // Phase P-B — the chat must distinguish DECLARED / CONFIGURED / CONNECTED /
+  // DEGRADED. This block complements the package's connected-systems line.
+  return {
+    ...context,
+    promptView: context.promptView + buildToolLifecycleBlock(session),
+  };
+}
+
+/** Human lifecycle block for every declared/configured/connected tool. */
+function buildToolLifecycleBlock(session: CustomerZeroSession): string {
+  const entries = [...session.state.connections.values()]
+    .map((connection) => {
+      const lifecycle = lifecycleLabel(connection);
+      if (!lifecycle) return null;
+      return `  - ${connection.label}: ${lifecycle}`;
+    })
+    .filter((line): line is string => line !== null);
+  if (entries.length === 0) return "";
+  return `\nESTADO DE LAS HERRAMIENTAS:\n${entries.join("\n")}`;
+}
+
+function lifecycleLabel(connection: {
+  lifecycle?: string;
+  status?: string;
+  verifiedAt?: string;
+}): string | null {
+  const lifecycle = connection.lifecycle ?? connection.status;
+  if (!lifecycle) return null;
+  switch (lifecycle) {
+    case "connected":
+      return "CONECTADA" + (connection.verifiedAt ? ` (verificada ${connection.verifiedAt})` : "");
+    case "configured":
+      return "CONFIGURADA — credenciales presentes, verificación pendiente";
+    case "needs_connection":
+      return "SELECCIONADA — necesita conexión";
+    case "selected":
+      return "SELECCIONADA";
+    case "degraded":
+      return "DEGRADADA — problema de conexión";
+    case "unavailable":
+      return "NO DISPONIBLE";
+    default:
+      return lifecycle;
+  }
 }

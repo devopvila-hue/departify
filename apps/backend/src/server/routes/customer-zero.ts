@@ -6,12 +6,15 @@ import {
 import {
   getCustomerZeroSession,
   getOrCreateCustomerZeroSession,
+  hydrateSessionToolState,
   runDiscoveryForSession,
   runMarketingPreparationForSession,
   runMarketingPlanForSession,
   executeMarketingWorkItemForSession,
   approveMarketingWorkItemForSession,
 } from "../../customer-zero/customer-zero-session.js";
+import { isToolDiscoveryComplete } from "../../customer-zero/progressive-discovery.js";
+import type { ServerDeps } from "../deps.js";
 import { curateMandatoryQuestions } from "../../customer-zero/questions.js";
 import { buildAnswersRawData } from "../../customer-zero/answers.js";
 import type { FastifyInstance } from "fastify";
@@ -30,6 +33,7 @@ import type { CompanyDiscoveryReport } from "@departify/business-discovery";
  */
 export async function registerCustomerZeroRoutes(
   server: FastifyInstance,
+  deps: ServerDeps = {},
 ): Promise<void> {
   server.post(
     "/api/customer-zero/analyze",
@@ -81,7 +85,11 @@ export async function registerCustomerZeroRoutes(
       const organizationId = `org_${slugify(url)}_${shortId()}`;
 
       try {
-        const session = getOrCreateCustomerZeroSession(organizationId);
+        const session = getOrCreateCustomerZeroSession(organizationId, {
+          ...(deps.toolState ? { toolState: deps.toolState } : {}),
+          ...(deps.conversations ? { conversations: deps.conversations } : {}),
+        });
+        await hydrateSessionToolState(session);
         session.state.url = url;
 
         // 1. Real web investigation.
@@ -261,6 +269,20 @@ export async function registerCustomerZeroRoutes(
             },
           },
           404: { type: "object", properties: { error: { type: "string" } } },
+          409: {
+            type: "object",
+            properties: {
+              error: {
+                type: "object",
+                properties: {
+                  code: { type: "string" },
+                  message: { type: "string" },
+                  requestId: { type: "string" },
+                  statusCode: { type: "number" },
+                },
+              },
+            },
+          },
         },
       },
     },
@@ -270,6 +292,34 @@ export async function registerCustomerZeroRoutes(
       const session = getCustomerZeroSession(organizationId);
       if (!session) {
         return reply.code(404).send({ error: "Session not found." });
+      }
+
+      // Phase P-B — one authoritative path: onboarding may NOT reach the
+      // department handoff before capability/tool discovery is complete.
+      if (!isToolDiscoveryComplete(session.state.discovery)) {
+        return reply.code(409).send({
+          error: {
+            code: "DISCOVERY_INCOMPLETE",
+            message:
+              "Todavía no hemos terminado de conocer las herramientas que utiliza la empresa.",
+            requestId: request.id,
+            statusCode: 409,
+          },
+        });
+      }
+
+      // Idempotent handoff: if the department already exists, do not
+      // re-provision it (no contradictory state).
+      const alreadyProvisioned = findMarketingDepartment(session);
+      if (alreadyProvisioned) {
+        return reply.code(200).send({
+          organizationId,
+          department: alreadyProvisioned,
+          firstResult: null,
+          gaps: [],
+          questions: [],
+          error: null,
+        });
       }
 
       const { result, workflowResult } =

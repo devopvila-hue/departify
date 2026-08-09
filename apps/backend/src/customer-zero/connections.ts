@@ -14,6 +14,10 @@
  * connected so Marketing can be honest about what it can and cannot do.
  */
 import { t, type SupportedLocale } from "./locale.js";
+import {
+  lifecycleToConnectionStatus,
+  type ToolLifecycleStatus,
+} from "./tool-state.js";
 
 export type ConnectionStatus =
   | "not_connected"
@@ -188,6 +192,72 @@ export const TOOL_CATALOG: readonly ToolDescriptor[] = [
     connectable: false,
     requiredCredentials: ["NOTION_OAUTH_CLIENT_ID", "NOTION_OAUTH_CLIENT_SECRET"],
   },
+  // Phase P-B — declarable tools (capability-first discovery). No connector
+  // implementation yet: they can be SELECTED/NEEDS_CONNECTION but never fake a
+  // connection.
+  {
+    id: "google_calendar",
+    label: "Google Calendar",
+    capability: "calendar.access",
+    categoryEs: "Calendario",
+    categoryEn: "Calendar",
+    connectable: false,
+    requiredCredentials: ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"],
+  },
+  {
+    id: "microsoft_calendar",
+    label: "Microsoft Outlook Calendar",
+    capability: "calendar.access",
+    categoryEs: "Calendario",
+    categoryEn: "Calendar",
+    connectable: false,
+    requiredCredentials: ["MICROSOFT_OAUTH_CLIENT_ID", "MICROSOFT_OAUTH_CLIENT_SECRET"],
+  },
+  {
+    id: "google_drive",
+    label: "Google Drive",
+    capability: "workspace.documents",
+    categoryEs: "Documentos",
+    categoryEn: "Documents",
+    connectable: false,
+    requiredCredentials: ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"],
+  },
+  {
+    id: "onedrive",
+    label: "OneDrive",
+    capability: "workspace.documents",
+    categoryEs: "Documentos",
+    categoryEn: "Documents",
+    connectable: false,
+    requiredCredentials: ["MICROSOFT_OAUTH_CLIENT_ID", "MICROSOFT_OAUTH_CLIENT_SECRET"],
+  },
+  {
+    id: "dropbox",
+    label: "Dropbox",
+    capability: "workspace.documents",
+    categoryEs: "Documentos",
+    categoryEn: "Documents",
+    connectable: false,
+    requiredCredentials: ["DROPBOX_OAUTH_CLIENT_ID", "DROPBOX_OAUTH_CLIENT_SECRET"],
+  },
+  {
+    id: "brevo",
+    label: "Brevo",
+    capability: "email.send",
+    categoryEs: "Correo",
+    categoryEn: "Email",
+    connectable: false,
+    requiredCredentials: ["BREVO_API_KEY"],
+  },
+  {
+    id: "microsoft_teams",
+    label: "Microsoft Teams",
+    capability: "messaging.direct",
+    categoryEs: "Mensajería",
+    categoryEn: "Messaging",
+    connectable: false,
+    requiredCredentials: ["MICROSOFT_OAUTH_CLIENT_ID", "MICROSOFT_OAUTH_CLIENT_SECRET"],
+  },
 ];
 
 /** Free-text / synonym resolution: the CEO's words → the internal connector. */
@@ -199,12 +269,24 @@ const ALIASES: Readonly<Record<string, string>> = {
   "google workspace": "google_workspace",
   gsuite: "google_workspace",
   "g suite": "google_workspace",
+  "google calendar": "google_calendar",
+  calendar: "google_calendar",
+  "google drive": "google_drive",
+  drive: "google_drive",
   outlook: "outlook",
   hotmail: "outlook",
   "microsoft 365": "microsoft_365",
   microsoft: "microsoft_365",
   office: "microsoft_365",
   "office 365": "microsoft_365",
+  "microsoft outlook calendar": "microsoft_calendar",
+  "outlook calendar": "microsoft_calendar",
+  onedrive: "onedrive",
+  "one drive": "onedrive",
+  dropbox: "dropbox",
+  brevo: "brevo",
+  teams: "microsoft_teams",
+  "microsoft teams": "microsoft_teams",
   whatsapp: "whatsapp",
   telegram: "telegram",
   hubspot: "hubspot",
@@ -250,6 +332,34 @@ export interface ConnectionState {
   /** The real provider authorization URL, when the handshake can start. */
   authorizationUrl?: string;
   connectedAt?: string;
+  /** Authoritative lifecycle (Phase P-B). When absent, status is the truth. */
+  lifecycle?: ToolLifecycleStatus;
+  /** Where configuration originates (e.g. "env:mautic"). Never a secret. */
+  configSource?: string;
+  /** When the connector was last successfully verified. */
+  verifiedAt?: string;
+}
+
+/** Builds a ConnectionState carrying the authoritative lifecycle. */
+export function buildConnectionStateWithLifecycle(
+  tool: ToolDescriptor,
+  locale: SupportedLocale,
+  lifecycle: ToolLifecycleStatus,
+  extra?: { configSource?: string; verifiedAt?: string },
+): ConnectionState {
+  const state = buildConnectionState(tool, locale);
+  state.lifecycle = lifecycle;
+  state.status = lifecycleToConnectionStatus(lifecycle);
+  if (extra?.configSource) state.configSource = extra.configSource;
+  if (extra?.verifiedAt) state.verifiedAt = extra.verifiedAt;
+  if (lifecycle === "degraded" || lifecycle === "unavailable") {
+    state.blockedReason = t(
+      locale,
+      `Ahora mismo ${tool.label} no está operativo.`,
+      `${tool.label} is not operational right now.`,
+    );
+  }
+  return state;
 }
 
 export function buildConnectionState(

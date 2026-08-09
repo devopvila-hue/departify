@@ -10,6 +10,7 @@ import {
   dnaQuestionId,
   isReadyForMarketing,
   selectNextQuestion,
+  TOOL_DISCOVERY_QUESTION_IDS,
 } from "../src/customer-zero/progressive-discovery.js";
 
 function report(
@@ -76,10 +77,11 @@ describe("progressive discovery", () => {
     expect(question?.question).toBe("Who is your ideal customer?");
   });
 
-  it("never asks optional questions", () => {
+  it("never asks optional questions once tool discovery is complete", () => {
     const state = createConversationState();
-    state.answered.add("ops:tools");
-    state.answered.add("ops:crm");
+    for (const id of TOOL_DISCOVERY_QUESTION_IDS) {
+      state.answered.add(id);
+    }
     const question = selectNextQuestion(
       report([{ category: "processes", importance: "low" }]),
       state,
@@ -102,16 +104,17 @@ describe("progressive discovery", () => {
     expect(question?.id).toBe("dna:value_proposition");
   });
 
-  it("asks the tools question with visual options and an 'Otra' escape", () => {
+  it("asks the CRM tool question first with Mautic and an 'Otra' escape", () => {
     const state = createConversationState();
     const question = selectNextQuestion(
       report([{ category: "tone", importance: "high" }]),
       state,
       "es",
     );
-    expect(question?.id).toBe("ops:tools");
-    expect(question?.component).toBe("multi_choice");
-    expect(question?.options).toContain("Gmail");
+    expect(question?.id).toBe("ops:crm");
+    expect(question?.component).toBe("choice");
+    expect(question?.options).toContain("Mautic");
+    expect(question?.options).toContain("HubSpot");
     expect(question?.options).toContain("Otra");
   });
 
@@ -129,6 +132,38 @@ describe("progressive discovery", () => {
     const question = selectNextQuestion(report([]), state, "es");
     expect(question?.id).toBe("ops:crm");
     expect(question?.options?.[0]).toBe("No utilizo CRM");
+  });
+
+  it("I. covers CRM, email, calendar, documents, marketing and team in order", () => {
+    const state = createConversationState();
+    const expected = [
+      "ops:crm",
+      "tools:email",
+      "tools:calendar",
+      "tools:documents",
+      "tools:marketing",
+      "tools:team",
+    ];
+    for (const id of expected) {
+      const question = selectNextQuestion(report([]), state, "es", []);
+      expect(question?.id).toBe(id);
+      state.answered.add(id);
+    }
+    expect(selectNextQuestion(report([]), state, "es")).toBeNull();
+  });
+
+  it("J. Mautic is offered for CRM and marketing, and skipped once declared", () => {
+    const crm = selectNextQuestion(report([]), createConversationState(), "es");
+    expect(crm?.options).toContain("Mautic");
+    const marketingState = createConversationState();
+    marketingState.answered.add("ops:crm");
+    marketingState.answered.add("tools:email");
+    marketingState.answered.add("tools:calendar");
+    marketingState.answered.add("tools:documents");
+    const marketing = selectNextQuestion(report([]), marketingState, "es", ["mautic"]);
+    expect(marketing?.id).toBe("tools:marketing");
+    expect(marketing?.options).not.toContain("Mautic");
+    expect(marketing?.options).toContain("Mailchimp");
   });
 
   it("is ready for Marketing when nothing blocking is left", () => {
