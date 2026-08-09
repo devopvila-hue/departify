@@ -234,6 +234,70 @@ export interface CommandCenterMessageResult {
 }
 
 /* -------------------------------------------------------------------------
+ * Marketing department API (Sprint ENGINE 03) — business language only.
+ * -------------------------------------------------------------------------*/
+
+export interface MarketingDepartmentStatus {
+  id: string;
+  name: string;
+  head: { departmentId: string; department: string; name: string; role: string; initials: string };
+  status: string;
+  employees: {
+    id: string;
+    label: string;
+    role: string;
+    status: string;
+    currentWork?: string;
+    capabilities: string[];
+  }[];
+  employeesWorkingNow: number;
+  tools: { toolId: string; label: string; capability: string; status: string; note?: string }[];
+  toolsConnected: number;
+  activeObjective: {
+    id: string;
+    title: string;
+    description: string;
+    desiredOutcome: string;
+    constraints: string[];
+    status: string;
+    progress: number;
+    createdAt: string;
+    owner: string;
+    plan?: string;
+  } | null;
+  pendingApprovals: {
+    id: string;
+    from: string;
+    title: string;
+    detail: string;
+    cost?: string;
+    status: string;
+    createdAt: string;
+  }[];
+  recentActivity: {
+    id: string;
+    actor: string;
+    kind: string;
+    message: string;
+    createdAt: string;
+  }[];
+  results: { id: string; title: string; summary: string }[];
+}
+
+export interface MarketingObjective {
+  id: string;
+  title: string;
+  description: string;
+  desiredOutcome: string;
+  constraints: string[];
+  status: string;
+  progress: number;
+  createdAt: string;
+  owner: string;
+  plan?: string;
+}
+
+/* -------------------------------------------------------------------------
  * Auth + tenant (Phase P0-A).
  * -------------------------------------------------------------------------*/
 
@@ -454,4 +518,71 @@ export const api = {
     postJson<{ ok: boolean }>(
       `/api/customer-zero/${org}/conversations/${conversationId}/archive`,
     ),
+  // Marketing department (ENGINE 03) — business language.
+  marketingDepartment: (org: string) =>
+    getJson<MarketingDepartmentStatus>(`/api/departments/marketing/${org}`),
+  marketingObjectives: (org: string) =>
+    getJson<{ objectives: MarketingObjective[] }>(
+      `/api/departments/marketing/${org}/objectives`,
+    ),
+  createMarketingObjective: (
+    org: string,
+    payload: {
+      title: string;
+      description: string;
+      desiredOutcome: string;
+      constraints?: string[];
+      locale?: string;
+    },
+  ) =>
+    postJson<{ objective: MarketingObjective }>(
+      `/api/departments/marketing/${org}/objectives`,
+      payload,
+    ),
+  marketingMessage: (org: string, message: string, locale?: string) =>
+    postJson<{
+      reply: string;
+      activity?: unknown[];
+      approvals?: unknown[];
+      objective?: MarketingObjective | null;
+    }>(`/api/departments/marketing/${org}/message`, { message, ...(locale ? { locale } : {}) }),
+  marketingActivity: (org: string) =>
+    getJson<{ activity: { id: string; actor: string; kind: string; message: string; createdAt: string }[] }>(
+      `/api/departments/marketing/${org}/activity`,
+    ),
+  marketingApprovals: (org: string) =>
+    getJson<{
+      approvals: {
+        id: string;
+        from: string;
+        title: string;
+        detail: string;
+        cost?: string;
+        status: string;
+        createdAt: string;
+      }[];
+    }>(`/api/departments/marketing/${org}/approvals`),
+  decideMarketingApproval: (org: string, approvalId: string, action: "approve" | "reject") =>
+    postJson<{
+      approval: {
+        id: string;
+        title: string;
+        status: string;
+        decidedAt?: string;
+      };
+    }>(`/api/departments/marketing/${org}/approvals/${approvalId}`, { action }),
+  marketingEmployees: (org: string) =>
+    getJson<{
+      employees: {
+        id: string;
+        label: string;
+        role: string;
+        status: string;
+        currentWork?: string;
+      }[];
+    }>(`/api/departments/marketing/${org}/employees`),
+  marketingTools: (org: string) =>
+    getJson<{
+      tools: { toolId: string; label: string; capability: string; status: string; note?: string }[];
+    }>(`/api/departments/marketing/${org}/tools`),
 };

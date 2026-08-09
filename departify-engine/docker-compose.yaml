@@ -1,0 +1,91 @@
+name: departify-engine
+
+# Local dev only. For Railway / production use the Dockerfile + railway.json.
+#
+# The container binds the gateway to LAN on a random-ish port so the host
+# can reach it for tests. Authentication is enforced via OPENCLAW_GATEWAY_TOKEN.
+
+services:
+  openclaw-gateway:
+    container_name: departify-engine
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        OPENCLAW_IMAGE: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:2026.7.1-2-slim}
+        OPENCLAW_VERSION: ${OPENCLAW_VERSION:-v2026.7.1-2}
+        ENGINE_VERSION: ${ENGINE_VERSION:-engine-01-local}
+    image: departify-engine:local
+    restart: unless-stopped
+    init: true
+    # Official image runs as non-root `node` (uid 1000). The named volumes
+    # inherit /home/node/.openclaw ownership from the image, so the entrypoint
+    # does not need root.
+    environment:
+      OPENCLAW_VERSION: ${OPENCLAW_VERSION:-v2026.7.1-2}
+      OPENCLAW_IMAGE: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:2026.7.1-2-slim}
+      # Pin container-side paths so the gateway finds the rendered config
+      # (matches the official image's docker-compose pattern).
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_AUTH_PROFILE_SECRET_DIR: /home/node/.config/openclaw
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      TERM: xterm-256color
+      TZ: ${OPENCLAW_TZ:-UTC}
+      OPENCLAW_GATEWAY_BIND: ${OPENCLAW_GATEWAY_BIND:-lan}
+      OPENCLAW_GATEWAY_PORT: ${OPENCLAW_GATEWAY_PORT:-18789}
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:?OPENCLAW_GATEWAY_TOKEN required}
+      # ── Default provider: Google Vertex (ADC). Ollama is the local fallback.
+      OPENCLAW_MODEL_PROVIDER: ${OPENCLAW_MODEL_PROVIDER:-google-vertex}
+      OPENCLAW_MODEL_NAME: ${OPENCLAW_MODEL_NAME:-gemini-2.5-flash}
+      OPENCLAW_FALLBACK_PROVIDER: ${OPENCLAW_FALLBACK_PROVIDER:-ollama}
+      OPENCLAW_FALLBACK_MODEL: ${OPENCLAW_FALLBACK_MODEL:-qwen3:0.6b}
+      OPENCLAW_FALLBACK_BASE_URL: ${OPENCLAW_FALLBACK_BASE_URL:-http://host.docker.internal:11434/v1}
+      OPENCLAW_FALLBACK_API_KEY: ${OPENCLAW_FALLBACK_API_KEY:-ollama}
+      # ── Google Vertex ADC (local dev) ──
+      # ADC file is mounted read-only from the host; never baked into the image.
+      GOOGLE_APPLICATION_CREDENTIALS: /home/node/.config/gcloud/application_default_credentials.json
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-radar-503418}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-us-central1}
+      # Ollama local provider (kept for fallback, not the default)
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-ollama}
+      OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-1}
+      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-1}
+      OPENCLAW_DM_SCOPE: ${OPENCLAW_DM_SCOPE:-main}
+      OPENCLAW_SESSION_RESET_MODE: ${OPENCLAW_SESSION_RESET_MODE:-none}
+      OPENCLAW_LOG_LEVEL: ${OPENCLAW_LOG_LEVEL:-info}
+      OPENCLAW_MAX_TOKENS: ${OPENCLAW_MAX_TOKENS:-2048}
+      OPENCLAW_TEMPERATURE: ${OPENCLAW_TEMPERATURE:-0.2}
+      OPENCLAW_SANDBOX: ${OPENCLAW_SANDBOX:-0}
+      OPENCLAW_EXEC_MODE: ${OPENCLAW_EXEC_MODE:-test}
+      OPENCLAW_EXPOSE_PUBLIC: ${OPENCLAW_EXPOSE_PUBLIC:-0}
+      OPENCLAW_TZ: ${OPENCLAW_TZ:-UTC}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:${OPENCLAW_GATEWAY_PORT:-18789}"
+    volumes:
+      - engine-state:/home/node/.openclaw
+      - engine-auth:/home/node/.config/openclaw
+      # Local dev only: host Google ADC file mounted read-only so the Gateway
+      # can authenticate to Vertex. On Railway this is replaced by a
+      # workload identity / service-account credential (documented, not wired).
+      - ${GOOGLE_ADC_FILE:-${HOME}/.config/gcloud/application_default_credentials.json}:/home/node/.config/gcloud/application_default_credentials.json:ro
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 45s
+
+volumes:
+  engine-state:
+  engine-auth:

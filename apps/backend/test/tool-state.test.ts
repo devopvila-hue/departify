@@ -84,6 +84,14 @@ describe("A. selection never means connected", () => {
     expect(declared.status).toBe("needs_connection");
   });
 
+  it("declares a tool without an implemented connector as SELECTED, never a fake needs_connection", () => {
+    const declared = buildDeclaredToolState("org", "gmail", "Gmail", "email.send");
+    expect(declared.declared).toBe(true);
+    expect(declared.status).toBe("selected");
+    expect(declared.status).not.toBe("needs_connection");
+    expect(declared.status).not.toBe("connected");
+  });
+
   it("with bootstrap config present it becomes CONFIGURED, still not connected", () => {
     withMauticEnv(() => {
       const declared = buildDeclaredToolState("org", "mautic", "Mautic", "crm.contacts");
@@ -135,7 +143,9 @@ describe("C. successful verification ⇒ CONNECTED + verifiedAt persisted", () =
 
 describe("D. failed verification never produces CONNECTED", () => {
   it("maps failures to unavailable/degraded, never connected", () => {
-    expect(refineDeclaredStatus(true, null)).toBe("needs_connection");
+    expect(refineDeclaredStatus(true, null, false)).toBe("selected");
+    expect(refineDeclaredStatus(true, null, true)).toBe("needs_connection");
+    expect(refineDeclaredStatus(true, "env:mautic", true)).toBe("configured");
     expect(lifecycleToConnectionStatus("unavailable")).toBe("blocked");
     expect(lifecycleToConnectionStatus("degraded")).toBe("blocked");
     expect(lifecycleToConnectionStatus("configured")).toBe("not_connected");
@@ -199,7 +209,7 @@ describe("G. operational context distinguishes lifecycle states", () => {
     );
     session.state.connections.set(
       "gmail",
-      buildConnectionStateWithLifecycle(GMAIL_TOOL, "es", "needs_connection"),
+      buildConnectionStateWithLifecycle(GMAIL_TOOL, "es", "selected"),
     );
     session.state.connections.set(
       "hubspot",

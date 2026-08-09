@@ -70,6 +70,37 @@ export const envSchema = z.object({
   OTEL_EXPORTER_OTLP_ENDPOINT: optionalUrl,
   METRICS_ENABLED: z.coerce.boolean().default(false),
   TRACING_ENABLED: z.coerce.boolean().default(false),
+
+  // ── Engine Adapter (Sprint ENGINE 02) ──
+  ENGINE_PROVIDER: z.enum(["openclaw"]).default("openclaw"),
+  // Production runtime policy: "strict" fails clearly when the engine is
+  // unavailable (no silent legacy fallback); "legacy-fallback" keeps the old
+  // path for dev/test only.
+  ENGINE_RUNTIME_POLICY: z
+    .enum(["strict", "legacy-fallback"])
+    .default("strict"),
+  OPENCLAW_GATEWAY_URL: z.string().optional().or(z.literal("")),
+  OPENCLAW_GATEWAY_TOKEN: optionalSecret,
+  OPENCLAW_REQUEST_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(120_000),
+  OPENCLAW_CONNECT_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(15_000),
+  OPENCLAW_RETRY_LIMIT: z.coerce.number().int().min(0).default(2),
+  OPENCLAW_MAX_RETRY_DELAY_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(8_000),
+  /** Optional path to a persisted Ed25519 PEM key for gateway device auth. */
+  OPENCLAW_DEVICE_KEY_PATH: z.string().optional().or(z.literal("")),
+  /** Optional model override sent with every message (provider/model). */
+  OPENCLAW_MODEL: z.string().optional().or(z.literal("")),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

@@ -1,7 +1,10 @@
 import type { AuthService } from "@departify/auth";
+import type { EngineAdapter } from "@departify/engine-adapter";
+import type { EngineRuntimePolicy } from "@departify/config";
 import type { OrganizationStore } from "../auth/tenant-contracts.js";
 import type { ToolStateStore } from "../customer-zero/tool-state.js";
 import type { ConversationStore } from "../customer-zero/conversation-store.js";
+import type { MarketingService } from "../customer-zero/marketing-service.js";
 
 /**
  * Server dependencies — Phase P0-A / P-B.
@@ -20,4 +23,10 @@ export interface ServerDeps {
   conversations?: ConversationStore;
   /** Public base URL of the portal, used to build OAuth redirect URIs. */
   publicBaseUrl?: string;
+  /** Provider-independent engine adapter (Sprint ENGINE 02). */
+  engine?: EngineAdapter;
+  /** Departify-owned Marketing department service (Sprint ENGINE 03). */
+  marketing?: MarketingService;
+  /** Production engine runtime policy (DEPLOY 01). */
+  engineRuntimePolicy?: EngineRuntimePolicy;
 }

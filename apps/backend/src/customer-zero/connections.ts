@@ -19,6 +19,8 @@ import {
   type ToolLifecycleStatus,
 } from "./tool-state.js";
 
+export { hasWorkingConnector } from "./tool-state.js";
+
 export type ConnectionStatus =
   | "not_connected"
   | "connecting"
@@ -91,14 +93,6 @@ export function domainLabel(
     case "team":
       return es ? "Equipo" : "Team";
   }
-}
-
-/**
- * Whether Departify has a REAL, working connector (verification handshake)
- * for the tool. Today only Mautic. Catalog presence alone is NOT a connector.
- */
-export function hasWorkingConnector(toolId: string): boolean {
-  return toolId === "mautic";
 }
 
 export interface ToolDescriptor {

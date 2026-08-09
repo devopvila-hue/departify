@@ -1,3 +1,4 @@
+import { EngineError } from "@departify/engine-adapter";
 import type {
   FastifyError,
   FastifyInstance,
@@ -12,6 +13,28 @@ interface ErrorResponse {
     requestId: string;
     statusCode: number;
   };
+}
+
+/** Maps a provider-independent EngineError to an HTTP status code. */
+export function engineErrorStatusCode(error: EngineError): number {
+  switch (error.code) {
+    case "ENGINE_AUTHENTICATION":
+      return 503;
+    case "ENGINE_RATE_LIMIT":
+      return 429;
+    case "ENGINE_TIMEOUT":
+      return 504;
+    case "ENGINE_SESSION_NOT_FOUND":
+      return 404;
+    case "ENGINE_UNAVAILABLE":
+      return 503;
+    case "ENGINE_INVALID_REQUEST":
+      return 400;
+    case "ENGINE_EXECUTION":
+    case "ENGINE_PROTOCOL":
+    default:
+      return 502;
+  }
 }
 
 export function registerErrorHandling(server: FastifyInstance): void {
@@ -33,6 +56,30 @@ function handleError(
   request: FastifyRequest,
   reply: FastifyReply,
 ): void {
+  // EngineErrors are already provider-independent; map them to clean responses
+  // so no raw OpenClaw/Vertex error ever reaches the portal.
+  if (error instanceof EngineError) {
+    const statusCode = engineErrorStatusCode(error);
+    request.log.error(
+      {
+        engineErrorCode: error.code,
+        operation: error.operation,
+        provider: error.provider,
+        statusCode,
+      },
+      "Engine request failed",
+    );
+    reply.status(statusCode).send({
+      error: {
+        code: error.code,
+        message: error.message,
+        requestId: request.id,
+        statusCode,
+      },
+    } satisfies ErrorResponse);
+    return;
+  }
+
   const statusCode = normalizeStatusCode(error.statusCode);
   const code = statusCode >= 500 ? "INTERNAL_SERVER_ERROR" : "REQUEST_ERROR";
   const message = statusCode >= 500 ? "Internal server error" : error.message;

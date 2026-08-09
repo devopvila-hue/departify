@@ -33,6 +33,7 @@ type IconEntry = { to: string; label: string; icon: (props: IconProps) => ReactE
 type IconEntryWithBadge = IconEntry & { badgeKey?: "approvals" };
 
 const PRIMARY: IconEntry[] = [
+  { to: "/inicio", label: "Tu empresa", icon: CompanyIcon },
   { to: "/chat", label: "Chat", icon: ChatIcon },
   { to: "/tareas", label: "Tareas", icon: TasksIcon },
 ];

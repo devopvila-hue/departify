@@ -124,11 +124,16 @@ describe("P-B production fix — connections catalog", () => {
     expect(declared.statusCode).toBe(200);
     const durable = await toolState.get(org, "gmail");
     expect(durable?.declared).toBe(true);
-    expect(durable?.status).toBe("needs_connection");
+    // Gmail has no implemented connector: it is SELECTED, never a fake
+    // "needs_connection" with no mechanism to complete it.
+    expect(durable?.status).toBe("selected");
     expect(durable?.status).not.toBe("connected");
 
     const views = await connections(org);
-    expect(views.find((view) => view.toolId === "gmail")?.state).toBe("needs_connection");
+    const gmail = views.find((view) => view.toolId === "gmail");
+    expect(gmail?.state).toBe("selected");
+    expect(gmail?.action).toBeNull();
+    expect(gmail?.humanLabel).toBe("Seleccionada");
   });
 
   it("E. another organization does not inherit the selection", async () => {
@@ -155,7 +160,7 @@ describe("P-B production fix — connections catalog", () => {
     // durable store (same instance in deps) survives.
     resetCustomerZeroSessionsForTest();
     const views = await connections(org);
-    expect(views.find((view) => view.toolId === "gmail")?.state).toBe("needs_connection");
+    expect(views.find((view) => view.toolId === "gmail")?.state).toBe("selected");
   });
 
   it("G. environment configuration alone never makes a catalog entry CONNECTED", async () => {

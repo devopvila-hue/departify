@@ -1,0 +1,17 @@
+node_modules
+.git
+.github
+.gitignore
+.env
+.env.local
+.env.production
+.env.*.local
+*.md.bak
+*.log
+.DS_Store
+tests
+docs
+docker-compose.yaml
+docker-compose*.yml
+.dockerignore
+README.md

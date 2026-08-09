@@ -138,42 +138,48 @@ function ToolCard(props: {
             .join(", ")}`}
       </p>
 
-      {props.connection.action && (
+      {connection.action && (
         <button
           type="button"
           className="dfy-button dfy-button--small"
           disabled={props.busy}
           onClick={props.onAction}
         >
-          {props.busy ? "Comprobando…" : actionLabel(props.connection)}
+          {props.busy ? "Comprobando…" : actionLabel(connection)}
         </button>
       )}
 
-      {props.connection.action === null && connection.state !== "available" && (
-        <p className="dfy-note">
-          {connection.state === "needs_connection" ||
-          connection.state === "selected"
-            ? "Seleccionada. La conexión estará disponible pronto."
-            : "Todavía no podemos operar esta herramienta."}
-        </p>
-      )}
-      {connection.state === "available" && (
-        <p className="dfy-note">
-          Disponible para añadir a la empresa. Al seleccionarla la guardamos y
-          podremos preparar el acceso cuando esté listo.
-        </p>
-      )}
-      {connection.state === "connected" && connection.verifiedAt && (
-        <p className="dfy-note">Verificado {fecha(connection.verifiedAt)}.</p>
-      )}
+      {noteFor(connection)}
     </Card>
   );
+}
+
+function noteFor(connection: ToolConnectionView): string {
+  switch (connection.state) {
+    case "connected":
+      return connection.verifiedAt
+        ? `Conexión verificada. Verificado ${fecha(connection.verifiedAt)}.`
+        : "Conexión verificada.";
+    case "configured":
+      return "Credenciales presentes. Falta verificar la conexión.";
+    case "selected":
+      return "Conexión con Departify próximamente.";
+    case "needs_connection":
+      return "Necesita conexión para que Departify pueda operarla.";
+    case "degraded":
+      return "Hay un problema de conexión. Puedes reintentarlo.";
+    case "unavailable":
+      return "No disponible ahora mismo.";
+    case "available":
+    default:
+      return "Disponible para añadir a la empresa. Al seleccionarla la guardamos y podremos preparar el acceso.";
+  }
 }
 
 function actionLabel(connection: ToolConnectionView): string {
   switch (connection.action) {
     case "prepare":
-      return "Preparar conexión";
+      return "La utilizo";
     case "verify":
       return "Verificar conexión";
     case "retry":

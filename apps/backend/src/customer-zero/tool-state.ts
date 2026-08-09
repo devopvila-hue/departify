@@ -75,12 +75,28 @@ export function hasEnv(variableNames: readonly string[]): boolean {
   );
 }
 
-/** Refines a declared tool into its immediate lifecycle status. */
+/**
+ * Whether Departify has a REAL, working connector (verification handshake)
+ * for the tool. Today only Mautic. A catalog entry is NOT a connector.
+ */
+export function hasWorkingConnector(toolId: string): boolean {
+  return toolId === "mautic";
+}
+
+/**
+ * Refines a declared tool into its immediate lifecycle status.
+ *
+ * SELECTED         declared, but Departify has no connector mechanism yet.
+ * CONFIGURED       working connector + credentials present (unverified).
+ * NEEDS_CONNECTION working connector + credentials missing (CEO can act).
+ */
 export function refineDeclaredStatus(
   declared: boolean,
   configSource: string | null,
+  hasConnector: boolean,
 ): ToolLifecycleStatus {
   if (!declared) return "unavailable";
+  if (!hasConnector) return "selected";
   if (configSource) return "configured";
   return "needs_connection";
 }
@@ -113,8 +129,9 @@ export function humanLifecycleLabel(
       return es ? "Conectado" : "Connected";
     case "configured":
       return es ? "Configurado · Verificar conexión" : "Configured · Verify connection";
-    case "needs_connection":
     case "selected":
+      return es ? "Seleccionada" : "Selected";
+    case "needs_connection":
       return es ? "Necesita conexión" : "Needs connection";
     case "degraded":
       return es ? "Problema de conexión" : "Connection problem";
@@ -136,7 +153,7 @@ export function buildDeclaredToolState(
     label,
     ...(capability ? { capability } : {}),
     declared: true,
-    status: refineDeclaredStatus(true, configSource),
+    status: refineDeclaredStatus(true, configSource, hasWorkingConnector(toolId)),
     ...(configSource ? { configSource } : {}),
   };
 }

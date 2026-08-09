@@ -400,6 +400,16 @@ export function getOrCreateCustomerZeroSession(
   return session;
 }
 
+/**
+ * Returns the DiscoveryReportRepository of an existing Customer Zero session,
+ * or null when the session has not been created yet.
+ */
+export function getCustomerZeroReportRepository(
+  organizationId: string,
+): DiscoveryReportRepository | null {
+  return sessions.get(organizationId)?.reportRepository ?? null;
+}
+
 export function getCustomerZeroSession(
   organizationId: string,
 ): CustomerZeroSession | null {

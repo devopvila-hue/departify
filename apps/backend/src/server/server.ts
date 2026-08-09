@@ -12,6 +12,8 @@ import { registerCustomerZeroRoutes } from "./routes/customer-zero.js";
 import { registerCustomerZeroV2Routes } from "./routes/customer-zero-v2.js";
 import { registerConversationRoutes } from "./routes/conversations.js";
 import { registerAuthRoutes } from "./routes/auth.js";
+import { registerInternalEngineRoutes } from "./routes/internal-engine.js";
+import { registerMarketingRoutes } from "./routes/marketing-routes.js";
 import type { ServerDeps } from "./deps.js";
 
 export async function buildServer(
@@ -55,6 +57,8 @@ export async function buildServer(
   await registerCustomerZeroV2Routes(server, deps);
   await registerConversationRoutes(server, deps);
   await registerAuthRoutes(server, deps.organizations);
+  await registerInternalEngineRoutes(server, deps);
+  await registerMarketingRoutes(server, deps);
 
   return server;
 }

@@ -58,6 +58,7 @@ import {
   type ToolDescriptor,
   type ToolDomain,
 } from "../../customer-zero/connections.js";
+import type { MarketingService } from "../../customer-zero/marketing-service.js";
 import {
   isReadyForMarketing,
   noCrmOptionLabel,
@@ -861,6 +862,8 @@ export async function registerCustomerZeroV2Routes(
         session,
         body.message,
         body.conversationId,
+        deps.marketing,
+        deps.engineRuntimePolicy,
       );
       return reply.code(200).send(result);
     },
@@ -1225,10 +1228,14 @@ export interface CeoMessageResult {
  * an ever-growing transcript. Company memory (department memories, DNA) is
  * intentionally separate from conversation history.
  */
+type MarketingServiceType = MarketingService;
+
 export async function processCeoMessage(
   session: CustomerZeroSession,
   message: string,
   conversationId?: string,
+  marketing?: MarketingServiceType,
+  engineRuntimePolicy?: "strict" | "legacy-fallback",
 ): Promise<CeoMessageResult> {
   const conversation = await ensureConversation(session, message, conversationId);
   const organizationId = session.organizationId;
@@ -1243,37 +1250,68 @@ export async function processCeoMessage(
   let marketingTurn: { role: "user" | "assistant"; content: string } | null = null;
 
   if (routed.decision.intent === "delegate_marketing") {
-    try {
-      const recentMessages = await session.conversations.listMessages(
-        organizationId,
-        conversation.id,
-        20,
-      );
-      const outcome = await session.port.executeAction({
-        actionId: `act_cc_${shortId()}`,
-        agentId: "agent_marketing_director",
-        organizationId,
-        toolId: "marketing.chat",
-        args: {
+    // ENGINE 03: when the MarketingService is wired (EngineAdapter available),
+    // Elvira's reply comes from the engine boundary.
+    //
+    // DEPLOY 01 (strict): when policy is "strict" and the engine path is
+    // wired, an engine failure must FAIL CLEARLY — never silently fall back to
+    // the legacy runtime. The CEO sees a clean, business-language unavailable
+    // message and observability records the failure.
+    if (marketing) {
+      try {
+        const outcome = await marketing.talkToElvira({
           organizationId,
           message,
-          history: boundedConversationHistory(recentMessages),
-          extraContext: buildMemoryContextForChat(session),
-        },
-      });
-      if (outcome.status === "completed") {
-        const output = outcome.output as { reply?: string } | undefined;
-        const marketingReply = output?.reply;
-        if (marketingReply && marketingReply.trim().length > 0) {
-          assistantReply = marketingReply;
-          marketingTurn = {
-            role: "assistant",
-            content: marketingReply,
-          };
+          locale: session.state.locale,
+        });
+        if (outcome.reply && outcome.reply.trim().length > 0) {
+          assistantReply = outcome.reply;
+          marketingTurn = { role: "assistant", content: outcome.reply };
         }
+      } catch {
+        if (engineRuntimePolicy === "strict") {
+          // No legacy fallback: report Marketing as temporarily unavailable.
+          const isEs = session.state.locale !== "en";
+          assistantReply = isEs
+            ? "Marketing no está disponible temporalmente. Inténtalo de nuevo en unos minutos."
+            : "Marketing is temporarily unavailable. Please try again in a few minutes.";
+          marketingTurn = { role: "assistant", content: assistantReply };
+        }
+        // In legacy-fallback mode (dev/test), keep the routing reply.
       }
-    } catch {
-      // Marketing Director failed: keep the routing reply.
+    } else {
+      try {
+        const recentMessages = await session.conversations.listMessages(
+          organizationId,
+          conversation.id,
+          20,
+        );
+        const outcome = await session.port.executeAction({
+          actionId: `act_cc_${shortId()}`,
+          agentId: "agent_marketing_director",
+          organizationId,
+          toolId: "marketing.chat",
+          args: {
+            organizationId,
+            message,
+            history: boundedConversationHistory(recentMessages),
+            extraContext: buildMemoryContextForChat(session),
+          },
+        });
+        if (outcome.status === "completed") {
+          const output = outcome.output as { reply?: string } | undefined;
+          const marketingReply = output?.reply;
+          if (marketingReply && marketingReply.trim().length > 0) {
+            assistantReply = marketingReply;
+            marketingTurn = {
+              role: "assistant",
+              content: marketingReply,
+            };
+          }
+        }
+      } catch {
+        // Marketing Director failed: keep the routing reply.
+      }
     }
   }
 
@@ -1675,9 +1713,17 @@ function buildCatalogConnectionViews(
         action: "prepare",
       };
     }
-    const lifecycle: ToolLifecycleStatus =
+    const rawLifecycle: ToolLifecycleStatus =
       connection.lifecycle ??
       (connection.status === "connected" ? "connected" : "needs_connection");
+    // Semantic consistency: a tool with no implemented connector can never be
+    // "needs_connection" (the CEO has no mechanism to connect it). It is
+    // SELECTED. CONNECTED/CONFIGURED are kept as-is defensively.
+    const lifecycle: ToolLifecycleStatus = hasWorkingConnector(tool.id)
+      ? rawLifecycle
+      : rawLifecycle === "connected" || rawLifecycle === "configured"
+        ? rawLifecycle
+        : "selected";
     return {
       toolId: tool.id,
       label: tool.label,

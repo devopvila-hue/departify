@@ -2114,3 +2114,225 @@ select {
   color: var(--dfy-color-muted);
   margin: 4px 0 0;
 }
+
+/* =========================================================================
+ * Control Plane — TU EMPRESA (Sprint ENGINE 04)
+ * ========================================================================= */
+
+.dfy-company-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin: 4px 0 28px;
+}
+
+.dfy-company-summary__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 16px;
+  background: var(--dfy-color-surface-raised);
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-lg);
+}
+
+.dfy-company-summary__stat strong {
+  font-family: var(--dfy-font-display);
+  font-size: 1.8rem;
+  font-weight: 500;
+  color: var(--dfy-color-text);
+}
+
+.dfy-company-summary__stat span {
+  font-size: 0.78rem;
+  color: var(--dfy-color-muted);
+}
+
+/* Org chart */
+.dfy-org {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 32px;
+}
+
+.dfy-org__ceo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 22px;
+  background: var(--dfy-color-surface-raised);
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-xl);
+  min-width: 220px;
+}
+
+.dfy-org__ceo-avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--dfy-color-accent);
+  color: var(--dfy-color-accent-contrast);
+  font-family: var(--dfy-font-display);
+  font-size: 1.2rem;
+  font-weight: 600;
+}
+
+.dfy-org__connector {
+  width: 2px;
+  height: 28px;
+  background: var(--dfy-color-border-strong);
+}
+
+.dfy-org__department {
+  width: 100%;
+  max-width: 560px;
+}
+
+.dfy-department-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dfy-department-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.dfy-department-card__objective {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--dfy-color-muted-strong);
+}
+
+.dfy-department-card__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Status dot */
+.dfy-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-right: 6px;
+  vertical-align: middle;
+  animation: dfy-pulse 2s ease-in-out infinite;
+}
+
+@keyframes dfy-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dfy-status-dot {
+    animation: none;
+  }
+}
+
+/* Digital employee cards */
+.dfy-digital-employee {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--dfy-radius-md);
+  cursor: pointer;
+  transition: background-color 120ms var(--dfy-ease-smooth);
+}
+
+.dfy-digital-employee:hover {
+  background: var(--dfy-color-surface-soft);
+}
+
+.dfy-digital-employee__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dfy-digital-employee__work {
+  flex-basis: 100%;
+  margin: 6px 0 0;
+}
+
+.dfy-tool__label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dfy-approval__title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 6px;
+}
+
+.dfy-approval__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* Marketing department detail (ENGINE 04) */
+.dfy-marketing-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dfy-marketing-head__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.dfy-objective-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dfy-objective-form input,
+.dfy-objective-form textarea {
+  font: inherit;
+  color: var(--dfy-color-text);
+  background: var(--dfy-color-surface);
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-md);
+  padding: 10px 12px;
+}
+
+.dfy-objective-form textarea {
+  resize: vertical;
+}
+
+.dfy-progress {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--dfy-color-surface-soft);
+  overflow: hidden;
+  margin: 12px 0 6px;
+}
+
+.dfy-progress span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--dfy-color-accent);
+  transition: width 300ms var(--dfy-ease-smooth);
+}

@@ -13,3 +13,7 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 .gstack/
+
+# Local dev secrets (engine device keys, ADC, etc.)
+.devkeys/
+.secrets/

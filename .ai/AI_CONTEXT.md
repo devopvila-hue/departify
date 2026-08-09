@@ -71,6 +71,13 @@ The Golden Image installs the platform. It does not create organizations, agents
 
 | Path                             | Purpose                                              |
 | -------------------------------- | ---------------------------------------------------- |
+| departify-engine/                | Internal engine runtime (OpenClaw Gateway, Engine Candidate A, Sprint ENGINE 01) — isolated, Docker/Railway deployable, never a product surface |
+| packages/engine-adapter/         | Provider-independent EngineAdapter boundary (Sprint ENGINE 02): Departify-owned contract + types + errors, factory `createEngineAdapter`, and the encapsulated `OpenClawEngineAdapter`/`OpenClawGatewayClient`. Business code depends only on this package's provider-independent types. |
+| apps/backend/src/customer-zero/marketing-service.ts | MarketingService (Sprint ENGINE 03): the single Departify-owned Marketing department service. Owns objectives/activity/approvals/employees/tools (business-language domain in marketing-domain.ts) and routes ALL of Elvira's cognitive work through the EngineAdapter (OpenClaw → Vertex). Per-(org,department) engine session `marketing:<org>` for real multi-turn memory and company isolation. |
+| apps/backend/src/server/routes/marketing-routes.ts   | Business-language Marketing API: `/api/departments/marketing/:org` (status, objectives, message, activity, approvals, employees, tools). No OpenClaw/agent terminology. |
+| apps/portal/src/routes/ControlPlaneRoute.tsx         | TU EMPRESA Control Plane (Sprint ENGINE 04): org chart CEO → department cards, company summary, employees, tools, approvals, activity, results. |
+| apps/portal/src/routes/MarketingRoute.tsx            | Marketing department detail (ENGINE 04): Elvira header + status, objective/progress, employees, tools, approvals, activity, results, integrated Elvira chat. |
+| apps/portal/src/routes/DecisionsRoute.tsx            | Approvals inbox (Aprobaciones): legacy decisions + ENGINE 03 MarketingService approvals. |
 | apps/backend/                    | Independent Fastify backend runtime                  |
 | apps/portal/                     | Independent Vite portal runtime                      |
 | packages/agent-domain/           | Canonical provider-independent Agent domain          |

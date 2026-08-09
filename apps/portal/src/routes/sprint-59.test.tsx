@@ -159,8 +159,27 @@ describe("Sprint 59 — Conversational Operating System", () => {
     expect(chatLink.getAttribute("href")).toBe("/chat");
   });
 
-  it("3. The Marketing route has no primary chat anymore", async () => {
+  it("3. The Marketing route is a department workspace with an integrated Elvira chat", async () => {
     mockFetch((url) => {
+      if (url.includes("/api/departments/marketing/org_moon")) {
+        return {
+          id: "marketing",
+          name: "Marketing",
+          head: { departmentId: "marketing", department: "Marketing", name: "Elvira", role: "Directora de Marketing", initials: "EL" },
+          status: "disponible",
+          employees: [
+            { id: "e1", label: "Especialista en Contenido", role: "Creación de contenido", status: "disponible", capabilities: [] },
+            { id: "e2", label: "Especialista en Adquisición", role: "Adquisición", status: "trabajando", capabilities: [], currentWork: "Preparando propuesta Google Ads" },
+          ],
+          employeesWorkingNow: 1,
+          tools: [{ toolId: "google_ads", label: "Google Ads", capability: "Publicidad", status: "not_connected" }],
+          toolsConnected: 0,
+          activeObjective: null,
+          pendingApprovals: [],
+          recentActivity: [],
+          results: [],
+        };
+      }
       if (url.endsWith("/handoff")) {
         return { message: "Ya tengo suficiente.", goal: "Conseguir 20 clientes", head };
       }
@@ -174,15 +193,7 @@ describe("Sprint 59 — Conversational Operating System", () => {
           marketingWork: {
             goal: "Conseguir 20 clientes",
             summary: "Plan para captar los primeros clientes.",
-            items: [
-              {
-                id: "item_1",
-                title: "Analizar el mercado",
-                description: "Buscar las oportunidades más rápidas.",
-                kind: "analysis",
-                status: "pending",
-              },
-            ],
+            items: [],
           },
         };
       }
@@ -208,10 +219,11 @@ describe("Sprint 59 — Conversational Operating System", () => {
     );
 
     await waitFor(() => expect(screen.getByText("Elvira")).toBeInTheDocument());
+    // ENGINE 04: the department detail integrates the Elvira chat naturally.
     expect(
-      screen.queryByRole("heading", { name: /habla con elvira/i }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /command center/i })).toBeInTheDocument();
+      screen.getByRole("heading", { name: /hablar con elvira/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/especialista en adquisición/i)).toBeInTheDocument();
   });
 
   it("4. The composer routes the message automatically — no department picker", async () => {

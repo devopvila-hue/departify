@@ -18,6 +18,7 @@
     "supabase:status": "pnpm exec supabase status",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "test:engine-adapter": "pnpm --filter @departify/engine-adapter test:integration",
     "format": "prettier --check ."
   },
   "devDependencies": {

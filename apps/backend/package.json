@@ -21,6 +21,7 @@
     "@departify/capability-engine": "workspace:^",
     "@departify/config": "workspace:*",
     "@departify/departments": "workspace:^",
+    "@departify/engine-adapter": "workspace:^",
     "@departify/executive-director": "workspace:^",
     "@departify/executive-orchestrator": "workspace:^",
     "@departify/llm-provider-openai": "workspace:^",

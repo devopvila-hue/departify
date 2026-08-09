@@ -67,5 +67,5 @@ export function RootRoute() {
     return <CustomerZeroRoute />;
   }
 
-  return <Navigate to="/chat" replace />;
+  return <Navigate to="/inicio" replace />;
 }

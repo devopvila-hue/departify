@@ -1,8 +1,10 @@
 import {
   loadAuthConfig,
   loadBackendConfig,
+  loadEngineAdapterConfig,
   type BackendConfig,
 } from "@departify/config";
+import { createEngineAdapter } from "@departify/engine-adapter";
 import { existsSync } from "node:fs";
 import { loadEnvFile } from "node:process";
 import { buildServer } from "./server/server.js";
@@ -10,6 +12,17 @@ import { registerGracefulShutdown } from "./server/shutdown.js";
 import { SupabaseTenantService } from "./auth/supabase-tenant-service.js";
 import { SupabaseToolStateStore } from "./customer-zero/supabase-tool-state-store.js";
 import { SupabaseConversationStore } from "./customer-zero/supabase-conversation-store.js";
+import {
+  getCustomerZeroReportRepository,
+  listCustomerZeroSessions,
+} from "./customer-zero/customer-zero-session.js";
+import type { DiscoveryReportRepository } from "@departify/business-discovery";
+import {
+  SupabaseMarketingActivityRepository,
+  SupabaseMarketingApprovalRepository,
+  SupabaseMarketingObjectiveRepository,
+} from "./customer-zero/supabase-marketing-repositories.js";
+import { MarketingService } from "./customer-zero/marketing-service.js";
 import type { ServerDeps } from "./server/deps.js";
 
 // Load the local environment file when present. The backend does not ship
@@ -27,13 +40,19 @@ const config: BackendConfig = loadBackendConfig();
 const deps: ServerDeps = config.publicBaseUrl
   ? { publicBaseUrl: config.publicBaseUrl }
   : {};
+
+// Supabase auth identity + tenant boundary (resolved first so the Marketing
+// durable repositories can be wired). In production a missing auth config is
+// fatal (fail closed); elsewhere it is logged loudly so local development can
+// still run without forcing Supabase up.
+let supabaseAuthConfig: ReturnType<typeof loadAuthConfig> | null = null;
 try {
-  const authConfig = loadAuthConfig();
-  const tenant = new SupabaseTenantService(authConfig);
+  supabaseAuthConfig = loadAuthConfig();
+  const tenant = new SupabaseTenantService(supabaseAuthConfig);
   deps.auth = tenant;
   deps.organizations = tenant;
-  deps.toolState = new SupabaseToolStateStore(authConfig);
-  deps.conversations = new SupabaseConversationStore(authConfig);
+  deps.toolState = new SupabaseToolStateStore(supabaseAuthConfig);
+  deps.conversations = new SupabaseConversationStore(supabaseAuthConfig);
 } catch (cause) {
   const message = cause instanceof Error ? cause.message : String(cause);
   if (config.environment === "production") {
@@ -46,6 +65,76 @@ try {
     `[auth] Supabase auth is not configured (${message}). ` +
       "Routes will be unprotected in non-production environments.",
   );
+}
+
+// Engine Adapter (Sprint ENGINE 02). Only wired when the gateway URL is
+// configured; otherwise the backend runs without an engine and product routes
+// that need one fail with a clear configuration error.
+try {
+  const engineConfig = loadEngineAdapterConfig();
+  if (engineConfig.gatewayUrl) {
+    deps.engine = createEngineAdapter(engineConfig);
+    deps.engineRuntimePolicy = engineConfig.runtimePolicy ?? "strict";
+    console.log(
+      `[engine] adapter initialised provider=${engineConfig.provider} url=${engineConfig.gatewayUrl} policy=${engineConfig.runtimePolicy}`,
+    );
+    // DEPLOY 01: durable Marketing state via Supabase when auth is available;
+    // otherwise in-memory repositories (dev/test only).
+    const marketing = supabaseAuthConfig
+      ? new MarketingService({
+          engine: deps.engine,
+          // Business context is pulled lazily from the org's Customer Zero
+          // session (created during onboarding).
+          reportRepository: createLazyReportRepository(),
+          objectives: new SupabaseMarketingObjectiveRepository(supabaseAuthConfig),
+          activity: new SupabaseMarketingActivityRepository(supabaseAuthConfig),
+          approvals: new SupabaseMarketingApprovalRepository(supabaseAuthConfig),
+        })
+      : new MarketingService({
+          engine: deps.engine,
+          reportRepository: createLazyReportRepository(),
+        });
+    deps.marketing = marketing;
+    console.log(
+      `[engine] marketing service initialised (Elvira via EngineAdapter; durable=${Boolean(supabaseAuthConfig)})`,
+    );
+  }
+} catch (cause) {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  console.warn(`[engine] adapter not configured (${message}).`);
+}
+
+/**
+ * A DiscoveryReportRepository that lazily resolves the org's Customer Zero
+ * session repository. Before a session exists it returns empty/absent reads.
+ */
+function createLazyReportRepository(): DiscoveryReportRepository {
+  const noop = () => [];
+  const sessionRepo = (organizationId: string) =>
+    getCustomerZeroReportRepository(organizationId);
+  return {
+    save(record) {
+      sessionRepo(record.organizationId)?.save(record);
+    },
+    findById(id) {
+      // findById across orgs is not meaningful here; fall back to a scan.
+      for (const org of listCustomerZeroSessions()) {
+        const repo = sessionRepo(org);
+        const found = repo?.findById(id);
+        if (found) return found;
+      }
+      return null;
+    },
+    findByOrganizationId(organizationId) {
+      return (
+        sessionRepo(organizationId)?.findByOrganizationId(organizationId) ??
+        noop()
+      );
+    },
+    list() {
+      return noop();
+    },
+  };
 }
 
 const server = await buildServer(config, deps);

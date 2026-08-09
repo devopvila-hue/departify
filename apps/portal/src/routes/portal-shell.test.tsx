@@ -111,16 +111,18 @@ describe("portal shell", () => {
     mount(<AppShell companyName="MOON Shared Living" pendingApprovals={1} />);
 
     for (const label of [
+      "Tu empresa",
       "Chat",
       "Tareas",
       "Departamentos",
       "Conexiones",
       "Aprobaciones",
       "Resultados",
-      "Empresa",
     ]) {
       expect(screen.getByRole("link", { name: new RegExp(label, "i") })).toBeInTheDocument();
     }
+    // "Empresa" (company DNA) and "Tu empresa" (control plane) are both present.
+    expect(screen.getAllByRole("link", { name: /empresa/i }).length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByText(/agentes/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/workflow/i)).not.toBeInTheDocument();
   });
@@ -168,34 +170,29 @@ describe("portal shell", () => {
     expect(screen.queryByText(/approve tool execution|permission/i)).not.toBeInTheDocument();
   });
 
-  it("shows Marketing as a workspace, not a primary chat", async () => {
+  it("shows Marketing as a department workspace with an integrated Elvira chat", async () => {
     mockFetch((url) => {
+      if (url.includes("/api/departments/marketing/org_moon")) {
+        return {
+          id: "marketing",
+          name: "Marketing",
+          head,
+          status: "disponible",
+          employees: [
+            { id: "e1", label: "Especialista en Contenido", role: "Creación de contenido", status: "disponible", capabilities: [] },
+            { id: "e2", label: "Especialista en Adquisición", role: "Adquisición", status: "trabajando", capabilities: [], currentWork: "Preparando propuesta Google Ads" },
+          ],
+          employeesWorkingNow: 1,
+          tools: [{ toolId: "google_ads", label: "Google Ads", capability: "Publicidad", status: "not_connected", note: "No conectado" }],
+          toolsConnected: 0,
+          activeObjective: null,
+          pendingApprovals: [],
+          recentActivity: [],
+          results: [],
+        };
+      }
       if (url.endsWith("/handoff")) {
         return { message: "Ya tengo suficiente.", goal: overview.goal, head };
-      }
-      if (url.includes("/command-center/opening")) return openCommandCenter;
-      if (url.includes("/overview")) return overview;
-      if (url.endsWith(`/org_moon`)) {
-        return {
-          organizationId: "org_moon",
-          companyName: "MOON Shared Living",
-          department: { id: "d", name: "Marketing", status: "active", employeeAgentIds: [] },
-          connections: [],
-          conversation: [],
-          marketingWork: {
-            goal: overview.goal,
-            summary: "Plan para captar los primeros clientes.",
-            items: [
-              {
-                id: "item_1",
-                title: "Analizar el mercado",
-                description: "Buscar las oportunidades más rápidas.",
-                kind: "analysis",
-                status: "pending",
-              },
-            ],
-          },
-        };
       }
       return overview;
     });
@@ -203,19 +200,13 @@ describe("portal shell", () => {
     mount(<MarketingRoute />);
 
     await waitFor(() => expect(screen.getByText("Elvira")).toBeInTheDocument());
-    expect(screen.getByText(/jefa de marketing/i)).toBeInTheDocument();
-    expect(screen.getByText("Analizar el mercado")).toBeInTheDocument();
+    expect(screen.getAllByText(/marketing/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/especialista en adquisición/i)).toBeInTheDocument();
+    // ENGINE 04: the department detail integrates the Elvira chat naturally,
+    // still in business language (no technical agent/skill terms).
     expect(
-      screen.getByText(/sin conexiones activas, marketing no puede enviar/i),
+      screen.getByRole("heading", { name: /hablar con elvira/i }),
     ).toBeInTheDocument();
-    // Marketing is no longer a primary chat — the workspace guides the CEO
-    // back to the Command Center.
-    expect(
-      screen.queryByRole("heading", { name: /habla con elvira/i }),
-    ).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /command center/i })).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /preguntar sobre esto/i }),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/openclaw|skill|agente|token/i)).not.toBeInTheDocument();
   });
 });

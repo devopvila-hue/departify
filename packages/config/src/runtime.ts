@@ -65,6 +65,32 @@ export interface LlmRouterConfig {
   defaultStrategy: LlmRoutingStrategy;
 }
 
+export type EngineProvider = "openclaw";
+
+export type EngineRuntimePolicy = "strict" | "legacy-fallback";
+
+/** Engine Adapter configuration (Sprint ENGINE 02). */
+export interface EngineAdapterConfig {
+  provider: EngineProvider;
+  /** OpenClaw Gateway WebSocket URL, e.g. ws://127.0.0.1:18889. */
+  gatewayUrl?: string;
+  /** Shared gateway token. Backend-only; never exposed to the portal. */
+  gatewayToken?: string;
+  requestTimeoutMs: number;
+  connectTimeoutMs: number;
+  retryLimit: number;
+  maxRetryDelayMs: number;
+  /** Path to a persisted Ed25519 PEM used for gateway device auth. */
+  deviceKeyPath?: string;
+  /** Inline Ed25519 PEM used for gateway device auth (takes precedence over
+   * `deviceKeyPath`). Useful for tests and secret-injected deployments. */
+  deviceKeyPem?: string;
+  /** Optional default model override (provider/model). */
+  model?: string;
+  /** Production runtime policy (DEPLOY 01). Defaults to "strict". */
+  runtimePolicy?: EngineRuntimePolicy;
+}
+
 export const backendConfigSchema = envSchema.transform((env): BackendConfig => {
   const otlpEndpoint = normalizeOptional(env.OTEL_EXPORTER_OTLP_ENDPOINT);
   const supabaseUrl = normalizeOptional(env.SUPABASE_URL);
@@ -209,6 +235,31 @@ export const llmRouterConfigSchema = envSchema.transform(
 
 export function loadLlmRouterConfig(): LlmRouterConfig {
   return llmRouterConfigSchema.parse(process.env);
+}
+
+export const engineAdapterConfigSchema = envSchema.transform(
+  (env): EngineAdapterConfig => {
+    const gatewayUrl = normalizeOptional(env.OPENCLAW_GATEWAY_URL);
+    const gatewayToken = normalizeOptional(env.OPENCLAW_GATEWAY_TOKEN);
+    const deviceKeyPath = normalizeOptional(env.OPENCLAW_DEVICE_KEY_PATH);
+    const model = normalizeOptional(env.OPENCLAW_MODEL);
+    return {
+      provider: env.ENGINE_PROVIDER,
+      ...(gatewayUrl ? { gatewayUrl } : {}),
+      ...(gatewayToken ? { gatewayToken } : {}),
+      requestTimeoutMs: env.OPENCLAW_REQUEST_TIMEOUT_MS,
+      connectTimeoutMs: env.OPENCLAW_CONNECT_TIMEOUT_MS,
+      retryLimit: env.OPENCLAW_RETRY_LIMIT,
+      maxRetryDelayMs: env.OPENCLAW_MAX_RETRY_DELAY_MS,
+      ...(deviceKeyPath ? { deviceKeyPath } : {}),
+      ...(model ? { model } : {}),
+      runtimePolicy: env.ENGINE_RUNTIME_POLICY,
+    };
+  },
+);
+
+export function loadEngineAdapterConfig(): EngineAdapterConfig {
+  return engineAdapterConfigSchema.parse(process.env);
 }
 
 function normalizeOptional(value: string | undefined): string | undefined {
