@@ -135,8 +135,11 @@ describe("ENGINE 03 — Marketing department", () => {
     expect(status.name).toBe("Marketing");
     expect(status.head.name).toBe("Elvira");
     expect(status.head.role).toContain("Marketing");
-    expect(status.employees.length).toBeGreaterThanOrEqual(5);
-    expect(status.tools.length).toBeGreaterThanOrEqual(5);
+    // Customer Zero hotfix contract: a fresh org that has not provisioned the
+    // Marketing department reports the honest state — no fabricated roster.
+    expect(status.status).toBe("not_provisioned");
+    expect(status.employees.length).toBe(0);
+    expect(status.tools.length).toBe(0);
   });
 
   it("02 Elvira identity is consistent", { timeout: 300_000 }, async () => {
