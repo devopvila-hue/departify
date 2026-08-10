@@ -47,8 +47,7 @@ function makeInput(overrides: Partial<CommandCenterInput> = {}): CommandCenterIn
 }
 
 describe("Command Center routing", () => {
-  it("routes greetings without delegating to Marketing", () => {
-    const decision = routeCommandCenter(makeInput({ message: "Hola" }));
+  it("routes greetings without delegating to Marketing", () => {    const decision = routeCommandCenter(makeInput({ message: "Hola" }));
     expect(decision.decision.intent).toBe("greeting");
     expect(decision.decision.departments).toEqual([]);
   });
@@ -187,6 +186,21 @@ describe("Command Center routing", () => {
     );
     expect(decision.decision.intent).toBe("capability_status");
     expect(decision.reply).toContain("conectado");
+  });
+
+  it("infrastructure commands are NEVER execution intents — 'Instala n8n' is a business need", () => {
+    // The CEO chat is a business interface, not shell access. "Instala n8n"
+    // must not route to any infra/execution intent and must not carry
+    // install/exec phrasing in the reply. It falls back to the Marketing
+    // Director (business interpretation), and the engine has no exec/install
+    // capability surface.
+    const decision = routeCommandCenter(
+      makeInput({ message: "Instala n8n en el servidor." }),
+    );
+    expect(decision.decision.intent).not.toMatch(/install|exec|shell|system\./i);
+    expect(decision.reply).not.toMatch(/apt\b|npm\s+install|docker\s+run|curl\s+\||systemctl/);
+    // Business interpretation: it does not pretend to install software.
+    expect(decision.reply.toLowerCase()).not.toContain("voy a instalarlo");
   });
 });
 
