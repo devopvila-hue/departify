@@ -100,6 +100,9 @@ import {
 } from "../../customer-zero/chat-response-enrichment.js";
 import { publicCredentialSource } from "../../customer-zero/credential-resolver.js";
 import {
+  hasOperationalGoogleIdentityForOrg,
+} from "../../customer-zero/credential-resolver.js";
+import {
   CONNECTION_DEFINITIONS,
   renderConnectionCard,
   listAvailableCapabilitiesForOrg,
@@ -120,11 +123,15 @@ import {
 import { InboxSync } from "../../customer-zero/inbox-sync.js";
 import {
   startGmailOAuth,
-  completeGmailOAuth,
   googleOAuthRedirectUri,
   GmailOAuthError,
-  type GmailOAuthCallbackInput,
 } from "../../customer-zero/gmail-adapter.js";
+import { getGoogleOAuthStateStore } from "../../customer-zero/oauth-state.js";
+import {
+  completeGoogleOAuthCallback,
+  getGoogleTokenStore,
+  type GoogleTokenProvider,
+} from "../../customer-zero/google-tokens.js";
 import type { CompanyDiscoveryReport } from "@departify/business-discovery";
 import type { ServerDeps } from "../deps.js";
 import {
@@ -505,7 +512,7 @@ export async function registerCustomerZeroV2Routes(
       });
       return reply.code(200).send({
         organizationId,
-        connections: buildCatalogConnectionViews(session, session.state.locale),
+        connections: await buildCatalogConnectionViews(session, session.state.locale),
         cards,
         unmappedTools: session.state.unmappedTools,
       });
@@ -990,7 +997,7 @@ export async function registerCustomerZeroV2Routes(
         // NOT through the URL. This URL is identical to the one the
         // browser reaches after consent AND the one we send to
         // oauth2.googleapis.com/token.
-        const out = startGmailOAuth({
+        const out = await startGmailOAuth({
           organizationId,
           userId: oauthUserId,
           returnPath: "/connections/google/callback",
@@ -1114,12 +1121,32 @@ export async function registerCustomerZeroV2Routes(
         // MUST be byte-identical to the one used when the user was sent
         // to `accounts.google.com/.../auth`. Both come from
         // `googleOAuthRedirectUri(deps.publicBaseUrl)` so they CANNOT
-        // drift apart. Otherwise Google rejects the token exchange
-        // with `redirect_uri_mismatch`. The portal route
-        // `/connections/google/callback` is the single authorized
-        // redirect URI configured on the OAuth Web Client.
+        // drift apart. The portal route `/connections/google/callback`
+        // is the single authorized redirect URI configured on the
+        // OAuth Web Client.
+        //
+        // The actual handshake pipeline is `completeGoogleOAuthCallback`,
+        // which:
+        //   1. Validates the OAuth state nonce.
+        //   2. Exchanges the code with the byte-exact redirect_uri.
+        //   3. Parses the GRANTED scopes (replacing any prior set).
+        //   4. PRESERVES the existing refresh_token when Google omits
+        //      a new one on a reconnect.
+        //   5. Persists to the durable Supabase-backed store (or in
+        //      memory when Supabase is not wired).
+        //   6. Runs the Gmail operational probe (gmail.users.getProfile).
+        //   7. Marks the connection operational ONLY when the probe
+        //      succeeded AND a refresh token is persisted.
+        const provider: GoogleTokenProvider =
+          toolId === "gmail"
+            ? "gmail"
+            : toolId === "google_workspace"
+              ? "google_workspace"
+              : toolId === "google_calendar"
+                ? "google_calendar"
+                : "google_drive";
         try {
-          const input: GmailOAuthCallbackInput = {
+          const tokenResult = await completeGoogleOAuthCallback({
             code,
             state,
             organizationId,
@@ -1127,17 +1154,72 @@ export async function registerCustomerZeroV2Routes(
             clientId,
             clientSecret,
             redirectUri: googleOAuthRedirectUri(deps.publicBaseUrl),
-          };
-          const { identity } = await completeGmailOAuth(input);
-          completeConnection(connection);
-          connection.configSource = "oauth:google";
-          connection.verifiedAt = new Date().toISOString();
-          connection.connectedAt = new Date().toISOString();
+            provider,
+            identityProvider: "gmail",
+            stateNonceLookup: async (nonce) => {
+              const s = await getGoogleOAuthStateStore().get(nonce);
+              return s
+                ? { organizationId: s.organizationId, userId: s.userId }
+                : null;
+            },
+            stateNonceConsume: async (nonce) => {
+              await getGoogleOAuthStateStore().consume(nonce);
+            },
+            // SAFE diagnostics: checkpoint names + safe fields only.
+            // Never codes, tokens, secrets, headers or payloads.
+            onCheckpoint: (checkpoint, data) => {
+              request.log.info({
+                event: checkpoint,
+                organizationId,
+                ...data,
+              });
+            },
+          });
+          // Safe log: no tokens, no client secret. Used for the
+          // production diagnostic trace (see PHASE 1 of the brief).
+          request.log.info({
+            event: "google_oauth_callback_complete",
+            organizationId,
+            provider,
+            grantedScopes: tokenResult.grantedScopes,
+            hasRefreshToken: tokenResult.hasRefreshToken,
+            operational: tokenResult.operational,
+            probeError: tokenResult.probe.error,
+          });
+
+          // Persist the operational record on the durable tool-state so
+          // /conexiones, the chat pipeline, and the connection card
+          // all read the same source of truth.
+          if (tokenResult.operational) {
+            completeConnection(connection);
+            connection.configSource = "oauth:google";
+            connection.verifiedAt = new Date().toISOString();
+            connection.connectedAt = new Date().toISOString();
+          } else {
+            // Honest recovery state — the OAuth handshake completed
+            // but we never reached "operational". The connection card
+            // surfaces a real next step (reauthorize) instead of a
+            // generic "preparando".
+            connection.lifecycle = "needs_connection";
+            connection.status = "blocked";
+            const why = tokenResult.hasRefreshToken
+              ? `Google no respondió a la verificación operativa (${tokenResult.probe.error ?? "unknown"}).`
+              : "Google no devolvió un refresh_token. Vuelve a autorizar la conexión.";
+            connection.blockedReason = why;
+            connection.missingCredentials = tokenResult.hasRefreshToken
+              ? []
+              : ["GOOGLE_OAUTH_REFRESH_TOKEN"];
+          }
           await persistToolState(session, toolStateFromConnection(session, connection));
+
           return reply.code(200).send({
             organizationId,
             connection,
-            identity,
+            identity: tokenResult.identity,
+            grantedScopes: tokenResult.grantedScopes,
+            operational: tokenResult.operational,
+            probe: tokenResult.probe,
+            email: tokenResult.identity.email,
           });
         } catch (cause) {
           if (cause instanceof GmailOAuthError) {
@@ -1151,11 +1233,35 @@ export async function registerCustomerZeroV2Routes(
               },
             });
           }
-          request.log.error({ error: cause }, "Google OAuth callback failed");
+          const err = cause as Error & { code?: string };
+          // OAuth state validation failures (CSRF / replay /
+          // org mismatch / user mismatch) emit an Error with a
+          // string `code`. Surface them as 401, not 500 — they
+          // are routine client errors, never infrastructure
+          // faults.
+          if (typeof err.code === "string") {
+            return reply.code(401).send({
+              organizationId,
+              error: {
+                code: err.code,
+                message: err.message,
+                requestId: request.id,
+                statusCode: 401,
+              },
+            });
+          }
+          const code = err.code ?? "GOOGLE_OAUTH_FAILED";
+          request.log.error({
+            event: "google_oauth_callback_failed",
+            organizationId,
+            provider,
+            code,
+            message: err.message,
+          });
           return reply.code(500).send({
             organizationId,
             error: {
-              code: "GOOGLE_OAUTH_FAILED",
+              code,
               message: "Google OAuth callback failed.",
               requestId: request.id,
               statusCode: 500,
@@ -1208,7 +1314,7 @@ export async function registerCustomerZeroV2Routes(
         return reply.code(404).send({ error: "Tool not found in catalog." });
       }
       await declareCatalogTool(session, tool);
-      const view = buildCatalogConnectionViews(session, session.state.locale).find(
+      const view = (await buildCatalogConnectionViews(session, session.state.locale)).find(
         (entry) => entry.toolId === toolId,
       );
       return reply.code(200).send({ organizationId, connection: view });
@@ -1871,6 +1977,10 @@ export async function processCeoMessage(
   const isEs = session.state.locale !== "en";
   let assistantReply = routed.reply;
   let marketingTurn: { role: "user" | "assistant"; content: string } | null = null;
+  // Set when the turn actually dispatched a Mautic tool execution
+  // (vs. a Gmail read). Drives the work-state pills so a Gmail read
+  // never claims "Consultando Mautic…".
+  let mauticDispatched = false;
 
   if (routed.decision.intent === "delegate_marketing") {
     // ENGINE 03: when the MarketingService is wired (EngineAdapter available),
@@ -1990,6 +2100,38 @@ export async function processCeoMessage(
   }
 
   if (routed.decision.intent === "external_tool_query") {
+    // Email-aware dispatch: if the CEO asks about Gmail and the
+    // durable Google token store reports an operationally probed
+    // Gmail identity, perform a real Gmail read. Falls through to the
+    // Mautic dispatch otherwise.
+    if (isEmailQuestion(message)) {
+      const gmailOperational = await hasOperationalGoogleIdentityForOrg(
+        organizationId,
+      );
+      if (gmailOperational) {
+        try {
+          const gmailReply = await runGmailRead(
+            organizationId,
+            message,
+            session.state.locale,
+          );
+          if (gmailReply) {
+            assistantReply = gmailReply;
+            marketingTurn = { role: "assistant", content: assistantReply };
+          }
+        } catch {
+          assistantReply = isEs
+            ? "No he podido consultar Gmail. Vuelve a intentarlo en unos minutos."
+            : "I could not query Gmail right now. Please try again in a few minutes.";
+          marketingTurn = { role: "assistant", content: assistantReply };
+        }
+      } else {
+        assistantReply = isEs
+          ? "Gmail todavía no está conectado. Ve a Conexiones para autorizarlo y vuelvo a intentarlo."
+          : "Gmail is not connected yet. Go to Connections to authorize it and I'll try again.";
+        marketingTurn = { role: "assistant", content: assistantReply };
+      }
+    } else {
     const mauticConn = session.state.connections.get("mautic");
     const mauticLifecycle: ToolLifecycleStatus =
       mauticConn?.lifecycle ??
@@ -1999,6 +2141,7 @@ export async function processCeoMessage(
       assistantReply = mauticNotOperationalReply(mauticLifecycle, isEs);
       marketingTurn = { role: "assistant", content: assistantReply };
     } else {
+      mauticDispatched = true;
       const msg = message.toLowerCase();
       const isSearch =
         /\b(busca|buscar|search|find|encuentra|busco)\b/i.test(msg);
@@ -2061,6 +2204,7 @@ export async function processCeoMessage(
           : "I could not query Mautic right now. I can continue with the rest of the work.";
       }
       marketingTurn = { role: "assistant", content: assistantReply };
+    }
     }
   }
 
@@ -2131,7 +2275,13 @@ export async function processCeoMessage(
     marketingTurn ?? { role: "assistant", content: assistantReply },
   ];
 
-  const events: CommandCenterEvent[] = buildProactiveOpening(session);
+  // Per-turn events: ONLY the events that actually happened this
+  // turn (the assistant transcript + work-state pills when real
+  // work was delegated). The proactive opening event is fetched
+  // via the separate /command-center/opening endpoint and MUST NOT
+  // be appended on every message — that would re-summon "Elvira
+  // toma la iniciativa" after every CEO message.
+  const events: CommandCenterEvent[] = [];
 
   // Customer Zero 01 — chat enrichment. The portal now renders the
   // assistant reply with the correct speaker identity (DEPARTIFY vs
@@ -2145,7 +2295,7 @@ export async function processCeoMessage(
     marketingSucceeded: marketingTurn !== null,
     locale: session.state.locale,
     reply: assistantReply,
-    mauticToolUsed: routed.decision.intent === "external_tool_query",
+    mauticToolUsed: mauticDispatched,
     connectionBlocked:
       routed.decision.intent === "external_tool_query" &&
       (() => {
@@ -2405,6 +2555,111 @@ function mauticNotOperationalReply(
   }
 }
 
+/* ----------------------------------------------------------------------------
+ * Gmail dispatch — the only path that performs a real Gmail read.
+ *
+ * The CEO's question lands here when:
+ *
+ *   - the routing decided `external_tool_query`, AND
+ *   - the message is about email / Gmail / inbox / unread / important / etc.
+ *
+ * If Gmail is operational (durable refresh token + operational probe),
+ * a real Gmail search is performed and a business-readable Spanish
+ * summary is returned. If Gmail is NOT operational, an honest
+ * recovery action is surfaced. The reply NEVER hallucinates results.
+ *
+ * The reply NEVER contains token VALUES, the user's OAuth scopes as
+ * raw strings, or provider internals. The CEO sees only what they
+ * would say to a colleague.
+ * --------------------------------------------------------------------------*/
+
+const EMAIL_QUESTION_PATTERN = new RegExp(
+  [
+    "\\b(correos?|emails?|inbox|bandeja|buz[oó]n|buz[oó]n\\s+de\\s+entrada)",
+    "important|importantes|unread|no\\s+le[ií]dos?|pendientes",
+    "responder|respuesta|respu[eé]stame",
+    "gmail|google\\s+mail|googlemail",
+  ].join("|"),
+  "i",
+);
+
+function isEmailQuestion(message: string): boolean {
+  return EMAIL_QUESTION_PATTERN.test(message);
+}
+
+/** Heuristic Gmail query: build a search expression from the CEO's words. */
+function deriveGmailQuery(message: string): string {
+  // Default to recent inbox reading.
+  const trimmed = message.trim();
+  if (/importantes|important|unread|no le[ií]dos/i.test(trimmed)) {
+    return "is:unread newer_than:7d";
+  }
+  if (/hoy|today/i.test(trimmed)) {
+    return "newer_than:1d";
+  }
+  if (/esta semana|this week|semana/i.test(trimmed)) {
+    return "newer_than:7d";
+  }
+  // Fallback: recent inbox.
+  return "in:inbox newer_than:7d";
+}
+
+async function runGmailRead(
+  organizationId: string,
+  message: string,
+  locale: SupportedLocale,
+): Promise<string | null> {
+  const isEs = locale !== "en";
+  const clientId = process.env["GOOGLE_OAUTH_CLIENT_ID"]?.trim();
+  const clientSecret = process.env["GOOGLE_OAUTH_CLIENT_SECRET"]?.trim();
+  if (!clientId || !clientSecret) return null;
+  const { GmailAdapter } = await import("../../customer-zero/gmail-adapter.js");
+  // The CEO's session user id is unknowable here in this prototype
+  // path. The durable store is keyed by (org, user); we pick the
+  // first operational row for the org. The adapter itself uses
+  // getTokens() which queries the durable store.
+  const summaries = await getGoogleTokenStore().listForOrg(organizationId);
+  const target = summaries.find(
+    (s) => s.hasRefreshToken && s.operationalVerifiedAt,
+  );
+  if (!target) return null;
+  const adapter = new GmailAdapter(
+    { organizationId, userId: target.userId },
+    clientId,
+    clientSecret,
+  );
+  const query = deriveGmailQuery(message);
+  const result = await adapter.searchMessages(query, 10);
+  if (result.success && result.value) {
+    const messages = result.value;
+    if (messages.length === 0) {
+      return isEs
+        ? `No he encontrado correos relevantes en tu bandeja${query ? ` que coincidan con "${query}"` : ""}. Si me indicas un remitente o un tema más concreto te ayudo a afinar la búsqueda.`
+        : `I didn't find any relevant emails in your inbox${query ? ` matching "${query}"` : ""}. If you give me a sender or topic I can narrow the search.`;
+    }
+    // Build a Spanish business summary. Each line uses sender,
+    // subject, why-this-matters hint from snippet.
+    const lines: string[] = [];
+    for (const m of messages.slice(0, 5)) {
+      const sender = m.from.displayName
+        ? `${m.from.displayName} <${m.from.email}>`
+        : m.from.email;
+      const subj = m.subject || "(sin asunto)";
+      const snippet = m.snippet ? ` — ${m.snippet.slice(0, 80)}` : "";
+      lines.push(`• ${sender} · ${subj}${snippet}`);
+    }
+    const intro = isEs
+      ? `He encontrado ${messages.length} correo(s) relevante(s)${query ? ` con criterio "${query}"` : ""}:`
+      : `I found ${messages.length} relevant email(s)${query ? ` matching "${query}"` : ""}:`;
+    return [intro, ...lines].join("\n");
+  }
+  // Gmail API did not respond correctly (auth / rate limit / down).
+  // Honest, actionable recovery — never a fabricated inbox.
+  return isEs
+    ? "No he podido leer tu Gmail ahora mismo: la API de Gmail no respondió correctamente. Vuelve a intentarlo en unos minutos; si el problema persiste, revisa la conexión en Conexiones."
+    : "I couldn't read your Gmail right now: the Gmail API did not respond correctly. Try again in a few minutes; if the issue persists, review the connection in Connections.";
+}
+
 function publicBaseUrl(): string {
   return process.env.PUBLIC_BASE_URL ?? "http://localhost:3000";
 }
@@ -2429,12 +2684,19 @@ export interface ToolConnectionView {
 /**
  * The full /conexiones surface: every catalog tool with its organization
  * state. "Not selected during onboarding" means AVAILABLE, not absent.
+ *
+ * Gmail + Workspace + Calendar + Drive share ONE durable refresh-token
+ * row. /conexiones and the chat pipeline MUST read that row, otherwise
+ * the connection card says "conectado" while the chat says
+ * "preparando". The durable row is the source of truth; the in-memory
+ * connection.status is a UI hint.
  */
-function buildCatalogConnectionViews(
+async function buildCatalogConnectionViews(
   session: CustomerZeroSession,
   locale: SupportedLocale,
-): ToolConnectionView[] {
+): Promise<ToolConnectionView[]> {
   const connected = session.state.connections;
+  const googleOperational = await googleOperationalFor(session.organizationId);
   return TOOL_CATALOG.map((tool) => {
     const connection = connected.get(tool.id);
     const category = locale === "en" ? tool.categoryEn : tool.categoryEs;
@@ -2451,16 +2713,31 @@ function buildCatalogConnectionViews(
         action: "prepare",
       };
     }
-    const rawLifecycle: ToolLifecycleStatus =
+    let lifecycle: ToolLifecycleStatus =
       connection.lifecycle ??
       (connection.status === "connected" ? "connected" : "needs_connection");
+    const googleToolIds = new Set([
+      "gmail",
+      "google_workspace",
+      "google_calendar",
+      "google_drive",
+    ]);
+    if (
+      googleToolIds.has(tool.id) &&
+      googleOperational &&
+      lifecycle !== "connected"
+    ) {
+      // Promote from needs_connection to connected because the
+      // durable refresh-token row is operational.
+      lifecycle = "connected";
+    }
     // Semantic consistency: a tool with no implemented connector can never be
     // "needs_connection" (the CEO has no mechanism to connect it). It is
     // SELECTED. CONNECTED/CONFIGURED are kept as-is defensively.
-    const lifecycle: ToolLifecycleStatus = hasWorkingConnector(tool.id)
-      ? rawLifecycle
-      : rawLifecycle === "connected" || rawLifecycle === "configured"
-        ? rawLifecycle
+    const consolidatedLifecycle: ToolLifecycleStatus = hasWorkingConnector(tool.id)
+      ? lifecycle
+      : lifecycle === "connected" || lifecycle === "configured"
+        ? lifecycle
         : "selected";
     return {
       toolId: tool.id,
@@ -2468,14 +2745,40 @@ function buildCatalogConnectionViews(
       capability: tool.capability,
       category,
       domains: domainsFor(tool.id),
-      state: lifecycle,
+      state: consolidatedLifecycle,
       hasState: true,
-      humanLabel: humanLifecycleLabel(lifecycle, locale),
-      action: catalogAction(tool, lifecycle),
+      humanLabel: humanLifecycleLabel(consolidatedLifecycle, locale),
+      action: catalogAction(tool, consolidatedLifecycle),
       ...(connection.verifiedAt ? { verifiedAt: connection.verifiedAt } : {}),
       ...(connection.blockedReason ? { blockedReason: connection.blockedReason } : {}),
     };
   });
+}
+
+/**
+ * Cached lookup of the durable Google identity for an organization.
+ * The connection card and the chat pipeline share this single
+ * source of truth.
+ */
+const googleOperationalCache = new Map<
+  string,
+  { operational: boolean; ts: number }
+>();
+async function googleOperationalFor(
+  organizationId: string,
+): Promise<boolean> {
+  const cached = googleOperationalCache.get(organizationId);
+  if (cached && Date.now() - cached.ts < 5_000) return cached.operational;
+  const operational = await hasOperationalGoogleIdentityForOrg(
+    organizationId,
+  );
+  googleOperationalCache.set(organizationId, { operational, ts: Date.now() });
+  return operational;
+}
+
+/** Test support: clears the operational-state cache between cases. */
+export function resetGoogleOperationalCacheForTest(): void {
+  googleOperationalCache.clear();
 }
 
 /** Only real actions: Mautic can verify/connect; everything else may be

@@ -68,8 +68,8 @@ afterEach(() => {
  * ==========================================================================*/
 
 describe("Google OAuth — state machine", () => {
-  it("1 start returns a state with nonce and authorize URL", () => {
-    const out = startGmailOAuth({
+  it("1 start returns a state with nonce and authorize URL", async () => {
+    const out = await startGmailOAuth({
       organizationId: "org_a",
       userId: "ceo_a",
       returnPath: "/inbox",
@@ -98,7 +98,7 @@ describe("Google OAuth — state machine", () => {
   });
 
   it("3 completeGmailOAuth rejects org mismatch", async () => {
-    const start = startGmailOAuth({
+    const start = await startGmailOAuth({
       organizationId: "org_a",
       userId: "ceo_a",
       returnPath: "/inbox",
@@ -120,7 +120,7 @@ describe("Google OAuth — state machine", () => {
   });
 
   it("4 completeGmailOAuth rejects replayed state", async () => {
-    const start = startGmailOAuth({
+    const start = await startGmailOAuth({
       organizationId: "org_a",
       userId: "ceo_a",
       returnPath: "/inbox",

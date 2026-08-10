@@ -30,6 +30,56 @@ const GOOGLE_ERROR_COPY: Record<string, { es: string; en: string }> = {
   },
 };
 
+/**
+ * Business-readable copy for backend callback failures. The backend
+ * never exposes credentials; it surfaces a safe error `code`. Each
+ * code maps to a message the CEO can act on — and auth failures get an
+ * explicit re-login hint, because a stale session produces exactly the
+ * "consent OK but not connected" silent loop.
+ */
+function backendErrorCopy(
+  code: string | undefined,
+): { es: string; en: string } {
+  const authCodes = new Set([
+    "invalid_token",
+    "expired_token",
+    "auth_token_invalid",
+  ]);
+  if (code && authCodes.has(code)) {
+    return {
+      es: "Tu sesión ha caducado. Cierra la sesión, entra de nuevo y repite la conexión con Google.",
+      en: "Your session has expired. Sign out, sign back in, and retry the Google connection.",
+    };
+  }
+  switch (code) {
+    case "invalid_state":
+    case "org_mismatch":
+    case "user_mismatch":
+    case "replay":
+      return {
+        es: "La autorización expiró o no se pudo validar. Vuelve a Conexiones e inténtalo de nuevo.",
+        en: "The authorization expired or could not be validated. Go back to Connections and try again.",
+      };
+    case "GOOGLE_OAUTH_NOT_CONFIGURED":
+    case "GOOGLE_OAUTH_CLIENT_ID":
+    case "GOOGLE_OAUTH_CLIENT_SECRET":
+      return {
+        es: "Departify aún no tiene configuradas sus credenciales de Google. Avísanos para resolverlo.",
+        en: "Departify does not have its Google credentials configured yet. Let us know so we can fix it.",
+      };
+    case "credential_persisted_but_not_readable":
+      return {
+        es: "Google autorizó la conexión pero no se pudo guardar de forma segura. Vuelve a intentarlo en unos minutos.",
+        en: "Google authorized the connection but it could not be stored securely. Please try again in a few minutes.",
+      };
+    default:
+      return {
+        es: "No hemos podido terminar la conexión con Google. Inténtalo de nuevo y, si persiste, avísanos.",
+        en: "We could not finish the Google connection. Try again and, if it persists, let us know.",
+      };
+  }
+}
+
 export function GoogleOAuthCallbackRoute() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -83,16 +133,19 @@ export function GoogleOAuthCallbackRoute() {
         );
         return;
       }
-      if (!out?.connection || out.connection.status !== "connected") {
-        setStatus("error");
-        setMessage(
-          navigator.language.startsWith("es")
-            ? "Google no devolvió una conexión válida. Inténtalo de nuevo."
-            : "Google did not return a valid connection. Please try again.",
-        );
+      if (out.connection?.status === "connected") {
+        // Success — land on /conexiones (replace: true so the callback
+        // URL does not become a browser-history entry that re-executes
+        // on back-navigation).
+        navigate("/conexiones", { replace: true });
         return;
       }
-      navigate("/conexiones", { replace: true });
+      // Failure — show the exact safe stage that failed, never a bare
+      // "no conectado" with no explanation.
+      const copy = backendErrorCopy(out.error?.code);
+      const isEs = navigator.language.startsWith("es");
+      setStatus("error");
+      setMessage(isEs ? copy.es : copy.en);
     })();
   }, [params, organizationId, navigate]);
 

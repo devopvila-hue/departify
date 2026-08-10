@@ -135,7 +135,9 @@ describe("CredentialResolver", () => {
     const r = resolveCredentials({ organizationId: "org_x", provider: "mautic" });
     expect(r.handle).toBeDefined();
     const creds = getCredentials(r.handle!);
-    expect(creds?.clientSecret).toBe("secret-test");
+    expect(creds?.provider === "mautic" && creds.clientSecret).toBe(
+      "secret-test",
+    );
   });
 
   it("05 publicCredentialSource returns only a label, never the secret", () => {

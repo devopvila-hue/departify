@@ -712,10 +712,16 @@ export const api = {
       `/api/customer-zero/${org}/connections/${toolId}/connect`,
     ),
   finishGoogleConnect: (org: string, code: string, state: string) =>
-    postJson<{ connection: ConnectionCard } & { identity?: { email: string } }>(
-      `/api/customer-zero/${org}/connections/gmail/callback`,
-      { code, state },
-    ),
+    postJson<
+      { connection: ConnectionCard } & {
+        identity?: { email: string };
+        operational?: boolean;
+        error?: { code?: string; message?: string };
+      }
+    >(`/api/customer-zero/${org}/connections/gmail/callback`, {
+      code,
+      state,
+    }),
   plan: (org: string, goal: string) =>
     postJson<{ summary: string; items: MarketingWorkItem[]; error?: { message: string } }>(
       `/api/customer-zero/${org}/marketing/work`,

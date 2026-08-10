@@ -22,6 +22,10 @@
  */
 
 import type { SupportedLocale } from "./locale.js";
+import {
+  getGoogleTokenStore,
+  refreshGoogleToken,
+} from "./google-tokens.js";
 
 /* ----------------------------------------------------------------------------
  * Scopes (minimum privilege).
@@ -129,46 +133,25 @@ export interface GmailTokens {
 
 /* ----------------------------------------------------------------------------
  * State store — CSRF + replay + org mismatch protection.
+ *
+ * DURABLE across Railway instances/restarts: the active store is
+ * resolved via `getGoogleOAuthStateStore()` (Supabase-backed in
+ * production, in-memory in tests/dev). See oauth-state.ts. The nonce
+ * binding survives any replica/restart between the `connect` request
+ * and the `callback` request — an in-memory store would fail the
+ * callback with invalid_state and produce the silent consent loop.
  * --------------------------------------------------------------------------*/
 
-export interface GmailOAuthState {
-  readonly nonce: string;
-  readonly organizationId: string;
-  readonly userId: string;
-  readonly connectionIntent: "marketing" | "admin";
-  readonly returnPath: string;
-  readonly createdAt: string;
-  readonly expiresAt: string;
-  /** When true the state has been consumed. */
-  readonly consumed?: boolean;
-}
+import {
+  getGoogleOAuthStateStore,
+  type OAuthStateRecord,
+} from "./oauth-state.js";
 
-class GmailOAuthStateStore {
-  private readonly entries = new Map<string, GmailOAuthState>();
+/** Backward-compatible alias for the OAuth state binding shape. */
+export type GmailOAuthState = OAuthStateRecord;
 
-  put(state: GmailOAuthState): void {
-    this.entries.set(state.nonce, state);
-  }
-
-  get(nonce: string): GmailOAuthState | null {
-    const state = this.entries.get(nonce);
-    if (!state) return null;
-    if (new Date(state.expiresAt).getTime() < Date.now()) {
-      this.entries.delete(nonce);
-      return null;
-    }
-    return state;
-  }
-
-  consume(nonce: string): GmailOAuthState | null {
-    const state = this.get(nonce);
-    if (!state) return null;
-    this.entries.set(nonce, { ...state, consumed: true });
-    return state;
-  }
-}
-
-export const gmailOAuthStateStore = new GmailOAuthStateStore();
+/** Shared default in-memory store (tests seed this directly). */
+export { gmailOAuthStateStore } from "./oauth-state.js";
 
 /* ----------------------------------------------------------------------------
  * Token store — server-only, org-scoped, user-scoped.
@@ -270,10 +253,14 @@ export interface GmailOAuthStartOutput {
  * The state is bound to (organizationId, userId, intent, returnPath)
  * and expires in 10 minutes.
  */
-export function startGmailOAuth(input: GmailOAuthStartInput): GmailOAuthStartOutput {
+export async function startGmailOAuth(
+  input: GmailOAuthStartInput,
+): Promise<GmailOAuthStartOutput> {
   const nonce = generateNonce();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-  gmailOAuthStateStore.put({
+  // Durable state store: the nonce MUST survive across Railway
+  // instances/restarts between this request and the callback request.
+  await getGoogleOAuthStateStore().put({
     nonce,
     organizationId: input.organizationId,
     userId: input.userId,
@@ -315,12 +302,21 @@ export interface GmailOAuthCallbackOutput {
  * Validate the state, exchange the code for tokens, persist them,
  * and return the normalized identity. Throws on CSRF / replay /
  * org mismatch.
+ *
+ * The granted scopes replace any previously stored scopes. If Google
+ * omits `refresh_token` on a reconnect, the existing refresh token
+ * is preserved.
+ *
+ * After persistence, a lightweight Gmail probe (`gmail.users.getProfile`)
+ * runs to confirm Google accepts the credentials. The probe result
+ * is returned alongside the identity so callers can mark the
+ * connection operational only on success.
  */
 export async function completeGmailOAuth(
   input: GmailOAuthCallbackInput,
 ): Promise<GmailOAuthCallbackOutput> {
-  // 1. State validation.
-  const state = gmailOAuthStateStore.get(input.state);
+  // 1. State validation (durable store — works across instances).
+  const state = await getGoogleOAuthStateStore().get(input.state);
   if (!state) {
     throw new GmailOAuthError("invalid_state", "OAuth state missing or expired");
   }
@@ -339,7 +335,7 @@ export async function completeGmailOAuth(
       "OAuth state does not belong to this user",
     );
   }
-  gmailOAuthStateStore.consume(input.state);
+  await getGoogleOAuthStateStore().consume(input.state);
 
   // 2. Code exchange.
   const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
@@ -366,10 +362,10 @@ export async function completeGmailOAuth(
     scope?: string;
     id_token?: string;
   };
-  if (!tokenJson.access_token || !tokenJson.refresh_token) {
+  if (!tokenJson.access_token) {
     throw new GmailOAuthError(
-      "missing_tokens",
-      "Gmail token response missing access_token or refresh_token",
+      "missing_access_token",
+      "Gmail token response missing access_token",
     );
   }
   const expiresAt = new Date(
@@ -385,11 +381,24 @@ export async function completeGmailOAuth(
     );
   }
 
+  // 4. Granted scopes. Replace the previously stored scopes with the
+  // set Google actually granted on this exchange. Falling back to
+  // GMAIL_SCOPES only when the response carries no scope string — a
+  // rare but possible response shape.
+  const grantedScopes = (tokenJson.scope ?? "").trim();
+  const scopes = grantedScopes
+    ? grantedScopes.split(/\s+/).filter(Boolean)
+    : [...GMAIL_SCOPES];
+
   const tokens: GmailTokens = {
     accessToken: tokenJson.access_token,
-    refreshToken: tokenJson.refresh_token,
+    // Preserve the persistent refresh token when Google omits a new
+    // one on a reconnect. The synchronous in-memory store is only
+    // used in tests; production goes through the async
+    // `getGoogleTokenStore()`.
+    refreshToken: tokenJson.refresh_token ?? "",
     expiresAt,
-    scopes: (tokenJson.scope ?? GMAIL_SCOPES.join(" ")).split(/\s+/).filter(Boolean),
+    scopes,
     email: profile.email,
     displayName: profile.displayName,
   };
@@ -414,6 +423,7 @@ export class GmailOAuthError extends Error {
       | "user_mismatch"
       | "token_exchange_failed"
       | "missing_tokens"
+      | "missing_access_token"
       | "missing_identity",
     message: string,
   ) {
@@ -473,6 +483,13 @@ function fail<T>(
   return { success: false, errorCode: code, message };
 }
 
+/**
+ * The unified adapter for Gmail + Workspace + Calendar + Drive —
+ * reads its credentials from the durable Google token store
+ * (production: Supabase `google_oauth_tokens`; tests/dev: in-memory).
+ * This is the SINGLE boundary that turns the CEO's OAuth consent
+ * into real capability execution.
+ */
 export class GmailAdapter {
   constructor(
     private readonly input: GmailAdapterInput,
@@ -480,19 +497,78 @@ export class GmailAdapter {
     private readonly clientSecret: string,
   ) {}
 
-  /** Returns the current tokens, refreshing if necessary. */
+  /** Returns the current tokens, refreshing if necessary. Reads
+   *  from the durable Google token store; falls back to the legacy
+   *  in-memory store when no durable row exists (dev / tests). */
   private async getTokens(): Promise<GmailTokens | null> {
-    const tokens = gmailTokenStore.get(this.input.organizationId, this.input.userId);
-    if (!tokens) return null;
+    const durable = await getGoogleTokenStore().get(
+      this.input.organizationId,
+      this.input.userId,
+    );
+    if (!durable) {
+      const legacy = gmailTokenStore.get(
+        this.input.organizationId,
+        this.input.userId,
+      );
+      if (!legacy) return null;
+      return legacy;
+    }
+    const tokens: GmailTokens = {
+      accessToken: durable.accessToken,
+      refreshToken: durable.refreshToken ?? "",
+      expiresAt: durable.expiresAt,
+      scopes: durable.scopes,
+      email: durable.email,
+      displayName: durable.displayName ?? "",
+    };
     if (new Date(tokens.expiresAt).getTime() - 60_000 > Date.now()) {
       return tokens;
     }
-    return refreshGmailTokens(tokens, this.clientId, this.clientSecret).then(
-      (next) => {
-        gmailTokenStore.put(this.input.organizationId, this.input.userId, next);
-        return next;
-      },
+    return this.refresh(tokens);
+  }
+
+  private async refresh(
+    current: GmailTokens,
+  ): Promise<GmailTokens | null> {
+    if (!current.refreshToken) return current;
+    const result = await refreshGoogleToken({
+      refreshToken: current.refreshToken,
+      clientId: this.clientId,
+      clientSecret: this.clientSecret,
+    });
+    const next: GmailTokens = {
+      ...current,
+      accessToken: result.accessToken,
+      expiresAt: result.expiresAt,
+      scopes:
+        result.scopes.length > 0 && current.scopes.length === 0
+          ? result.scopes
+          : current.scopes,
+    };
+    // Persist back into the durable store so subsequent processes
+    // see the rotated token. The legacy in-memory cache is only a
+    // dev / tests fallback and is not used in production.
+    await getGoogleTokenStore().put({
+      organizationId: this.input.organizationId,
+      userId: this.input.userId,
+      provider: "gmail",
+      accessToken: next.accessToken,
+      refreshToken: next.refreshToken || null,
+      expiresAt: next.expiresAt,
+      scopes: next.scopes,
+      email: next.email,
+      displayName: next.displayName ?? null,
+      operationalVerifiedAt: new Date().toISOString(),
+      operationalProbeError: null,
+    });
+    // Belt-and-braces: also write to the legacy in-memory store
+    // when present, so existing tests keep working.
+    gmailTokenStore.put(
+      this.input.organizationId,
+      this.input.userId,
+      next,
     );
+    return next;
   }
 
   async getIdentity(): Promise<GmailAdapterResult<EmailIdentity>> {
@@ -707,52 +783,6 @@ export class GmailAdapter {
   disconnect(): void {
     gmailTokenStore.remove(this.input.organizationId, this.input.userId);
   }
-}
-
-/* ----------------------------------------------------------------------------
- * Token refresh.
- * --------------------------------------------------------------------------*/
-
-async function refreshGmailTokens(
-  tokens: GmailTokens,
-  clientId: string,
-  clientSecret: string,
-): Promise<GmailTokens> {
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: tokens.refreshToken,
-      grant_type: "refresh_token",
-    }).toString(),
-  });
-  if (!response.ok) {
-    throw new GmailOAuthError(
-      "token_exchange_failed",
-      `Gmail refresh returned ${response.status}`,
-    );
-  }
-  const data = (await response.json()) as {
-    access_token?: string;
-    expires_in?: number;
-    scope?: string;
-  };
-  if (!data.access_token) {
-    throw new GmailOAuthError(
-      "missing_tokens",
-      "Gmail refresh response missing access_token",
-    );
-  }
-  return {
-    accessToken: data.access_token,
-    refreshToken: tokens.refreshToken,
-    expiresAt: new Date(Date.now() + (data.expires_in ?? 3600) * 1000).toISOString(),
-    scopes: (data.scope ?? tokens.scopes.join(" ")).split(/\s+/).filter(Boolean),
-    email: tokens.email,
-    displayName: tokens.displayName,
-  };
 }
 
 /* ----------------------------------------------------------------------------

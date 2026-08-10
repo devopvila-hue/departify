@@ -165,7 +165,7 @@ describe("Capability registry — email capabilities", () => {
  * ==========================================================================*/
 
 describe("Gmail OAuth — state machine", () => {
-  it("04 startGmailOAuth returns a state with a nonce and the Google authorize URL", () => {
+  it("04 startGmailOAuth returns a state with a nonce and the Google authorize URL", async () => {
     const input: GmailOAuthStartInput = {
       organizationId: "org_x",
       userId: "user_x",
@@ -174,11 +174,11 @@ describe("Gmail OAuth — state machine", () => {
       redirectUri: TEST_REDIRECT,
       clientId: TEST_CLIENT_ID,
     };
-    const out = startGmailOAuth(input);
+    const out = await startGmailOAuth(input);
     expect(out.authorizationUrl).toContain("accounts.google.com/o/oauth2/v2/auth");
     expect(out.authorizationUrl).toContain("scope=");
     expect(out.state.length).toBeGreaterThan(20);
-    const stored = gmailOAuthStateStore.get(out.state);
+    const stored = await gmailOAuthStateStore.get(out.state);
     expect(stored?.organizationId).toBe("org_x");
     expect(stored?.userId).toBe("user_x");
   });
@@ -197,7 +197,7 @@ describe("Gmail OAuth — state machine", () => {
   });
 
   it("06 completeGmailOAuth rejects org mismatch (org_mismatch)", async () => {
-    const start = startGmailOAuth({
+    const start = await startGmailOAuth({
       organizationId: "org_x",
       userId: "user_x",
       returnPath: "/x",
@@ -219,7 +219,7 @@ describe("Gmail OAuth — state machine", () => {
   });
 
   it("07 completeGmailOAuth rejects user mismatch (user_mismatch)", async () => {
-    const start = startGmailOAuth({
+    const start = await startGmailOAuth({
       organizationId: "org_x",
       userId: "user_x",
       returnPath: "/x",
@@ -241,7 +241,7 @@ describe("Gmail OAuth — state machine", () => {
   });
 
   it("08 completeGmailOAuth rejects replayed state", async () => {
-    const start = startGmailOAuth({
+    const start = await startGmailOAuth({
       organizationId: "org_x",
       userId: "user_x",
       returnPath: "/x",
@@ -288,7 +288,7 @@ describe("Gmail OAuth — state machine", () => {
   });
 
   it("09 completeGmailOAuth exchanges code + persists tokens + returns identity", async () => {
-    const start = startGmailOAuth({
+    const start = await startGmailOAuth({
       organizationId: "org_x",
       userId: "user_x",
       returnPath: "/x",
@@ -937,7 +937,7 @@ describe("GmailAdapter.health", () => {
 
 describe("Gmail token refresh + OAuth state", () => {
   it("46 OAuth state expires after 10 minutes", async () => {
-    const start = startGmailOAuth({
+    const start = await startGmailOAuth({
       organizationId: "org_x",
       userId: "user_x",
       returnPath: "/x",
@@ -946,15 +946,15 @@ describe("Gmail token refresh + OAuth state", () => {
       clientId: TEST_CLIENT_ID,
     });
     // Mutate the expiry by replacing the entry directly.
-    const stored = gmailOAuthStateStore.get(start.state);
+    const stored = await gmailOAuthStateStore.get(start.state);
     expect(stored).not.toBeNull();
     // Replace with an expired entry.
     const expired = stored!;
-    gmailOAuthStateStore.put({
+    await gmailOAuthStateStore.put({
       ...expired,
       expiresAt: new Date(Date.now() - 1000).toISOString(),
     });
-    expect(gmailOAuthStateStore.get(start.state)).toBeNull();
+    expect(await gmailOAuthStateStore.get(start.state)).toBeNull();
   });
 
   it("47 Gmail token removal disconnects the user", () => {
@@ -971,8 +971,8 @@ describe("Gmail token refresh + OAuth state", () => {
     expect(gmailTokenStore.get("org_x", "user_x")).toBeNull();
   });
 
-  it("48 Gmail OAuth state nonce is non-trivial entropy", () => {
-    const a = startGmailOAuth({
+  it("48 Gmail OAuth state nonce is non-trivial entropy", async () => {
+    const a = await startGmailOAuth({
       organizationId: "org_x",
       userId: "user_x",
       returnPath: "/x",
@@ -980,7 +980,7 @@ describe("Gmail token refresh + OAuth state", () => {
       redirectUri: TEST_REDIRECT,
       clientId: TEST_CLIENT_ID,
     });
-    const b = startGmailOAuth({
+    const b = await startGmailOAuth({
       organizationId: "org_x",
       userId: "user_x",
       returnPath: "/x",

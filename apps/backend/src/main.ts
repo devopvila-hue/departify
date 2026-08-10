@@ -14,6 +14,14 @@ import { SupabaseToolStateStore } from "./customer-zero/supabase-tool-state-stor
 import { SupabaseConversationStore } from "./customer-zero/supabase-conversation-store.js";
 import { SupabaseInboxStore } from "./customer-zero/supabase-inbox-store.js";
 import {
+  SupabaseGoogleTokenStore,
+  setGoogleTokenStore,
+} from "./customer-zero/google-tokens.js";
+import {
+  SupabaseOAuthStateStore,
+  setGoogleOAuthStateStore,
+} from "./customer-zero/oauth-state.js";
+import {
   getCustomerZeroReportRepository,
   listCustomerZeroSessions,
 } from "./customer-zero/customer-zero-session.js";
@@ -55,6 +63,21 @@ try {
   deps.toolState = new SupabaseToolStateStore(supabaseAuthConfig);
   deps.conversations = new SupabaseConversationStore(supabaseAuthConfig);
   deps.inbox = new SupabaseInboxStore(supabaseAuthConfig);
+  // Durable Google OAuth token persistence. Required in production —
+  // tokens MUST survive Railway backend restarts. The in-memory
+  // fallback is dev / tests only.
+  setGoogleTokenStore(new SupabaseGoogleTokenStore(supabaseAuthConfig));
+  console.log(
+    `[google-oauth] durable Supabase token store wired`,
+  );
+  // Durable OAuth state nonce store. REQUIRED in production: the
+  // callback must resolve the state nonce on ANY replica/restart —
+  // an in-memory store produces the silent consent loop across
+  // instances.
+  setGoogleOAuthStateStore(new SupabaseOAuthStateStore(supabaseAuthConfig));
+  console.log(
+    `[google-oauth] durable Supabase oauth-state store wired`,
+  );
 } catch (cause) {
   const message = cause instanceof Error ? cause.message : String(cause);
   if (config.environment === "production") {

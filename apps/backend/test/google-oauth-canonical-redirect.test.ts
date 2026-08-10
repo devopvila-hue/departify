@@ -190,6 +190,12 @@ describe("P0 — Google OAuth canonical redirect URI", () => {
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
+      if (url.includes("gmail.googleapis.com/gmail/v1/users/me/profile")) {
+        return new Response(
+          JSON.stringify({ emailAddress: "ceo@departify.app" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
       return realFetch(input, init);
     }) as unknown as typeof fetch;
 
@@ -254,7 +260,7 @@ describe("P0 — Google OAuth canonical redirect URI", () => {
     // State nonce registered. organizationId only travels through the
     // OAuth state store, NOT through any URL field the browser sees.
     const state: string = body.connection.oauthState;
-    const record = gmailOAuthStateStore.get(state);
+    const record = await gmailOAuthStateStore.get(state);
     expect(record?.organizationId).toBe(org);
     expect(record?.userId).toBe("user-a");
   });

@@ -1,46 +1,55 @@
-# GOAL AUTÓNOMO — CUSTOMER ZERO — URL → WOW → ADN → CONTEXTO → MARKETING → CONVERSACIÓN REAL
+# GOAL AUTÓNOMO — DEPARTIFY — CONTINUE INTERRUPTED P0 FROM CLAUDE CODE
 
-## Estado de partida (Sprint 56, commit 0261709)
-Vertical slice validado: Portal → POST /api/customer-zero/marketing → pipeline
-existente → rawData → discovery → provisioning → Marketing → primer resultado.
-rawData llega a discovery; el contexto reduce gaps. NO estaba demostrado:
-descubrir la empresa por sí mismo, DNA suficiente, contexto → Marketing,
-conversación real, comportamiento de Departamento.
+## POST-OAUTH GMAIL OPERATIONAL RECOVERY + CENTRAL CHAT REALITY
 
-## Objetivo (resultado de producto verificable)
-URL → investigar REALMENTE → "esto hemos entendido" → confirmar/corregir →
-gaps/preguntas imprescindibles → Company DNA real → contexto disponible →
-Marketing preparado → conversación contextualizada con hechos reales.
+Se continúa una implementación INTERRUMPIDA de otro agente (Claude Code).
 
-## Bloqueos reales encontrados (auditoría Fase 1)
-- **A. No existe capacidad de análisis web real** (sin HTTP client, sin scraper;
-  `phaseDataCollection` es placeholder).
-- **G. No existe ninguna vía de conversación** (no chat, no historial, no endpoint).
-- **H. MiniMax NO es operativo**: `MINIMAX_BASE_URL` = `https://api.minimax.example.com/v1`
-  (dominio reservado, DNS falla) y la API key devuelve 401. **Bloqueo demostrado.**
-- **E. El contexto empresarial llega a agentes solo vía `discovery.get`** leyendo
-  el DiscoveryReportRepository; no había conversación que lo usara.
+REGLAS CRÍTICAS:
+- NO reiniciar el sprint.
+- NO fiarse del informe escrito previo como verdad actual.
+- NO rehacer trabajo completado a ciegas.
+- NO revertir cambios sin commitear.
+- NO descartar el working tree actual.
+- NO `reset --hard`. NO `checkout` sobre modificaciones existentes.
+- El agente anterior se quedó sin tokens MID-IMPLEMENTACIÓN.
 
-## Decisiones (mínimo real, sin nueva arquitectura)
-- **Provider LLM real**: el bloqueo de MiniMax está demostrado → se reutiliza el
-  provider OpenAI (OpenAI-compatible) con `OPENAI_BASE_URL` apuntando a la
-  gateway local (Ollama, `qwen3:1.7b`). Sin paquete nuevo, sin clave externa.
-- **Web analysis real**: `fetch` de Node + extracción HTML + interpretación LLM
-  real → `rawData` (DNA shape). Sin fixtures.
-- **Conversación real**: nuevo tool `marketing.chat` en el catálogo core que lee
-  el DiscoveryReportRepository (contexto real) y llama al LLM Router real,
-  ejecutado como `agent_marketing_director` a través del runtime real.
-- **Contexto/Brain**: NO se crea paquete Brain. Se reutiliza el
-  `CompanyDiscoveryReport` (DNA + gaps + preguntas) persistido en el
-  `DiscoveryReportRepository` — ese es el Brain funcional.
-- **Session**: composición persistente por organización (in-memory) para que el
-  contexto sobreviva entre pasos del flujo.
+Primera responsabilidad: RECUPERAR EL ESTADO EXACTO actual desde
+git + working tree + tests y continuar desde ahí.
 
-## Regla de producto congelada
-El onboarding empieza con "¿Cuál es la web de tu empresa?", no "Cuéntanos tu
-empresa". Departify trabaja; el CEO decide.
+## Producto
+Departify es un Sistema Operativo de Negocio para PYMEs/CEOs.
+El CEO no sabe ni le importa AI, modelos, OAuth, scopes, tokens o infraestructura.
+El CEO quiere que la empresa funcione.
 
-## Fuera de alcance
-NO IA nueva por impulso (la conversación usa el runtime real), NO Stripe, NO
-auth, NO Supabase nueva, NO Kanban, NO scheduler, NO nuevos Departamentos,
-NO refactors masivos, NO "ya que estamos". Business Discovery congelado. ROSA congelado.
+## Criterio de aceptación dorado (DoD de producto)
+
+1. CEO: "¿Tengo algún correo importante?" → Departify LEE de verdad el Gmail
+   conectado del CEO y da una respuesta útil y grounded (datos reales).
+2. CEO: "hola" → Departify responde conversacionalmente.
+   NO: "Mensaje recibido", "Listo", "Elvira está lista para ponerse a trabajar."
+
+## Hecho = (criterio de done)
+
+- [ ] Auditoría de recuperación completa del working tree (A–G del goal) documentada.
+- [ ] P0-1..P0-10 implementados/resueltos respetando la arquitectura existente
+      (sin runtimes nuevos, sin OAuthV2, sin ChatRuntimeV2, sin refactors masivos).
+- [ ] P0-2: credencial Google durable (Supabase u otro repo seguro existente),
+      NO en memoria de proceso. Sobrevive a reinicio de Railway.
+- [ ] P0-3: reconnect sin refresh_token nuevo preserva el existente.
+- [ ] P0-4: scopes GRANTED (no requested) → capacidades existentes exactas.
+- [ ] P0-5: probe operacional real Gmail (readonly) antes de declarar connected.
+- [ ] P0-6: una única fuente de verdad de conexión (Connections + Central Chat compatibles).
+- [ ] P0-7: "¿Tengo algún correo importante?" → GmailAdapter → API real → respuesta grounded.
+- [ ] P0-8: "hola" → respuesta conversacional real del asistente.
+- [ ] P0-9: tarjeta Elvira-ready NO se repite tras cada mensaje del CEO (solo proactividad legítima y grounded).
+- [ ] P0-10: Central Chat Sessions V1 intacta (5 activas, archivo, Supabase, compactación, aislamiento org).
+- [ ] Tests A–Z del goal escritos y VERDES sin debilitar aserciones.
+- [ ] `pnpm -r lint`, `pnpm -r typecheck`, tests, `pnpm -r build`, `pnpm check` verdes.
+- [ ] Commit único coherente (sugerido: "fix(customer-zero): complete Gmail operational path and real chat responses").
+- [ ] Push (solo si quality gates verdes; sin force push) y verificación del deploy si aplica.
+- [ ] Informe final con los 33 puntos y FINAL STATUS en {PASS | READY FOR FOUNDER HUMAN VALIDATION | BLOCKED | FAIL}.
+- [ ] NUNCA llamarlo PASS sin validación real de Gmail en producción (cuenta real).
+
+STOP tras este P0. NO Calendar, NO Drive, NO otro departamento, NO otro sprint.
+Customer Zero primero. El objetivo NO es "OAuth funciona": es que el CEO pregunte
+por su correo y Departify SEPA la respuesta.

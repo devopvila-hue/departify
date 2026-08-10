@@ -94,7 +94,7 @@ describe("CZ03 — Google OAuth unified handshake (routes)", () => {
     expect(body.connection.authorizationUrl).toContain("redirect_uri=");
     expect(body.connection.oauthState).toBeTruthy();
     // The state nonce is registered in the server-side OAuth state store.
-    expect(gmailOAuthStateStore.get(body.connection.oauthState)).not.toBeNull();
+    expect(await gmailOAuthStateStore.get(body.connection.oauthState)).not.toBeNull();
   });
 
   it("P0 redirect_uri: with PUBLIC_BASE_URL=https://app.departify.app the authorization URL contains exactly https://app.departify.app/connections/google/callback", async () => {
@@ -209,6 +209,12 @@ describe("CZ03 — Google OAuth unified handshake (routes)", () => {
       if (url.includes("userinfo")) {
         return new Response(
           JSON.stringify({ email: "ceo@departify.app", name: "CEO" }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      if (url.includes("gmail.googleapis.com/gmail/v1/users/me/profile")) {
+        return new Response(
+          JSON.stringify({ emailAddress: "ceo@departify.app" }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }

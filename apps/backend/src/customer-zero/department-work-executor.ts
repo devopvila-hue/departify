@@ -401,9 +401,18 @@ export class DepartmentWorkExecutor {
         `La capacidad ${capability} aún no tiene un ejecutor cableado.`,
       );
     }
+    if (!creds || creds.provider !== "mautic") {
+      return this.failTask(
+        task,
+        input,
+        "missing_credentials",
+        `Mautic no está conectado para esta capacidad.`,
+      );
+    }
+    const mauticCreds = creds;
 
     try {
-      const builtResult = await executor(creds, input, new AbortController().signal);
+      const builtResult = await executor(mauticCreds, input, new AbortController().signal);
       // 5. Persist the result + mark the task completed + record activity.
       const resultInput: CreateDepartmentResultInput = {
         organizationId: input.organizationId,

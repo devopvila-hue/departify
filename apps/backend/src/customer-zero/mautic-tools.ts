@@ -62,14 +62,19 @@ async function loadMauticCredentials(signal: AbortSignal): Promise<
     };
   }
   const creds = getCredentials(resolution.handle);
-  if (!creds) {
+  if (!creds || creds.provider !== "mautic") {
     return {
       ok: false,
       code: "missing",
       message: "No se pudieron cargar las credenciales internas de Mautic.",
     };
   }
-  return { ok: true, baseUrl: creds.baseUrl, clientId: creds.clientId, clientSecret: creds.clientSecret };
+  return {
+    ok: true,
+    baseUrl: creds.baseUrl,
+    clientId: creds.clientId,
+    clientSecret: creds.clientSecret,
+  };
 }
 
 export function createMauticTestConnectionToolDefinition(): ToolDefinition<

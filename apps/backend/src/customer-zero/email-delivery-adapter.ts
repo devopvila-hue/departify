@@ -143,13 +143,13 @@ export class ResendEmailDeliveryAdapter implements EmailDeliveryAdapter {
       );
     }
     const creds = getCredentials(resolution.handle);
-    if (!creds) {
+    if (!creds || creds.provider !== "resend") {
       throw new EmailDeliveryError(
         "missing_credentials",
         "Resend no tiene credenciales cargadas.",
       );
     }
-    return creds.clientSecret;
+    return creds.apiKey;
   }
 
   async verifyDomain(domain: string): Promise<DomainAuthenticationStatus> {

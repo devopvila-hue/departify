@@ -107,12 +107,16 @@ export function speakerForIntent(intent: string): ChatSpeaker {
  * derived from real events — no fabricated steps.
  */
 export function workStatesForTurn(input: EnrichmentInput): readonly WorkState[] {
-  const states: WorkState[] = ["received"];
+  // Conversational operating system: only emit work-state pills when
+  // there is actually work being delegated. A greeting, a meta
+  // question, or a help question does NOT need "Mensaje recibido" /
+  // "Listo" pills — it needs a normal assistant reply as a bubble.
+  // The pills are reserved for real delegation, real tool execution,
+  // and real errors so they carry signal.
   if (!input.marketingInvoked) {
-    states.push("completed");
-    return states;
+    return [];
   }
-  states.push("delegated", "analyzing");
+  const states: WorkState[] = ["delegated", "analyzing"];
   if (input.connectionBlocked) {
     states.push("blocked", "error");
     return states;

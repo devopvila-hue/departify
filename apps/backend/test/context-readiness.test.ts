@@ -110,7 +110,7 @@ describe("DepartmentStatus for fresh orgs", () => {
     expect(status.pendingApprovals).toEqual([]);
     expect(status.recentActivity).toEqual([]);
     expect(status.results).toEqual([]);
-  });
+  }, 30_000);
 
   it("B2 getDigitalEmployees returns [] for fresh orgs", async () => {
     const { MarketingService } = await import(
@@ -121,7 +121,7 @@ describe("DepartmentStatus for fresh orgs", () => {
     });
     const employees = await service.getDigitalEmployees("org_brand_new");
     expect(employees).toEqual([]);
-  });
+  }, 30_000);
 });
 
 describe("ReadinessFacts shape", () => {

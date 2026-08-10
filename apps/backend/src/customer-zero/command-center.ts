@@ -283,6 +283,14 @@ const ROUTING_RULES: readonly RoutingRule[] = [
     rationale:
       "The CEO is asking a business data question about an already-connected external tool (Mautic, CRM, etc.).",
     match: (input) => {
+      // Email / Gmail read questions ("¿Tengo algún correo
+      // importante?", "¿Cuáles debería contestar primero?") route to
+      // the SAME external-tool dispatch. Whether Gmail is really
+      // operational is resolved inside `processCeoMessage` from the
+      // durable token store — never from the session connection map —
+      // so this rule stays purely message-based and keeps working
+      // after a backend restart.
+      if (isEmailReadQuestion(input.message)) return true;
       const isDataQuery =
         /\b(cu[áa]ntos\s+contactos?|cu[áa]ntas?\s+personas?|how many contacts|lista de contactos|busca\s+(en\s+mautic\s+)?(contactos?|clientes?)|search\s+contacts|qu[ée]\s+(hay|tenemos|tiene|cu[aá]ntos)\s+(en\s+)?mautic)\b/i.test(
           input.message,
@@ -928,6 +936,36 @@ const TOOL_KEYWORDS: readonly { keywords: readonly RegExp[]; toolId: string }[] 
 ];
 
 /**
+ * True when the CEO's message is asking about their email inbox —
+ * "¿Tengo algún correo importante?", "¿Qué correos tengo sin leer?",
+ * "¿Cuáles debería contestar primero?".
+ *
+ * Deliberately message-based (no connection-state dependency): the
+ * real Gmail operationality is resolved later from the durable token
+ * store, so this keeps working after a backend restart and never
+ * fabricates a connection.
+ */
+export function isEmailReadQuestion(message: string): boolean {
+  const lower = message.toLowerCase();
+  const mentionsEmail =
+    /\b(correos?|emails?|inbox|bandeja\s+de\s+entrada|bandeja|buz[oó]n(?: de entrada)?|gmail|google\s+mail)\b/i.test(
+      lower,
+    );
+  if (mentionsEmail) {
+    // An email vocabulary mention combined with an inbox-reading
+    // intent (importance, unread, review, "tengo", "hay"...).
+    return /\b(important|importantes?|unread|pendientes?|no\s+le[ií]dos?|le[ií]dos?|nuevos?|revisar|revisa|tengo|hay|alguno|contestar|responder|respuestas?|respu[eé]stame)\b/i.test(
+      lower,
+    );
+  }
+  // Email follow-ups that continue the inbox conversation without
+  // repeating the word "correo" ("¿Cuáles debería contestar primero?").
+  return /\b(cu[aá]l(?:es)?\s+deber[ií]a(?:mos|s)?\s+(contestar|responder)|contestar(?:los)?\s+primero|responder(?:los)?\s+primero)\b/i.test(
+    lower,
+  );
+}
+
+/**
  * Find the connector the CEO mentioned (or wanted) and produce a
  * fully-formed connection suggestion. If the tool is not in the catalog we
  * still produce a suggestion with `toolId: null` so the portal can show an
@@ -1096,22 +1134,31 @@ export function buildProactiveOpening(
   const marketingActive = !!work;
   const objective = work?.goal ?? session.state.onboarding?.goal ?? null;
 
-  events.push({
-    kind: "intent_proactive",
-    intent: "open",
-    title: t(
-      session.state.locale,
-      "Elvira toma la iniciativa",
-      "Elvira takes the initiative",
-    ),
-    message: objective
-      ? buildProactiveStrategyMessage(session.state.locale, objective, work)
-      : t(
-          session.state.locale,
-          "Elvira ya está lista para ponerse a trabajar. Dile qué quieres conseguir.",
-          "Elvira is ready to start working. Tell her what you want to achieve.",
-        ),
-  });
+  // Honest proactivity trigger: the "Elvira toma la iniciativa" card
+  // only appears when there is something grounded to say — an active
+  // work plan (items in motion, waiting on a connection, approvals)
+  // or a company objective to advance. Without either, there is no
+  // legitimate proactive message: "Elvira ya está lista, dime qué
+  // quieres conseguir" is zero-value noise the moment the CEO already
+  // spoke. The opening surface stays silent instead.
+  if (objective || marketingActive) {
+    events.push({
+      kind: "intent_proactive",
+      intent: "open",
+      title: t(
+        session.state.locale,
+        "Elvira toma la iniciativa",
+        "Elvira takes the initiative",
+      ),
+      message: objective
+        ? buildProactiveStrategyMessage(session.state.locale, objective, work)
+        : t(
+            session.state.locale,
+            "Elvira ya está lista para ponerse a trabajar. Dile qué quieres conseguir.",
+            "Elvira is ready to start working. Tell her what you want to achieve.",
+          ),
+    });
+  }
 
   if (marketingActive) {
     const team = session.state.marketingTeam;

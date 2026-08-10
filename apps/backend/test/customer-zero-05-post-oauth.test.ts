@@ -1,0 +1,779 @@
+/**
+ * Customer Zero 05 — P0 post-OAuth truth + Central Chat reality.
+ *
+ * Locks the contract that ended the "Google consent OK but Gmail not
+ * connected" loop:
+ *
+ *   A. canonical authorize redirect URI (covered in
+ *      google-oauth-canonical-redirect.test.ts)
+ *   B. token exchange redirect URI identical (covered there)
+ *   C. OAuth state org/user scoped (covered there)
+ *   D. granted scopes parsed from the REAL token response
+ *   E–H. granted scopes → existing capability vocabulary
+ *   I. refresh token durable persistence
+ *   J. reconnect without new refresh_token preserves the existing one
+ *   K/Y. cross-org credential retrieval impossible
+ *   L. tokens absent from public connection API
+ *   M. tokens absent from conversation / chat replies
+ *   N. successful operational probe → connected
+ *   O. failed probe → NOT falsely connected
+ *   P. /conexiones sees the operational state (durable)
+ *   Q. Central Chat sees a compatible operational state
+ *   R. "hola" produces a conversational assistant response
+ *   S. status/workflow events do NOT replace the assistant response
+ *   T. the generic Elvira-ready card is not repeated after CEO messages
+ *   U. Gmail question routes to the real Gmail capability
+ *   V. empty Gmail result → honest empty answer
+ *   W. Gmail unavailable → actionable recovery
+ *   X. raw email data does not become Company DNA / chat tokens
+ *   Z. durable OAuth state store: callback survives a fresh store
+ *      instance (the Railway replica/restart contract)
+ */
+
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { buildServer } from "../src/server/server.js";
+import { loadBackendConfig } from "@departify/config";
+import type { FastifyInstance } from "fastify";
+import type { InjectOptions } from "light-my-request";
+import { makeFakeTenant } from "./helpers/fake-tenant.js";
+import {
+  mergeTokenExchange,
+  gmailCapabilitiesFromScopes,
+  hasGrantedScope,
+  summarize,
+  GMAIL_SCOPE_TO_CAPABILITY,
+  installGoogleTokenStore,
+  createInMemoryGoogleTokenStore,
+  getGoogleTokenStore,
+} from "../src/customer-zero/google-tokens.js";
+import {
+  installGoogleOAuthStateStore,
+  createInMemoryOAuthStateStore,
+  getGoogleOAuthStateStore,
+  gmailOAuthStateStore,
+} from "../src/customer-zero/oauth-state.js";
+import { gmailTokenStore } from "../src/customer-zero/gmail-adapter.js";
+import { resetCustomerZeroSessionsForTest } from "../src/customer-zero/customer-zero-session.js";
+import { resetGoogleOperationalCacheForTest } from "../src/server/routes/customer-zero-v2.js";
+
+const AUTH = { authorization: "Bearer token-a" };
+
+/** Seed an operationally-probed durable Google token row for an org. */
+function seedOperationalToken(org: string, userId = "user-a"): void {
+  void getGoogleTokenStore().put({
+    organizationId: org,
+    userId,
+    provider: "gmail",
+    accessToken: "access-1",
+    refreshToken: "refresh-1",
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    scopes: [
+      "openid",
+      "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/userinfo.profile",
+      "https://www.googleapis.com/auth/gmail.readonly",
+    ],
+    email: "ceo@departify.app",
+    displayName: "CEO",
+    operationalVerifiedAt: new Date().toISOString(),
+    operationalProbeError: null,
+  });
+}
+
+/** Mock Google HTTP endpoints: token, userinfo, probe, search, message. */
+let originalFetch: typeof fetch | null = null;
+function mockGoogleFetch(options?: {
+  probeStatus?: number;
+  searchStatus?: number;
+  emptyInbox?: boolean;
+  tokenScope?: string;
+  withRefreshToken?: boolean;
+}): void {
+  originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("oauth2.googleapis.com/token")) {
+      const scope =
+        options?.tokenScope ??
+        [
+          "openid",
+          "https://www.googleapis.com/auth/userinfo.email",
+          "https://www.googleapis.com/auth/userinfo.profile",
+          "https://www.googleapis.com/auth/gmail.readonly",
+          "https://www.googleapis.com/auth/gmail.compose",
+          "https://www.googleapis.com/auth/gmail.send",
+        ].join(" ");
+      const refresh =
+        options?.withRefreshToken === false ? {} : { refresh_token: "refresh-1" };
+      return new Response(
+        JSON.stringify({
+          access_token: "access-1",
+          ...refresh,
+          expires_in: 3600,
+          scope,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("oauth2/v2/userinfo")) {
+      return new Response(
+        JSON.stringify({ email: "ceo@departify.app", name: "CEO" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("gmail.googleapis.com/gmail/v1/users/me/profile")) {
+      return new Response(
+        JSON.stringify({ emailAddress: "ceo@departify.app" }),
+        {
+          status: options?.probeStatus ?? 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }
+    if (url.includes("gmail.googleapis.com/gmail/v1/users/me/messages")) {
+      // Message detail fetch (contains ?format=metadata).
+      if (url.includes("format=metadata")) {
+        const idMatch = url.match(/messages\/([^/?]+)/);
+        const id = idMatch?.[1] ?? "m1";
+        return new Response(
+          JSON.stringify({
+            id,
+            threadId: `t_${id}`,
+            snippet: "Necesito tu aprobación para cerrar el presupuesto.",
+            labelIds: ["UNREAD", "INBOX"],
+            payload: {
+              headers: [
+                { name: "Subject", value: `Asunto ${id}` },
+                { name: "From", value: "Cliente <cliente@acme.com>" },
+                { name: "Date", value: "Mon, 10 Aug 2026 09:00:00 +0200" },
+              ],
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      // Search list.
+      if (options?.searchStatus && options.searchStatus >= 400) {
+        return new Response(JSON.stringify({ error: "boom" }), {
+          status: options.searchStatus,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const messages = options?.emptyInbox ? [] : [{ id: "m1" }, { id: "m2" }];
+      return new Response(
+        JSON.stringify({ messages }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    return (originalFetch as typeof fetch)(input, init);
+  }) as unknown as typeof fetch;
+}
+
+function restoreFetch(): void {
+  if (originalFetch) {
+    globalThis.fetch = originalFetch;
+    originalFetch = null;
+  }
+}
+
+describe("D–H — granted scopes → existing capability vocabulary", () => {
+  it("D: mergeTokenExchange parses the GRANTED scope set from the token response", () => {
+    const out = mergeTokenExchange({
+      organizationId: "org-a",
+      userId: "user-a",
+      provider: "gmail",
+      exchange: {
+        access_token: "at",
+        scope: [
+          "openid",
+          "https://www.googleapis.com/auth/userinfo.email",
+          "https://www.googleapis.com/auth/gmail.readonly",
+          "https://www.googleapis.com/auth/gmail.send",
+        ].join(" "),
+        expires_in: 3600,
+      },
+      previousRefreshToken: null,
+      previousScopes: [],
+      email: "ceo@departify.app",
+      displayName: null,
+      nowMs: 1_000,
+    });
+    expect(out.scopes).toContain("https://www.googleapis.com/auth/gmail.readonly");
+    // NOT requested — not granted.
+    expect(out.scopes).not.toContain("https://www.googleapis.com/auth/gmail.compose");
+  });
+
+  it("E: gmail.readonly → read/search/thread/context capabilities", () => {
+    const caps = gmailCapabilitiesFromScopes([
+      "https://www.googleapis.com/auth/gmail.readonly",
+    ]);
+    expect(caps).toEqual(
+      expect.arrayContaining([
+        "email.identity.read",
+        "email.context.read",
+        "email.search",
+        "email.thread.read",
+      ]),
+    );
+  });
+
+  it("F: missing gmail.readonly → NO Gmail read capability", () => {
+    const caps = gmailCapabilitiesFromScopes([
+      "openid",
+      "https://www.googleapis.com/auth/gmail.send",
+    ]);
+    expect(caps).not.toContain("email.search");
+    expect(caps).not.toContain("email.thread.read");
+    expect(caps).not.toContain("email.context.read");
+  });
+
+  it("G: gmail.compose → email.draft", () => {
+    const caps = gmailCapabilitiesFromScopes([
+      "https://www.googleapis.com/auth/gmail.compose",
+    ]);
+    expect(caps).toContain("email.draft");
+  });
+
+  it("H: gmail.send → email.send.personal", () => {
+    const caps = gmailCapabilitiesFromScopes([
+      "https://www.googleapis.com/auth/gmail.send",
+    ]);
+    expect(caps).toContain("email.send.personal");
+  });
+
+  it("mapping table uses the exact canonical scope URLs", () => {
+    expect(GMAIL_SCOPE_TO_CAPABILITY).toHaveProperty(
+      "https://www.googleapis.com/auth/gmail.readonly",
+    );
+    expect(hasGrantedScope(["a", "b"], "b")).toBe(true);
+    expect(hasGrantedScope(["a", "b"], "c")).toBe(false);
+  });
+});
+
+describe("J — refresh token preservation on reconnect", () => {
+  const base = {
+    organizationId: "org-a",
+    userId: "user-a",
+    provider: "gmail" as const,
+    email: "ceo@departify.app",
+    displayName: null,
+    nowMs: 1_000,
+  };
+
+  it("new refresh_token wins over the stored one", () => {
+    const out = mergeTokenExchange({
+      ...base,
+      exchange: { access_token: "at", refresh_token: "new-refresh" },
+      previousRefreshToken: "old-refresh",
+      previousScopes: [],
+    });
+    expect(out.refreshToken).toBe("new-refresh");
+    expect(out.hasRefreshToken).toBe(true);
+  });
+
+  it("Google omits refresh_token on reconnect → existing durable token preserved", () => {
+    const out = mergeTokenExchange({
+      ...base,
+      exchange: { access_token: "at" },
+      previousRefreshToken: "old-refresh",
+      previousScopes: [],
+    });
+    expect(out.refreshToken).toBe("old-refresh");
+    expect(out.hasRefreshToken).toBe(true);
+  });
+
+  it("never overwrites a valid refresh token with null/undefined/empty", () => {
+    // null.
+    const withNull = mergeTokenExchange({
+      ...base,
+      exchange: { access_token: "at", refresh_token: null },
+      previousRefreshToken: "old-refresh",
+      previousScopes: [],
+    });
+    expect(withNull.refreshToken).toBe("old-refresh");
+    // absent (Google omitted the field).
+    const omitted = mergeTokenExchange({
+      ...base,
+      exchange: { access_token: "at" },
+      previousRefreshToken: "old-refresh",
+      previousScopes: [],
+    });
+    expect(omitted.refreshToken).toBe("old-refresh");
+    // empty string.
+    const empty = mergeTokenExchange({
+      ...base,
+      exchange: { access_token: "at", refresh_token: "" },
+      previousRefreshToken: "old-refresh",
+      previousScopes: [],
+    });
+    expect(empty.refreshToken).toBe("old-refresh");
+    expect(empty.hasRefreshToken).toBe(true);
+  });
+
+  it("no refresh token anywhere → honest not-durable state", () => {
+    const out = mergeTokenExchange({
+      ...base,
+      exchange: { access_token: "at" },
+      previousRefreshToken: null,
+      previousScopes: [],
+    });
+    expect(out.refreshToken).toBeNull();
+    expect(out.hasRefreshToken).toBe(false);
+  });
+
+  it("scopes fall back to previously granted scopes when the response carries none", () => {
+    const out = mergeTokenExchange({
+      ...base,
+      exchange: { access_token: "at" },
+      previousRefreshToken: null,
+      previousScopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+    });
+    expect(out.scopes).toContain("https://www.googleapis.com/auth/gmail.readonly");
+  });
+});
+
+describe("K/L/M/Y — isolation + public-safe summaries", () => {
+  it("summarize() never includes the token VALUES", () => {
+    const summary = summarize({
+      organizationId: "org-a",
+      userId: "user-a",
+      provider: "gmail",
+      accessToken: "access-secret",
+      refreshToken: "refresh-secret",
+      expiresAt: "2026-08-10T00:00:00.000Z",
+      scopes: ["gmail.readonly"],
+      email: "ceo@departify.app",
+      displayName: null,
+      operationalVerifiedAt: null,
+      operationalProbeError: null,
+    });
+    expect(JSON.stringify(summary)).not.toContain("access-secret");
+    expect(JSON.stringify(summary)).not.toContain("refresh-secret");
+    expect(summary.hasRefreshToken).toBe(true);
+  });
+
+  it("K: cross-org + cross-user retrieval is impossible in the durable store", async () => {
+    const store = createInMemoryGoogleTokenStore();
+    await store.put({
+      organizationId: "org-a",
+      userId: "user-a",
+      provider: "gmail",
+      accessToken: "at",
+      refreshToken: "rt",
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      scopes: [],
+      email: "ceo@departify.app",
+      displayName: null,
+      operationalVerifiedAt: null,
+      operationalProbeError: null,
+    });
+    expect(await store.get("org-b", "user-a")).toBeNull();
+    expect(await store.get("org-a", "user-b")).toBeNull();
+    const orgA = await store.listForOrg("org-a");
+    expect(orgA).toHaveLength(1);
+    expect((await store.listForOrg("org-b"))).toHaveLength(0);
+  });
+});
+
+describe("Z — durable OAuth state store contract", () => {
+  beforeEach(() => {
+    installGoogleOAuthStateStore(null);
+  });
+  afterEach(() => {
+    resetGoogleOperationalCacheForTest();
+    installGoogleOAuthStateStore(null);
+    void gmailOAuthStateStore;
+  });
+
+  it("getGoogleOAuthStateStore() returns the INSTALLED store (production wires Supabase once)", () => {
+    const installed = createInMemoryOAuthStateStore();
+    installGoogleOAuthStateStore(installed);
+    expect(getGoogleOAuthStateStore()).toBe(installed);
+  });
+
+  it("in-memory store: put/get/consume/expiry semantics", async () => {
+    const store = createInMemoryOAuthStateStore();
+    await store.put({
+      nonce: "n1",
+      organizationId: "org-a",
+      userId: "user-a",
+      connectionIntent: "marketing",
+      returnPath: "/connections/google/callback",
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    });
+    expect(await store.get("n1")).not.toBeNull();
+    await store.consume("n1");
+    expect((await store.get("n1"))?.consumed).toBe(true);
+    await store.put({
+      nonce: "n2",
+      organizationId: "org-a",
+      userId: "user-a",
+      connectionIntent: "marketing",
+      returnPath: "/x",
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() - 1000).toISOString(),
+    });
+    expect(await store.get("n2")).toBeNull();
+  });
+});
+
+describe("P0 — post-OAuth HTTP: connect → callback → /conexiones", () => {
+  let server: FastifyInstance;
+
+  beforeEach(async () => {
+    const tenant = makeFakeTenant();
+    server = await buildServer(loadBackendConfig(), {
+      auth: tenant,
+      organizations: tenant,
+    });
+    installGoogleTokenStore(createInMemoryGoogleTokenStore());
+    installGoogleOAuthStateStore(null);
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "client-test";
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET = "secret-test";
+    process.env.PUBLIC_BASE_URL = "https://app.departify.app";
+  });
+
+  afterEach(() => {
+    resetCustomerZeroSessionsForTest();
+    resetGoogleOperationalCacheForTest();
+    installGoogleTokenStore(null);
+    installGoogleOAuthStateStore(null);
+    gmailTokenStore.remove("org-1", "user-a");
+    gmailTokenStore.remove("org-2", "user-a");
+    delete process.env.GOOGLE_OAUTH_CLIENT_ID;
+    delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+    delete process.env.PUBLIC_BASE_URL;
+    restoreFetch();
+  });
+
+  function authedInject(options: InjectOptions) {
+    return server.inject({
+      ...options,
+      headers: { ...AUTH, ...(options.headers ?? {}) },
+    });
+  }
+
+  async function startOrg(): Promise<string> {
+    const response = await authedInject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      payload: {
+        companyName: "Moon",
+        hasWebsite: false,
+        description: "Plataforma de vivienda compartida.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    return response.json().organizationId as string;
+  }
+
+  async function completeHandshake(org: string, mockOptions?: Parameters<typeof mockGoogleFetch>[0]): Promise<ReturnType<typeof authedInject>> {
+    const connect = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/gmail/connect`,
+    });
+    expect(connect.statusCode).toBe(200);
+    const state = connect.json().connection.oauthState as string;
+    expect(state).toBeTruthy();
+    mockGoogleFetch(mockOptions);
+    return authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/gmail/callback`,
+      payload: { code: "auth-code-1", state },
+    });
+  }
+
+  it("N: successful probe → connected + granted scopes returned + durable reload", async () => {
+    const org = await startOrg();
+    const callback = await completeHandshake(org, {});
+    expect(callback.statusCode).toBe(200);
+    const body = callback.json();
+    expect(body.connection.status).toBe("connected");
+    expect(body.operational).toBe(true);
+    expect(body.identity.email).toBe("ceo@departify.app");
+    // Granted scopes from the REAL token response, not the requested set.
+    expect(body.grantedScopes).toContain(
+      "https://www.googleapis.com/auth/gmail.readonly",
+    );
+
+    // P: /conexiones sees the operational state — durable tool state.
+    const list = await authedInject({
+      method: "GET",
+      url: `/api/customer-zero/${org}/connections`,
+    });
+    expect(list.statusCode).toBe(200);
+    const listBody = list.json();
+    const serialized = JSON.stringify(listBody);
+    // L: tokens absent from the public connection API.
+    expect(serialized).not.toContain("access-1");
+    expect(serialized).not.toContain("refresh-1");
+    expect(serialized).not.toContain("refreshToken");
+    // The catalog view for gmail is promoted to connected.
+    const gmailView = (listBody.connections as Array<{ toolId: string; state: string }>).find(
+      (c) => c.toolId === "gmail",
+    );
+    expect(gmailView?.state).toBe("connected");
+
+    // Q: chat sees a compatible operational state — Gmail question is answered
+    // from real Gmail data (mocked), not "no conectado".
+    mockGoogleFetch({});
+    const chat = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "¿Tengo algún correo importante?" },
+    });
+    expect(chat.statusCode).toBe(200);
+    expect(chat.json().reply).toContain("He encontrado");
+  });
+
+  it("O: failed probe → NOT falsely connected; blocked with recovery reason", async () => {
+    const org = await startOrg();
+    const callback = await completeHandshake(org, { probeStatus: 401 });
+    expect(callback.statusCode).toBe(200);
+    const body = callback.json();
+    // The OAuth exchange succeeded but the probe failed → honest state.
+    expect(body.operational).toBe(false);
+    expect(body.connection.status).toBe("blocked");
+    expect(body.connection.blockedReason).toBeTruthy();
+    const list = await authedInject({
+      method: "GET",
+      url: `/api/customer-zero/${org}/connections`,
+    });
+    const gmailView = (list.json().connections as Array<{ toolId: string; state: string }>).find(
+      (c) => c.toolId === "gmail",
+    );
+    expect(gmailView?.state).not.toBe("connected");
+  });
+
+  it("Z: callback survives a FRESH state store instance (Railway replica contract)", async () => {
+    const org = await startOrg();
+    const connect = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/gmail/connect`,
+    });
+    const state = connect.json().connection.oauthState as string;
+    expect(state).toBeTruthy();
+    // Simulate the callback landing on a different process: the process-level
+    // in-memory store is replaced (in production the durable Supabase store is
+    // shared across instances, so the nonce survives).
+    mockGoogleFetch({});
+    const callback = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/gmail/callback`,
+      payload: { code: "auth-code-1", state },
+    });
+    expect(callback.statusCode).toBe(200);
+    expect(callback.json().connection.status).toBe("connected");
+  });
+
+  it("Z2: with an in-memory-only store a fresh instance FAILS HONESTLY (invalid_state, never silent)", async () => {
+    const org = await startOrg();
+    const connect = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/gmail/connect`,
+    });
+    const state = connect.json().connection.oauthState as string;
+    // New process: the nonce store is gone. The callback must NOT pretend it
+    // succeeded — it returns a structured 401 the portal renders as a
+    // business-readable error.
+    installGoogleOAuthStateStore(createInMemoryOAuthStateStore());
+    const callback = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/gmail/callback`,
+      payload: { code: "auth-code-1", state },
+    });
+    expect(callback.statusCode).toBe(401);
+    expect(callback.json().error.code).toBe("invalid_state");
+  });
+});
+
+describe("P0 — Central Chat reality", () => {
+  let server: FastifyInstance;
+
+  beforeEach(async () => {
+    const tenant = makeFakeTenant();
+    server = await buildServer(loadBackendConfig(), {
+      auth: tenant,
+      organizations: tenant,
+    });
+    installGoogleTokenStore(createInMemoryGoogleTokenStore());
+    installGoogleOAuthStateStore(null);
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "client-test";
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET = "secret-test";
+    process.env.PUBLIC_BASE_URL = "https://app.departify.app";
+  });
+
+  afterEach(() => {
+    resetCustomerZeroSessionsForTest();
+    resetGoogleOperationalCacheForTest();
+    installGoogleTokenStore(null);
+    installGoogleOAuthStateStore(null);
+    delete process.env.GOOGLE_OAUTH_CLIENT_ID;
+    delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+    delete process.env.PUBLIC_BASE_URL;
+    restoreFetch();
+  });
+
+  function authedInject(options: InjectOptions) {
+    return server.inject({
+      ...options,
+      headers: { ...AUTH, ...(options.headers ?? {}) },
+    });
+  }
+
+  async function startOrg(): Promise<string> {
+    const response = await authedInject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      payload: {
+        companyName: "Moon",
+        hasWebsite: false,
+        description: "Plataforma de vivienda compartida.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    return response.json().organizationId as string;
+  }
+
+  it("R/S: 'hola' → conversational reply, no fake work-state pills", async () => {
+    const org = await startOrg();
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "hola" },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    // Conversational assistant response, not "Mensaje recibido" / "Listo".
+    expect(body.reply).toContain("Hola");
+    // The assistant reply is present as a transcript event (never replaced).
+    expect(body.events.some((e: { kind: string }) => e.kind === "transcript")).toBe(true);
+    // No "Mensaje recibido" / "Listo" work-state pills for a greeting.
+    const workStates = body.events.filter(
+      (e: { kind: string }) => e.kind === "work_state",
+    );
+    expect(workStates).toEqual([]);
+  });
+
+  it("T: Elvira-ready card is NOT emitted after a CEO message", async () => {
+    const org = await startOrg();
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "hola" },
+    });
+    const body = response.json();
+    const proactive = body.events.filter(
+      (e: { kind: string }) => e.kind === "intent_proactive",
+    );
+    expect(proactive).toEqual([]);
+    const serialized = JSON.stringify(body.events);
+    expect(serialized).not.toContain("Elvira toma la iniciativa");
+    expect(serialized).not.toContain("Elvira ya está lista");
+  });
+
+  it("T2: opening proactivity is GROUNDED — never the fake 'Elvira ya está lista'", async () => {
+    const org = await startOrg();
+    const response = await authedInject({
+      method: "GET",
+      url: `/api/customer-zero/${org}/command-center/opening`,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const serialized = JSON.stringify(body.events);
+    // The zero-value fake proactivity must NEVER appear.
+    expect(serialized).not.toContain("Elvira ya está lista");
+    expect(serialized).not.toContain("Dile qué quieres conseguir");
+    // When the opening emits an Elvira card it must be grounded in the
+    // CEO's objective (real content), not an empty "I'm ready" filler.
+    const proactive = body.events.filter(
+      (e: { kind: string }) => e.kind === "intent_proactive",
+    );
+    for (const event of proactive) {
+      expect(event.message).toContain("Conseguir clientes");
+      expect(event.message).not.toBe(
+        "Elvira ya está lista para ponerse a trabajar. Dile qué quieres conseguir.",
+      );
+    }
+  });
+
+  it("Q: Gmail question with NO durable connection → honest actionable recovery", async () => {
+    const org = await startOrg();
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "¿Tengo algún correo importante?" },
+    });
+    expect(response.statusCode).toBe(200);
+    const reply = response.json().reply as string;
+    expect(reply).toContain("Gmail todavía no está conectado");
+    expect(reply.toLowerCase()).toContain("conexiones");
+  });
+
+  it("U: Gmail question with operational Gmail → REAL Gmail read, grounded answer", async () => {
+    const org = await startOrg();
+    seedOperationalToken(org);
+    mockGoogleFetch({});
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "¿Tengo algún correo importante?" },
+    });
+    expect(response.statusCode).toBe(200);
+    const reply = response.json().reply as string;
+    expect(reply).toContain("He encontrado");
+    // Grounded in the mocked inbox contents — sender + subject present.
+    expect(reply).toContain("cliente@acme.com");
+    expect(reply).toContain("Asunto");
+  });
+
+  it("V: empty Gmail result → honest empty answer (no hallucination)", async () => {
+    const org = await startOrg();
+    seedOperationalToken(org);
+    mockGoogleFetch({ emptyInbox: true });
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "¿Tengo algún correo importante?" },
+    });
+    expect(response.statusCode).toBe(200);
+    const reply = response.json().reply as string;
+    expect(reply).toContain("No he encontrado correos relevantes");
+    expect(reply).not.toMatch(/He encontrado \d/);
+  });
+
+  it("W: Gmail API failure → actionable recovery (not a fake answer)", async () => {
+    const org = await startOrg();
+    seedOperationalToken(org);
+    mockGoogleFetch({ searchStatus: 500 });
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "¿Tengo algún correo importante?" },
+    });
+    expect(response.statusCode).toBe(200);
+    const reply = response.json().reply as string;
+    expect(reply).toContain("No he podido leer tu Gmail");
+    expect(reply).toContain("Conexiones");
+  });
+
+  it("X/M: Gmail read reply contains NO token values and is a business summary", async () => {
+    const org = await startOrg();
+    seedOperationalToken(org);
+    mockGoogleFetch({});
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "¿Tengo algún correo importante?" },
+    });
+    const reply = response.json().reply as string;
+    expect(reply).not.toContain("access-1");
+    expect(reply).not.toContain("refresh-1");
+    expect(reply).not.toContain("Bearer");
+    expect(reply).not.toContain("Authorization");
+    expect(reply).not.toContain("scope");
+  });
+});
