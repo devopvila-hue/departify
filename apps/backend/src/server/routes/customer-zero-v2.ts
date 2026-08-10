@@ -1222,9 +1222,22 @@ export async function registerCustomerZeroV2Routes(
             email: tokenResult.identity.email,
           });
         } catch (cause) {
+          // STATE-MACHINE INVARIANT: every callback outcome must leave
+          // "connecting". On ANY failure we transition the connection to
+          // a terminal state with an actionable reason BEFORE returning
+          // the error — otherwise the card would stay "Conectando…"
+          // forever after a failed/never-arriving handshake.
+          const safeReason =
+            cause instanceof Error ? cause.message : String(cause);
+          transitionGoogleConnectionToTerminal(connection, safeReason);
+          await persistToolState(
+            session,
+            toolStateFromConnection(session, connection),
+          );
           if (cause instanceof GmailOAuthError) {
             return reply.code(401).send({
               organizationId,
+              connection,
               error: {
                 code: cause.code,
                 message: cause.message,
@@ -1236,12 +1249,20 @@ export async function registerCustomerZeroV2Routes(
           const err = cause as Error & { code?: string };
           // OAuth state validation failures (CSRF / replay /
           // org mismatch / user mismatch) emit an Error with a
-          // string `code`. Surface them as 401, not 500 — they
-          // are routine client errors, never infrastructure
-          // faults.
-          if (typeof err.code === "string") {
+          // string `code`. Surface them as 401 — they are routine
+          // client errors, never infrastructure faults. Other coded
+          // errors (e.g. credential_persisted_but_not_readable) are
+          // server-side and stay 500.
+          const oauthClientCodes = new Set([
+            "invalid_state",
+            "org_mismatch",
+            "user_mismatch",
+            "replay",
+          ]);
+          if (typeof err.code === "string" && oauthClientCodes.has(err.code)) {
             return reply.code(401).send({
               organizationId,
+              connection,
               error: {
                 code: err.code,
                 message: err.message,
@@ -1260,6 +1281,7 @@ export async function registerCustomerZeroV2Routes(
           });
           return reply.code(500).send({
             organizationId,
+            connection,
             error: {
               code,
               message: "Google OAuth callback failed.",
@@ -1924,7 +1946,78 @@ export async function requireSession(
     ...(deps.conversations ? { conversations: deps.conversations } : {}),
   });
   await hydrateSessionToolState(session);
+  // STATE-MACHINE INVARIANT: "connecting" is only valid while the OAuth
+  // state nonce is alive (10 minutes). If a Google connection is still
+  // "connecting" with a missing/expired/consumed nonce (the callback
+  // never arrived — e.g. the browser dropped the callback page), the
+  // connection MUST leave "connecting" and surface an actionable
+  // terminal state. Never "connecting" forever.
+  await reapStaleGoogleHandshakes(session);
   return session;
+}
+
+const GOOGLE_TOOL_IDS = new Set([
+  "gmail",
+  "google_workspace",
+  "google_calendar",
+  "google_drive",
+]);
+
+/**
+ * Transition a Google connection out of "connecting" into an actionable
+ * terminal state (blocked / needs_connection). Shared by the callback
+ * failure paths and the stale-handshake reaper.
+ */
+function transitionGoogleConnectionToTerminal(
+  connection: ConnectionState,
+  reason: string,
+): void {
+  connection.status = "blocked";
+  connection.lifecycle = "needs_connection";
+  connection.blockedReason = reason;
+  delete connection.authorizationUrl;
+  delete connection.oauthState;
+}
+
+/**
+ * For every Google connection still in status "connecting", verify the
+ * OAuth state nonce is still alive in the durable store. Missing,
+ * expired or already-consumed nonces mean the handshake will never
+ * complete → transition to a terminal state and persist it.
+ */
+async function reapStaleGoogleHandshakes(
+  session: CustomerZeroSession,
+): Promise<void> {
+  let changed = false;
+  for (const [toolId, connection] of session.state.connections) {
+    if (!GOOGLE_TOOL_IDS.has(toolId)) continue;
+    if (connection.status !== "connecting") continue;
+    const nonce = connection.oauthState;
+    let alive = false;
+    if (nonce) {
+      try {
+        const record = await getGoogleOAuthStateStore().get(nonce);
+        alive = Boolean(record && !record.consumed);
+      } catch {
+        alive = false;
+      }
+    }
+    if (!alive) {
+      transitionGoogleConnectionToTerminal(
+        connection,
+        "La autorización de Google no se completó o expiró. Vuelve a intentarlo.",
+      );
+      await persistToolState(
+        session,
+        toolStateFromConnection(session, connection),
+      );
+      changed = true;
+    }
+  }
+  if (changed) {
+    // Log safely: no tokens, no nonce, no secrets.
+    console.log("[google-oauth] stale handshake reaped");
+  }
 }
 
 /** Result of processing one CEO message within a durable conversation. */

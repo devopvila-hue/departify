@@ -45,6 +45,7 @@ import {
   installGoogleTokenStore,
   createInMemoryGoogleTokenStore,
   getGoogleTokenStore,
+  type GoogleTokenStore,
 } from "../src/customer-zero/google-tokens.js";
 import {
   installGoogleOAuthStateStore,
@@ -568,24 +569,133 @@ describe("P0 — post-OAuth HTTP: connect → callback → /conexiones", () => {
     expect(callback.json().connection.status).toBe("connected");
   });
 
-  it("Z2: with an in-memory-only store a fresh instance FAILS HONESTLY (invalid_state, never silent)", async () => {
+  it("Z2: with an in-memory-only store a fresh instance FAILS HONESTLY — connection leaves 'connecting'", async () => {
     const org = await startOrg();
     const connect = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/connections/gmail/connect`,
     });
     const state = connect.json().connection.oauthState as string;
-    // New process: the nonce store is gone. The callback must NOT pretend it
-    // succeeded — it returns a structured 401 the portal renders as a
-    // business-readable error.
+    // New process: the nonce store is gone. The handshake can never
+    // complete. The invariant is: the connection MUST leave
+    // "connecting" and surface a structured, actionable failure —
+    // never "connecting" forever.
     installGoogleOAuthStateStore(createInMemoryOAuthStateStore());
     const callback = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/connections/gmail/callback`,
       payload: { code: "auth-code-1", state },
     });
-    expect(callback.statusCode).toBe(401);
-    expect(callback.json().error.code).toBe("invalid_state");
+    // Explicit failure (401 invalid_state or 409 handshake reaped) —
+    // never a 200 pretending success.
+    expect([401, 409]).toContain(callback.statusCode);
+    const list = await authedInject({
+      method: "GET",
+      url: `/api/customer-zero/${org}/connections`,
+    });
+    const gmailView = (list.json().connections as Array<{ toolId: string; state: string }>).find(
+      (c) => c.toolId === "gmail",
+    );
+    // Terminal state: NOT stuck in connecting.
+    expect(gmailView?.state).not.toBe("connecting");
+    expect(gmailView?.state).not.toBe("connected");
+  });
+
+  it("C: probe 403 → explicit failure state (never connecting forever)", async () => {
+    const org = await startOrg();
+    const callback = await completeHandshake(org, { probeStatus: 403 });
+    expect(callback.statusCode).toBe(200);
+    const body = callback.json();
+    expect(body.operational).toBe(false);
+    expect(body.connection.status).toBe("blocked");
+    expect(body.connection.blockedReason).toContain("403");
+    const list = await authedInject({
+      method: "GET",
+      url: `/api/customer-zero/${org}/connections`,
+    });
+    const gmailView = (list.json().connections as Array<{ toolId: string; state: string }>).find(
+      (c) => c.toolId === "gmail",
+    );
+    expect(gmailView?.state).not.toBe("connecting");
+    expect(gmailView?.state).not.toBe("connected");
+  });
+
+  it("D: probe timeout → classified as timeout, explicit failure state", async () => {
+    const { probeGmailOperational } = await import(
+      "../src/customer-zero/google-tokens.js"
+    );
+    // A fetch implementation that rejects like AbortSignal.timeout.
+    const timeoutFetcher = (async () => {
+      throw new DOMException("The operation was aborted", "TimeoutError");
+    }) as unknown as typeof fetch;
+    const result = await probeGmailOperational("access-token", timeoutFetcher);
+    expect(result.operational).toBe(false);
+    expect(result.error).toBe("gmail_probe_timeout");
+  });
+
+  it("E: credential persistence/readback failure → explicit failure state", async () => {
+    const org = await startOrg();
+    // A token store whose writes "succeed" but whose reads always miss —
+    // exactly the write→read-back violation.
+    const readBackFailing = {
+      async put(): Promise<void> {},
+      async get(): Promise<null> {
+        return null;
+      },
+      async listForOrg(): Promise<never[]> {
+        return [];
+      },
+      async remove(): Promise<void> {},
+    } as unknown as GoogleTokenStore;
+    installGoogleTokenStore(readBackFailing as never);
+    const callback = await completeHandshake(org, {});
+    // Read-back failure is a server-side persistence fault → 500 with the
+    // explicit code, and the connection leaves "connecting".
+    expect(callback.statusCode).toBe(500);
+    expect(callback.json().error.code).toBe(
+      "credential_persisted_but_not_readable",
+    );
+  });
+
+  it("F: callback exception (token exchange fails) → connection leaves connecting", async () => {
+    const org = await startOrg();
+    const connect = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/gmail/connect`,
+    });
+    const state = connect.json().connection.oauthState as string;
+    // Token endpoint returns 500 → completeGoogleOAuthCallback throws.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("oauth2.googleapis.com/token")) {
+        return new Response(JSON.stringify({ error: "boom" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return (originalFetch as typeof fetch)(input);
+    }) as unknown as typeof fetch;
+    try {
+      const callback = await authedInject({
+        method: "POST",
+        url: `/api/customer-zero/${org}/connections/gmail/callback`,
+        payload: { code: "auth-code-1", state },
+      });
+      expect(callback.statusCode).toBe(500);
+      expect(callback.json().error.code).toBe("GOOGLE_OAUTH_FAILED");
+      const list = await authedInject({
+        method: "GET",
+        url: `/api/customer-zero/${org}/connections`,
+      });
+      const gmailView = (list.json().connections as Array<{ toolId: string; state: string }>).find(
+        (c) => c.toolId === "gmail",
+      );
+      expect(gmailView?.state).not.toBe("connecting");
+      expect(gmailView?.state).not.toBe("connected");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

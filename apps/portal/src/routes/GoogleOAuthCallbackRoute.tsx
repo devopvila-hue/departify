@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api } from "@/app/api";
-import { useOrg } from "@/app/org-context";
+import { useOrg, readStoredOrganizationId } from "@/app/org-context";
 
 /**
  * Google OAuth callback — Customer Zero 03.
@@ -108,19 +108,28 @@ export function GoogleOAuthCallbackRoute() {
       return;
     }
 
-    if (!code || !state || !organizationId) {
+    // The organization id is a navigation preference persisted in
+    // localStorage. Fall back to the stored value so the exchange fires
+    // even when the context provider has not synced yet.
+    const effectiveOrgId = organizationId ?? readStoredOrganizationId();
+
+    if (!code || !state || !effectiveOrgId) {
       done.current = true;
       setStatus("error");
       setMessage(
         navigator.language.startsWith("es")
-          ? "La autorización de Google no se completó correctamente."
-          : "The Google authorization was not completed correctly.",
+          ? "La autorización de Google no se completó correctamente. Si estás viendo esto, vuelve a Conexiones e inténtalo de nuevo."
+          : "The Google authorization was not completed correctly. If you are seeing this, go back to Connections and try again.",
       );
       return;
     }
     done.current = true;
     void (async () => {
-      const out = await api.finishGoogleConnect(organizationId, code, state);
+      const out = await api.finishGoogleConnect(
+        effectiveOrgId,
+        code,
+        state,
+      );
       // Finish Google connect never returns raw credentials. We surface a
       // business message based on a non-technical state: connection !=
       // connected → connection failed; null → backend unreachable.

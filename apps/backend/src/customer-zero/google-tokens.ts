@@ -350,6 +350,28 @@ export class SupabaseGoogleTokenStore implements GoogleTokenStore {
  * the secret values.
  * --------------------------------------------------------------------------*/
 
+/**
+ * Bounded timeout for outbound Google API calls. An external call must
+ * never hang the callback request: "connecting forever" is not an
+ * acceptable terminal state. 15s is generous for Google's endpoints
+ * and far below Railway's request timeout.
+ */
+const GOOGLE_CALL_TIMEOUT_MS = 15_000;
+
+function googleFetch(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = GOOGLE_CALL_TIMEOUT_MS,
+): Promise<Response> {
+  return fetch(url, {
+    ...init,
+    signal: AbortSignal.any([
+      init.signal as AbortSignal | undefined,
+      AbortSignal.timeout(timeoutMs),
+    ].filter(Boolean) as AbortSignal[]),
+  });
+}
+
 export interface RefreshInput {
   readonly refreshToken: string;
   readonly clientId: string;
@@ -365,7 +387,7 @@ export interface RefreshOutput {
 export async function refreshGoogleToken(
   input: RefreshInput,
 ): Promise<RefreshOutput> {
-  const response = await fetch("https://oauth2.googleapis.com/token", {
+  const response = await googleFetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -510,9 +532,14 @@ export async function probeGmailOperational(
 ): Promise<GmailOperationalProbeResult> {
   const now = new Date().toISOString();
   try {
+    // The probe MUST be bounded: a hanging gmail API call must never
+    // leave the connection in "connecting" forever.
     const response = await fetchImpl(
       "https://gmail.googleapis.com/gmail/v1/users/me/profile",
-      { headers: { Authorization: `Bearer ${accessToken}` } },
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(GOOGLE_CALL_TIMEOUT_MS),
+      },
     );
     if (!response.ok) {
       return {
@@ -527,10 +554,14 @@ export async function probeGmailOperational(
       error: null,
     };
   } catch (cause) {
+    const message = cause instanceof Error ? cause.message : "unknown";
+    const error = /abor|timeout/i.test(message)
+      ? "gmail_probe_timeout"
+      : message;
     return {
       operational: false,
       verifiedAt: now,
-      error: cause instanceof Error ? cause.message : "unknown",
+      error,
     };
   }
 }
@@ -632,7 +663,7 @@ export async function validateOAuthState(
 async function fetchGoogleIdentity(
   accessToken: string,
 ): Promise<{ email: string; displayName: string }> {
-  const response = await fetch(
+  const response = await googleFetch(
     "https://www.googleapis.com/oauth2/v2/userinfo",
     { headers: { Authorization: `Bearer ${accessToken}` } },
   );
@@ -676,8 +707,8 @@ export async function completeGoogleOAuthCallback(
   );
   checkpoint("google_oauth_state_valid", { organizationId: input.organizationId });
 
-  // 2. Code exchange.
-  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+  // 2. Code exchange (bounded — never hang the callback request).
+  const tokenResponse = await googleFetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({

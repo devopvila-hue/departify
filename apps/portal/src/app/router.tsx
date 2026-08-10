@@ -34,6 +34,16 @@ import { TasksRoute } from "@/routes/TasksRoute";
 
 export const router = createBrowserRouter([
   { path: "/", element: <RootRoute /> },
+  // P0 — the Google OAuth callback MUST be able to complete the
+  // server-side exchange regardless of the shell gate. It is registered
+  // OUTSIDE ShellGate so no auth/org/overview gate can redirect the
+  // callback page away and silently drop code+state (which left the
+  // connection stuck in "connecting" forever). Auth/org failures are
+  // surfaced as a business-readable error INSIDE this route instead.
+  {
+    path: "/connections/google/callback",
+    element: <GoogleOAuthCallbackRoute />,
+  },
   {
     element: <ShellGate />,
     children: [
@@ -43,10 +53,6 @@ export const router = createBrowserRouter([
       { path: "/inbox", element: <InboxRoute /> },
       { path: "/departamentos", element: <DepartmentsRoute /> },
       { path: "/conexiones", element: <ConnectionsRoute /> },
-      {
-        path: "/connections/google/callback",
-        element: <GoogleOAuthCallbackRoute />,
-      },
       { path: "/aprobaciones", element: <DecisionsRoute /> },
       { path: "/resultados", element: <ResultsRoute /> },
       { path: "/empresa", element: <CompanyRoute /> },
