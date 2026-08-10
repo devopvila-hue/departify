@@ -12,6 +12,7 @@ import { registerGracefulShutdown } from "./server/shutdown.js";
 import { SupabaseTenantService } from "./auth/supabase-tenant-service.js";
 import { SupabaseToolStateStore } from "./customer-zero/supabase-tool-state-store.js";
 import { SupabaseConversationStore } from "./customer-zero/supabase-conversation-store.js";
+import { SupabaseInboxStore } from "./customer-zero/supabase-inbox-store.js";
 import {
   getCustomerZeroReportRepository,
   listCustomerZeroSessions,
@@ -53,6 +54,7 @@ try {
   deps.organizations = tenant;
   deps.toolState = new SupabaseToolStateStore(supabaseAuthConfig);
   deps.conversations = new SupabaseConversationStore(supabaseAuthConfig);
+  deps.inbox = new SupabaseInboxStore(supabaseAuthConfig);
 } catch (cause) {
   const message = cause instanceof Error ? cause.message : String(cause);
   if (config.environment === "production") {

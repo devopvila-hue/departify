@@ -4,6 +4,7 @@ import type { EngineRuntimePolicy } from "@departify/config";
 import type { OrganizationStore } from "../auth/tenant-contracts.js";
 import type { ToolStateStore } from "../customer-zero/tool-state.js";
 import type { ConversationStore } from "../customer-zero/conversation-store.js";
+import type { InboxStore } from "../customer-zero/inbox-domain.js";
 import type { MarketingService } from "../customer-zero/marketing-service.js";
 
 /**
@@ -21,6 +22,8 @@ export interface ServerDeps {
   toolState?: ToolStateStore;
   /** Durable organization-scoped conversations (Phase P-B part 15). */
   conversations?: ConversationStore;
+  /** Durable organization-scoped unified inbox (Customer Zero 03). */
+  inbox?: InboxStore;
   /** Public base URL of the portal, used to build OAuth redirect URIs. */
   publicBaseUrl?: string;
   /** Provider-independent engine adapter (Sprint ENGINE 02). */

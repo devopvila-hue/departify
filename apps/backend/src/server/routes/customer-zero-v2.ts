@@ -651,7 +651,9 @@ export async function registerCustomerZeroV2Routes(
   );
 
   // Customer Zero 03 — unified inbox endpoints.
-  const inboxStore: InboxStore = new InMemoryInboxStore();
+  // Durable via `deps.inbox` (Supabase) when wired in production; otherwise
+  // the in-memory store keeps tests deterministic.
+  const inboxStore: InboxStore = deps.inbox ?? new InMemoryInboxStore();
   const inboxSync = new InboxSync(inboxStore);
 
   server.get<{
