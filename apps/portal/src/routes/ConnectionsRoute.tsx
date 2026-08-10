@@ -115,6 +115,18 @@ export function ConnectionsRoute() {
         ))
       )}
 
+      {/* Customer Zero Email P0 — the Correo capability, provider-first.
+          The CEO sees ONE capability with providers, never "Sincronizar
+          Gmail" as the product itself. */}
+      <EmailConnectionSection
+        org={organizationId}
+        gmailCard={cards.find((c) => c.id === "gmail") ?? null}
+        onConnectGoogle={() => {
+          const gmail = cards.find((c) => c.id === "gmail");
+          if (gmail) void runAction(gmail);
+        }}
+      />
+
       {unmapped.length > 0 && (
         <Card title="También utilizáis estas herramientas">
           <p className="dfy-muted">{unmapped.join(", ")}</p>
@@ -216,4 +228,215 @@ function fecha(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+/* ----------------------------------------------------------------------------
+ * Customer Zero Email P0 — the Correo capability section.
+ *
+ * The CEO sees ONE capability ("Correo") with three provider options:
+ * Google, Microsoft (honestly unavailable), and "Otro correo de empresa"
+ * (IMAP + SMTP). Providers are infrastructure, never the product label.
+ * --------------------------------------------------------------------------*/
+
+interface EmailConnectionSectionProps {
+  org: string | null;
+  gmailCard: ConnectionCardView | null;
+  onConnectGoogle: () => void;
+}
+
+function EmailConnectionSection(props: EmailConnectionSectionProps) {
+  const [corporateOpen, setCorporateOpen] = useState(false);
+  const [corporateBusy, setCorporateBusy] = useState(false);
+  const [corporateStatus, setCorporateStatus] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
+
+  const gmailConnected = props.gmailCard?.state === "connected";
+
+  async function configureCorporate(form: HTMLFormElement) {
+    if (!props.org) return;
+    setCorporateBusy(true);
+    setCorporateStatus(null);
+    const data = new FormData(form);
+    const displayName = String(data.get("displayName") ?? "").trim();
+    const payload: {
+      email: string;
+      username: string;
+      password: string;
+      imapHost: string;
+      imapPort: number;
+      imapSecure: boolean;
+      smtpHost: string;
+      smtpPort: number;
+      smtpSecure: boolean;
+      displayName?: string;
+    } = {
+      email: String(data.get("email") ?? "").trim(),
+      username: String(data.get("username") ?? "").trim(),
+      password: String(data.get("password") ?? ""),
+      imapHost: String(data.get("imapHost") ?? "").trim(),
+      imapPort: Number(data.get("imapPort") ?? 993),
+      imapSecure: true,
+      smtpHost: String(data.get("smtpHost") ?? "").trim(),
+      smtpPort: Number(data.get("smtpPort") ?? 587),
+      smtpSecure: true,
+    };
+    if (displayName) payload.displayName = displayName;
+    try {
+      const out = await api.configureCorporateEmail(props.org, payload);
+      if (!out) {
+        setCorporateStatus({
+          ok: false,
+          message:
+            "No hemos podido contactar con Departify. Vuelve a intentarlo en unos minutos.",
+        });
+        return;
+      }
+      if (out.operational) {
+        setCorporateStatus({
+          ok: true,
+          message: `Correo conectado (${out.email}). Departify ya puede leer tu bandeja y enviar correos.`,
+        });
+      } else {
+        const detail = out.probe.error
+          ? ` (${out.probe.error.slice(0, 160)})`
+          : "";
+        setCorporateStatus({
+          ok: false,
+          message: `No se ha podido verificar la cuenta:${detail} Revisa servidor, puerto y contraseña de aplicación.`,
+        });
+      }
+    } finally {
+      setCorporateBusy(false);
+    }
+  }
+
+  return (
+    <section className="dfy-catalog-group" data-testid="email-capability-section">
+      <h2 className="dfy-catalog-group__title">Correo</h2>
+      <p className="dfy-muted dfy-muted--small">
+        Conecta el correo que utiliza tu empresa para que Departify pueda leer,
+        buscar, preparar y enviar emails cuando lo necesites.
+      </p>
+      <div className="dfy-grid">
+        <Card>
+          <div className="dfy-email-option">
+            <div>
+              <strong>Google / Gmail</strong>
+              <p className="dfy-muted dfy-muted--small">
+                {gmailConnected
+                  ? "Conectado y operativo."
+                  : "Conecta la cuenta de Gmail de tu empresa."}
+              </p>
+            </div>
+            {gmailConnected ? (
+              <Badge tone="success">Conectado</Badge>
+            ) : (
+              <button
+                type="button"
+                className="dfy-button dfy-button--small"
+                onClick={props.onConnectGoogle}
+              >
+                Conectar
+              </button>
+            )}
+          </div>
+        </Card>
+
+        <Card>
+          <div className="dfy-email-option">
+            <div>
+              <strong>Microsoft 365 / Outlook</strong>
+              <p className="dfy-muted dfy-muted--small">
+                Próximamente.
+              </p>
+            </div>
+            <Badge tone="neutral">Próximamente</Badge>
+          </div>
+        </Card>
+
+        <Card>
+          <div className="dfy-email-option">
+            <div>
+              <strong>Otro correo de empresa</strong>
+              <p className="dfy-muted dfy-muted--small">
+                {corporateOpen
+                  ? "Configura tu cuenta IMAP + SMTP."
+                  : "Correo corporativo con tu propio servidor (IMAP para leer, SMTP para enviar)."}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="dfy-button dfy-button--ghost dfy-button--small"
+              onClick={() => setCorporateOpen((v) => !v)}
+            >
+              {corporateOpen ? "Cerrar" : "Configurar"}
+            </button>
+          </div>
+          {corporateOpen && (
+            <form
+              className="dfy-email-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void configureCorporate(event.currentTarget);
+              }}
+            >
+              <label>
+                Correo
+                <input name="email" type="email" required placeholder="ceo@tuempresa.com" />
+              </label>
+              <label>
+                Usuario
+                <input name="username" required placeholder="ceo@tuempresa.com" />
+              </label>
+              <label>
+                Contraseña de aplicación
+                <input name="password" type="password" required autoComplete="new-password" />
+              </label>
+              <label>
+                Servidor IMAP
+                <input name="imapHost" required placeholder="imap.tuempresa.com" />
+              </label>
+              <label>
+                Puerto IMAP
+                <input name="imapPort" type="number" defaultValue={993} />
+              </label>
+              <label>
+                Servidor SMTP
+                <input name="smtpHost" required placeholder="smtp.tuempresa.com" />
+              </label>
+              <label>
+                Puerto SMTP
+                <input name="smtpPort" type="number" defaultValue={587} />
+              </label>
+              <label>
+                Nombre visible (opcional)
+                <input name="displayName" placeholder="CEO" />
+              </label>
+              <button
+                type="submit"
+                className="dfy-button dfy-button--small"
+                disabled={corporateBusy}
+              >
+                {corporateBusy ? "Comprobando…" : "Conectar y verificar"}
+              </button>
+              {corporateStatus && (
+                <p
+                  className={
+                    corporateStatus.ok
+                      ? "dfy-muted dfy-email-status--ok"
+                      : "dfy-alert"
+                  }
+                  role={corporateStatus.ok ? "status" : "alert"}
+                >
+                  {corporateStatus.message}
+                </p>
+              )}
+            </form>
+          )}
+        </Card>
+      </div>
+    </section>
+  );
 }

@@ -136,7 +136,7 @@ describe("ConnectionsRoute — 5-state cards", () => {
 
     expect(await screen.findByText("No conectado")).toBeInTheDocument();
     expect(
-      await screen.findByRole("button", { name: /configurar/i }),
-    ).toBeInTheDocument();
+      screen.getAllByRole("button", { name: /configurar/i }).length,
+    ).toBeGreaterThanOrEqual(1);
   });
 });

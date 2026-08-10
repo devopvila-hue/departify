@@ -127,7 +127,14 @@ describe("Google OAuth handshake — portal side", () => {
     ]);
     mountAt(<ConnectionsRoute />, "/conexiones");
 
-    const btn = await screen.findByRole("button", { name: /configurar/i });
+    // Scope to the Gmail CONNECTION CARD button (the Correo section
+    // also renders provider options with buttons — global queries are
+    // ambiguous).
+    const gmailCard = (await screen.findByText("Gmail", {
+      selector: "strong",
+    })).closest(".dfy-connection-card");
+    const btn = gmailCard?.querySelector("button");
+    if (!btn) throw new Error("gmail card button not found");
     fireEvent.click(btn);
 
     await waitFor(() => {
@@ -177,7 +184,11 @@ describe("Google OAuth handshake — portal side", () => {
       },
     ]);
     mountAt(<ConnectionsRoute />, "/conexiones");
-    const btn = await screen.findByRole("button", { name: /configurar/i });
+    const gmailCard = (await screen.findByText("Gmail", {
+      selector: "strong",
+    })).closest(".dfy-connection-card");
+    const btn = gmailCard?.querySelector("button");
+    if (!btn) throw new Error("gmail card button not found");
     fireEvent.click(btn);
 
     await waitFor(() => {

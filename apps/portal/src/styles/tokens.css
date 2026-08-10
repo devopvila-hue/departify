@@ -2726,3 +2726,41 @@ select {
   color: var(--dfy-color-muted, #555);
   margin: 0;
 }
+
+/* Customer Zero Email P0 — Correo capability provider options + corporate form. */
+.dfy-email-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.dfy-email-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.dfy-email-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.82rem;
+  color: var(--dfy-color-muted, #555);
+}
+.dfy-email-form input {
+  padding: 8px 10px;
+  border: 1px solid var(--dfy-color-border, #ddd);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  background: var(--dfy-color-surface, #fff);
+  color: var(--dfy-color-foreground, #111);
+}
+.dfy-email-form .dfy-button {
+  grid-column: 1 / -1;
+  justify-self: start;
+  margin-top: 4px;
+}
+.dfy-email-form .dfy-email-status--ok {
+  color: var(--dfy-color-success, #15803d);
+  grid-column: 1 / -1;
+}

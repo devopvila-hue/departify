@@ -17,6 +17,10 @@
 import type { CustomerZeroSession } from "./customer-zero-session.js";
 import { hasOperationalGoogleIdentityForOrg } from "./credential-resolver.js";
 import { getGoogleTokenStore } from "./google-tokens.js";
+import {
+  getCorporateEmailStore,
+  type CorporateEmailAccount,
+} from "./corporate-email-store.js";
 
 export interface EmailSendInput {
   readonly to: string;
@@ -37,16 +41,29 @@ export interface EmailSendOutcome {
 export async function isEmailCapabilityOperational(
   organizationId: string,
 ): Promise<boolean> {
-  return hasOperationalGoogleIdentityForOrg(organizationId);
+  return (
+    (await resolveOperationalEmailProvider(organizationId)) !== null
+  );
 }
 
 /**
- * Resolve the operational email provider for the org. Today: Google.
- * Returns the provider name or null when nothing is operational.
+ * Resolve the org's operational email provider. Deterministic rule:
+ * the explicitly configured corporate account wins (it is the
+ * company's own email); Google is the fallback default identity.
+ * Returns null when nothing is operational.
  */
 export async function resolveOperationalEmailProvider(
   organizationId: string,
-): Promise<"google" | null> {
+): Promise<"corporate" | "google" | null> {
+  try {
+    const corporate = await getCorporateEmailStore().listForOrg(organizationId);
+    const operational = corporate.find(
+      (c) => c.operationalVerifiedAt !== null,
+    );
+    if (operational) return "corporate";
+  } catch {
+    // Store not wired (dev/test) — fall through to Google.
+  }
   if (await hasOperationalGoogleIdentityForOrg(organizationId)) {
     return "google";
   }
@@ -70,6 +87,34 @@ export async function sendEmail(
       providerMessageId: null,
       sentAt: null,
       error: "email_not_connected",
+    };
+  }
+
+  if (provider === "corporate") {
+    const account = await loadOperationalCorporateAccount(organizationId);
+    if (!account) {
+      return {
+        ok: false,
+        provider: "corporate",
+        providerMessageId: null,
+        sentAt: null,
+        error: "email_not_connected",
+      };
+    }
+    const { sendCorporateEmail } = await import(
+      "./corporate-email-adapter.js"
+    );
+    const outcome = await sendCorporateEmail(account, {
+      to: input.to,
+      subject: input.subject,
+      bodyText: input.bodyText,
+    });
+    return {
+      ok: outcome.ok,
+      provider: "corporate",
+      providerMessageId: outcome.providerMessageId,
+      sentAt: outcome.sentAt,
+      error: outcome.error,
     };
   }
 
@@ -128,4 +173,14 @@ export async function sendEmail(
     sentAt: null,
     error: result.errorCode ?? "send_failed",
   };
+}
+
+/** Load the org's operational corporate account (password stays internal). */
+async function loadOperationalCorporateAccount(
+  organizationId: string,
+): Promise<CorporateEmailAccount | null> {
+  const summaries = await getCorporateEmailStore().listForOrg(organizationId);
+  const target = summaries.find((s) => s.operationalVerifiedAt !== null);
+  if (!target) return null;
+  return getCorporateEmailStore().get(organizationId, target.userId);
 }

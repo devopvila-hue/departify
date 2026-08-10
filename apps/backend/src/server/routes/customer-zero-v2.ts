@@ -146,7 +146,9 @@ import {
 import {
   isEmailCapabilityOperational,
   sendEmail,
+  resolveOperationalEmailProvider,
 } from "../../customer-zero/email-capability.js";
+import { getCorporateEmailStore } from "../../customer-zero/corporate-email-store.js";
 import {
   completeGoogleOAuthCallback,
   getGoogleTokenStore,
@@ -1317,6 +1319,181 @@ export async function registerCustomerZeroV2Routes(
     },
   );
 
+  // Customer Zero Email P0 — "Otro correo de empresa" (IMAP + SMTP).
+  // Configure + bounded probe. The password NEVER leaves the request
+  // boundary and is NEVER returned in the response.
+  server.post(
+    "/api/customer-zero/:organizationId/connections/corporate-email/configure",
+    {
+      schema: {
+        tags: ["customer-zero"],
+        summary: "Configure a corporate email account (IMAP + SMTP) with a bounded probe",
+        params: {
+          type: "object",
+          required: ["organizationId"],
+          properties: { organizationId: { type: "string" } },
+        },
+        body: {
+          type: "object",
+          required: ["email", "username", "password", "imapHost", "smtpHost"],
+          properties: {
+            email: { type: "string" },
+            username: { type: "string" },
+            password: { type: "string", minLength: 1 },
+            imapHost: { type: "string" },
+            imapPort: { type: "number", default: 993 },
+            imapSecure: { type: "boolean", default: true },
+            smtpHost: { type: "string" },
+            smtpPort: { type: "number", default: 587 },
+            smtpSecure: { type: "boolean", default: true },
+            displayName: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+        response: {
+          200: { type: "object", additionalProperties: true },
+          400: { type: "object", properties: { error: { type: "object" } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId } = request.params as { organizationId: string };
+      await requireSession(organizationId, deps);
+      const body = request.body as {
+        email: string;
+        username: string;
+        password: string;
+        imapHost: string;
+        imapPort?: number;
+        imapSecure?: boolean;
+        smtpHost: string;
+        smtpPort?: number;
+        smtpSecure?: boolean;
+        displayName?: string;
+      };
+      const email = body.email.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return reply.code(400).send({
+          error: { code: "INVALID_EMAIL", message: "Dirección de correo inválida." },
+        });
+      }
+      const userId = request.authUser?.id ?? organizationId;
+      const account = {
+        organizationId,
+        userId,
+        provider: "imap_smtp" as const,
+        email,
+        username: body.username.trim(),
+        password: body.password,
+        imapHost: body.imapHost.trim(),
+        imapPort: body.imapPort ?? 993,
+        imapSecure: body.imapSecure ?? true,
+        smtpHost: body.smtpHost.trim(),
+        smtpPort: body.smtpPort ?? 587,
+        smtpSecure: body.smtpSecure ?? true,
+        displayName: body.displayName?.trim() || null,
+        operationalVerifiedAt: null,
+        operationalProbeError: null,
+      };
+      // Bounded real probe (IMAP connect+INBOX, SMTP session). Never
+      // sends mail. Only mark operational when BOTH succeed.
+      const { probeCorporateEmail } = await import(
+        "../../customer-zero/corporate-email-adapter.js"
+      );
+      const probe = await probeCorporateEmail(account);
+      const stored = {
+        ...account,
+        operationalVerifiedAt: probe.operational
+          ? new Date().toISOString()
+          : null,
+        operationalProbeError: probe.operational ? null : probe.error,
+      };
+      const { getCorporateEmailStore } = await import(
+        "../../customer-zero/corporate-email-store.js"
+      );
+      await getCorporateEmailStore().put(stored);
+      // Safe log: never the password, never the username internals.
+      request.log.info({
+        event: "corporate_email_configured",
+        organizationId,
+        email,
+        operational: probe.operational,
+        probeError: probe.error,
+      });
+      return reply.code(200).send({
+        organizationId,
+        email,
+        operational: probe.operational,
+        probe: {
+          imapOk: probe.imapOk,
+          smtpOk: probe.smtpOk,
+          error: probe.error,
+        },
+      });
+    },
+  );
+
+  // Re-probe the stored corporate account (no password resubmission).
+  server.post(
+    "/api/customer-zero/:organizationId/connections/corporate-email/verify",
+    {
+      schema: {
+        tags: ["customer-zero"],
+        summary: "Re-probe the stored corporate email account",
+        params: {
+          type: "object",
+          required: ["organizationId"],
+          properties: { organizationId: { type: "string" } },
+        },
+        response: {
+          200: { type: "object", additionalProperties: true },
+          404: { type: "object", properties: { error: { type: "string" } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId } = request.params as { organizationId: string };
+      await requireSession(organizationId, deps);
+      const userId = request.authUser?.id ?? organizationId;
+      const { getCorporateEmailStore } = await import(
+        "../../customer-zero/corporate-email-store.js"
+      );
+      const store = getCorporateEmailStore();
+      const account = await store.get(organizationId, userId);
+      if (!account) {
+        return reply.code(404).send({ error: "No hay cuenta de correo configurada." });
+      }
+      const { probeCorporateEmail } = await import(
+        "../../customer-zero/corporate-email-adapter.js"
+      );
+      const probe = await probeCorporateEmail(account);
+      await store.put({
+        ...account,
+        operationalVerifiedAt: probe.operational
+          ? new Date().toISOString()
+          : null,
+        operationalProbeError: probe.operational ? null : probe.error,
+      });
+      request.log.info({
+        event: "corporate_email_verified",
+        organizationId,
+        email: account.email,
+        operational: probe.operational,
+        probeError: probe.error,
+      });
+      return reply.code(200).send({
+        organizationId,
+        email: account.email,
+        operational: probe.operational,
+        probe: {
+          imapOk: probe.imapOk,
+          smtpOk: probe.smtpOk,
+          error: probe.error,
+        },
+      });
+    },
+  );
+
   server.post(
     "/api/customer-zero/:organizationId/connections/:toolId/declare",
     {
@@ -2229,35 +2406,35 @@ export async function processCeoMessage(
   }
 
   if (routed.decision.intent === "external_tool_query") {
-    // Email-aware dispatch: if the CEO asks about Gmail and the
-    // durable Google token store reports an operationally probed
-    // Gmail identity, perform a real Gmail read. Falls through to the
-    // Mautic dispatch otherwise.
+    // Email-aware dispatch: an email READ question resolves the org's
+    // operational EMAIL provider (corporate IMAP first, Google as the
+    // default identity) and reads real inbox data through it. Falls
+    // through to the Mautic dispatch otherwise.
     if (isEmailQuestion(message)) {
-      const gmailOperational = await hasOperationalGoogleIdentityForOrg(
+      const provider = await resolveOperationalEmailProvider(
         organizationId,
       );
-      if (gmailOperational) {
+      if (provider) {
         try {
-          const gmailReply = await runGmailRead(
+          const emailReply = await readEmailAnswer(
             organizationId,
             message,
             session.state.locale,
           );
-          if (gmailReply) {
-            assistantReply = gmailReply;
+          if (emailReply) {
+            assistantReply = emailReply;
             marketingTurn = { role: "assistant", content: assistantReply };
           }
         } catch {
           assistantReply = isEs
-            ? "No he podido consultar Gmail. Vuelve a intentarlo en unos minutos."
-            : "I could not query Gmail right now. Please try again in a few minutes.";
+            ? "No he podido consultar tu correo. Vuelve a intentarlo en unos minutos."
+            : "I could not query your email right now. Please try again in a few minutes.";
           marketingTurn = { role: "assistant", content: assistantReply };
         }
       } else {
         assistantReply = isEs
-          ? "Gmail todavía no está conectado. Ve a Conexiones para autorizarlo y vuelvo a intentarlo."
-          : "Gmail is not connected yet. Go to Connections to authorize it and I'll try again.";
+          ? "Tu correo todavía no está conectado. Ve a Conexiones para conectarlo y vuelvo a intentarlo."
+          : "Your email is not connected yet. Go to Connections to connect it and I'll try again.";
         marketingTurn = { role: "assistant", content: assistantReply };
       }
     } else {
@@ -2962,6 +3139,71 @@ function buildEmailConnectionSuggestion(
     requiredCredentials: [],
     rawInput: "email",
   };
+}
+
+/**
+ * Read the org's email through its operational provider (corporate
+ * IMAP first, Google as the default identity) and render a clean,
+ * intent-aware business summary. Never exposes query syntax or
+ * provider internals.
+ */
+async function readEmailAnswer(
+  organizationId: string,
+  message: string,
+  locale: SupportedLocale,
+): Promise<string | null> {
+  const provider = await resolveOperationalEmailProvider(organizationId);
+  if (provider === "corporate") {
+    return readCorporateEmailAnswer(organizationId, message, locale);
+  }
+  if (provider === "google") {
+    return runGmailRead(organizationId, message, locale);
+  }
+  return null;
+}
+
+async function readCorporateEmailAnswer(
+  organizationId: string,
+  message: string,
+  locale: SupportedLocale,
+): Promise<string | null> {
+  const isEs = locale !== "en";
+  const summaries = await getCorporateEmailStore().listForOrg(organizationId);
+  const target = summaries.find((s) => s.operationalVerifiedAt !== null);
+  if (!target) return null;
+  const account = await getCorporateEmailStore().get(
+    organizationId,
+    target.userId,
+  );
+  if (!account) return null;
+  const { readCorporateInbox } = await import(
+    "../../customer-zero/corporate-email-adapter.js"
+  );
+  const plan = gmailDeriveReadPlan(message);
+  const raw = await readCorporateInbox(account, plan.maxResults);
+  if (raw.length === 0) {
+    return isEs
+      ? "No he encontrado correos recientes en tu bandeja. Si esperabas algo concreto, dime el remitente o el tema y lo busco."
+      : "I didn't find recent emails in your inbox. If you were expecting something specific, share the sender or topic and I'll search.";
+  }
+  const items = raw.map((m) => ({
+    id: m.id,
+    threadId: m.threadId,
+    sender: m.from.displayName
+      ? `${m.from.displayName} <${m.from.email}>`
+      : m.from.email,
+    senderEmail: m.from.email,
+    subject: m.subject || (isEs ? "(sin asunto)" : "(no subject)"),
+    receivedAt: m.date,
+    snippet: m.snippet,
+    unread: m.isUnread,
+  }));
+  return renderGmailSummary({
+    intent: plan.intent,
+    items,
+    locale,
+    totalFound: items.length,
+  });
 }
 
 async function runGmailRead(

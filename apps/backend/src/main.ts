@@ -22,6 +22,10 @@ import {
   setGoogleOAuthStateStore,
 } from "./customer-zero/oauth-state.js";
 import {
+  SupabaseCorporateEmailStore,
+  setCorporateEmailStore,
+} from "./customer-zero/corporate-email-store.js";
+import {
   getCustomerZeroReportRepository,
   listCustomerZeroSessions,
 } from "./customer-zero/customer-zero-session.js";
@@ -77,6 +81,14 @@ try {
   setGoogleOAuthStateStore(new SupabaseOAuthStateStore(supabaseAuthConfig));
   console.log(
     `[google-oauth] durable Supabase oauth-state store wired`,
+  );
+  // Durable corporate email accounts (IMAP/SMTP). Same security
+  // pattern: service-role only, RLS block-all, org+user scoped.
+  setCorporateEmailStore(
+    new SupabaseCorporateEmailStore(supabaseAuthConfig),
+  );
+  console.log(
+    `[corporate-email] durable Supabase account store wired`,
   );
 } catch (cause) {
   const message = cause instanceof Error ? cause.message : String(cause);

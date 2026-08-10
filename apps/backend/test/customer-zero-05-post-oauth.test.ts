@@ -828,7 +828,10 @@ describe("P0 — Central Chat reality", () => {
     });
     expect(response.statusCode).toBe(200);
     const reply = response.json().reply as string;
-    expect(reply).toContain("Gmail todavía no está conectado");
+    // Product wording: "Tu correo" (the Email capability), never the
+    // provider name as the capability.
+    expect(reply.toLowerCase()).toContain("tu correo");
+    expect(reply.toLowerCase()).toContain("no está conectado");
     expect(reply.toLowerCase()).toContain("conexiones");
   });
 

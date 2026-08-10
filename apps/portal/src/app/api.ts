@@ -769,6 +769,30 @@ export const api = {
       code,
       state,
     }),
+  configureCorporateEmail: (
+    org: string,
+    payload: {
+      email: string;
+      username: string;
+      password: string;
+      imapHost: string;
+      imapPort?: number;
+      imapSecure?: boolean;
+      smtpHost: string;
+      smtpPort?: number;
+      smtpSecure?: boolean;
+      displayName?: string;
+    },
+  ) =>
+    postJson<{
+      organizationId: string;
+      email: string;
+      operational: boolean;
+      probe: { imapOk: boolean; smtpOk: boolean; error: string | null };
+    }>(
+      `/api/customer-zero/${org}/connections/corporate-email/configure`,
+      payload,
+    ),
   plan: (org: string, goal: string) =>
     postJson<{ summary: string; items: MarketingWorkItem[]; error?: { message: string } }>(
       `/api/customer-zero/${org}/marketing/work`,
