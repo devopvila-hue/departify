@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import {
   api,
-  type ConversationView,
+  type ProgressiveDiscoveryView,
   type ProgressView,
   type ProgressiveQuestionView,
   type ResearchStageView,
@@ -24,7 +24,7 @@ import { useOrg } from "@/app/org-context";
 export type ResearchStage = ResearchStageView;
 export type ProgressResponse = ProgressView;
 export type ProgressiveQuestion = ProgressiveQuestionView;
-export type ConversationResponse = ConversationView;
+export type ConversationResponse = ProgressiveDiscoveryView;
 
 export interface ConnectionCard {
   toolId: string;

@@ -2591,3 +2591,118 @@ select {
   font-size: 0.86rem;
   font-style: italic;
 }
+
+/* ============================================================
+   SPRINT 60 — Conversation product polish
+   - chat-summary-hint: gentle compaction reminder.
+   - cap-dialog: business-readable 5-active-conversation cap.
+   - chat-history__archived: archived conversations stay reachable.
+   - chat-history__count: active count cap line.
+   ============================================================ */
+
+.dfy-chat-summary-hint {
+  margin: 8px 24px 0;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--dfy-color-surface, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--dfy-color-border, rgba(0, 0, 0, 0.06));
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--sz-step--1);
+  color: var(--dfy-color-muted, #555);
+  width: fit-content;
+}
+
+.dfy-chat-history__count {
+  font-size: var(--sz-step--1);
+  color: var(--dfy-color-muted, #555);
+  margin: 0 0 10px;
+}
+
+.dfy-chat-history__archived {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--dfy-color-border, rgba(0, 0, 0, 0.1));
+}
+
+.dfy-chat-history__archived-title {
+  font-weight: 600;
+  margin: 0 0 8px;
+  font-size: var(--sz-step--1);
+  color: var(--dfy-color-muted, #555);
+}
+
+.dfy-chat-history__archived-row {
+  display: block;
+  text-align: left;
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 8px 10px;
+  border-radius: 8px;
+  margin: 4px 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.dfy-chat-history__archived-row:hover {
+  background: var(--dfy-color-surface, rgba(255, 255, 255, 0.04));
+}
+
+.dfy-cap-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.dfy-cap-dialog {
+  background: var(--dfy-color-bg, #fff);
+  color: var(--dfy-color-text, #111);
+  border-radius: 16px;
+  padding: 24px 28px;
+  max-width: 480px;
+  width: 100%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+}
+
+.dfy-cap-dialog h2 {
+  margin: 0 0 8px;
+  font-size: 1.2rem;
+}
+
+.dfy-cap-dialog__list {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dfy-cap-dialog__list li button {
+  width: 100%;
+  text-align: left;
+}
+
+.dfy-cap-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.dfy-chat-empty h2 {
+  font-size: 1.3rem;
+  margin: 12px 0 4px;
+}
+
+.dfy-chat-empty p {
+  color: var(--dfy-color-muted, #555);
+  margin: 0;
+}

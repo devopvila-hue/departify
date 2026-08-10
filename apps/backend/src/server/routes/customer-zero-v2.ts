@@ -81,10 +81,10 @@ import {
   type RoutingDecision,
 } from "../../customer-zero/command-center.js";
 import {
-  boundedConversationHistory,
   DEFAULT_CONVERSATION_TITLE,
   deriveConversationTitle,
   type ConversationRecord,
+  type ConversationMessage,
 } from "../../customer-zero/conversation-store.js";
 import {
   buildDnaRawDataFromSuggestion,
@@ -1100,6 +1100,14 @@ export async function registerCustomerZeroV2Routes(
           });
         }
         const oauthUserId = request.authUser?.id ?? organizationId;
+        // P0 — The redirect_uri exchanged at the Google token endpoint
+        // MUST be byte-identical to the one used when the user was sent
+        // to `accounts.google.com/.../auth` (line 993 above). Otherwise
+        // Google rejects the token exchange with `redirect_uri_mismatch`.
+        // The portal route `/connections/google/callback` is the single
+        // authorized redirect URI configured on the OAuth Web Client.
+        const portalBase = deps.publicBaseUrl ?? publicBaseUrl();
+        const tokenExchangeRedirectUri = `${portalBase}/connections/google/callback`;
         try {
           const input: GmailOAuthCallbackInput = {
             code,
@@ -1108,7 +1116,7 @@ export async function registerCustomerZeroV2Routes(
             userId: oauthUserId,
             clientId,
             clientSecret,
-            redirectUri: `${deps.publicBaseUrl ?? publicBaseUrl()}/api/customer-zero/${organizationId}/connections/${toolId}/callback`,
+            redirectUri: tokenExchangeRedirectUri,
           };
           const { identity } = await completeGmailOAuth(input);
           completeConnection(connection);
@@ -1351,6 +1359,22 @@ export async function registerCustomerZeroV2Routes(
             },
           },
           404: { type: "object", properties: { error: { type: "string" } } },
+          409: {
+            type: "object",
+            required: ["error"],
+            properties: {
+              error: {
+                type: "object",
+                required: ["code", "message", "activeCount", "maxActive"],
+                properties: {
+                  code: { type: "string" },
+                  message: { type: "string" },
+                  activeCount: { type: "integer" },
+                  maxActive: { type: "integer" },
+                },
+              },
+            },
+          },
         },
       },
     },
@@ -1358,14 +1382,28 @@ export async function registerCustomerZeroV2Routes(
       const { organizationId } = request.params as { organizationId: string };
       const body = request.body as { message: string; conversationId?: string };
       const session = await requireSession(organizationId, deps);
-      const result = await processCeoMessage(
-        session,
-        body.message,
-        body.conversationId,
-        deps.marketing,
-        deps.engineRuntimePolicy,
-      );
-      return reply.code(200).send(result);
+      try {
+        const result = await processCeoMessage(
+          session,
+          body.message,
+          body.conversationId,
+          deps.marketing,
+          deps.engineRuntimePolicy,
+        );
+        return reply.code(200).send(result);
+      } catch (cause) {
+        if (cause instanceof MaxActiveConversationsError) {
+          return reply.code(409).send({
+            error: {
+              code: "MAX_ACTIVE_CONVERSATIONS",
+              message: cause.message,
+              activeCount: cause.activeCount,
+              maxActive: MAX_ACTIVE_CONVERSATIONS_VALUE,
+            },
+          });
+        }
+        throw cause;
+      }
     },
   );
 
@@ -1527,6 +1565,54 @@ function buildMemoryContextForChat(
   // must not claim a system is available when it is not.
   const operational = buildSessionOperationalContext(session);
   parts.push(`Estado operativo de la empresa:\n${operational.promptView}`);
+  return parts.join("\n\n");
+}
+
+/**
+ * Hierarchical conversation context for the model.
+ *
+ *   [conversation.summary]  ← older material, deterministic, no-LLM
+ *   [recent verbatim]       ← bounded window of the most recent turns
+ *
+ * Raw messages stay in `conversation_messages` (durable, recoverable). The
+ * model never sees the entire transcript. The summary is DATA: the model
+ * must not promote external/user text into company memory; that boundary
+ * already lives in `rememberDepartment` which requires the explicit
+ * `remember_fact` intent.
+ */
+export function assembleConversationContext(
+  conversation: ConversationRecord,
+  recentMessages: readonly ConversationMessage[],
+): {
+  summary: string | undefined;
+  recent: { role: "user" | "assistant"; content: string }[];
+} {
+  return {
+    summary: conversation.summary,
+    recent: recentMessages.map((m) => ({ role: m.role, content: m.content })),
+  };
+}
+
+/** Serializes the hierarchical context into a single string the model
+ *  receives as the historical part of the prompt. */
+export function serializeContextForModel(input: {
+  summary?: string;
+  recent: { role: "user" | "assistant"; content: string }[];
+  extraContext?: string;
+}): string {
+  const parts: string[] = [];
+  if (input.summary) {
+    parts.push(`Resumen (más antiguo, no reciente):\n${input.summary}`);
+  }
+  if (input.recent.length > 0) {
+    const lines = input.recent.map(
+      (m) => `- ${m.role === "user" ? "CEO" : "DEPARTIFY"}: ${m.content}`,
+    );
+    parts.push(`Mensajes recientes (verbatim):\n${lines.join("\n")}`);
+  }
+  if (input.extraContext) {
+    parts.push(input.extraContext);
+  }
   return parts.join("\n\n");
 }
 
@@ -1698,6 +1784,21 @@ function currentQuestion(
  * state, so a Railway restart never strands an existing organization (no
  * 404 → portal reset loop, connections survive).
  */
+export const MAX_ACTIVE_CONVERSATIONS_VALUE = 5;
+
+/** The 6th active conversation is REFUSED, never silently deleted. The
+ *  portal renders a friendly archive-first dialog from this error. */
+export class MaxActiveConversationsError extends Error {
+  readonly activeCount: number;
+  constructor(activeCount: number) {
+    super(
+      "Ya tienes 5 conversaciones activas. Archiva una para empezar otra.",
+    );
+    this.name = "MaxActiveConversationsError";
+    this.activeCount = activeCount;
+  }
+}
+
 export async function requireSession(
   organizationId: string,
   deps: ServerDeps,
@@ -1737,7 +1838,19 @@ export async function processCeoMessage(
   marketing?: MarketingServiceType,
   engineRuntimePolicy?: "strict" | "legacy-fallback",
 ): Promise<CeoMessageResult> {
-  const conversation = await ensureConversation(session, message, conversationId);
+  let conversation: ConversationRecord;
+  try {
+    conversation = await ensureConversation(session, message, conversationId);
+  } catch (cause) {
+    if (cause instanceof MaxActiveConversationsError) {
+      // Surface the structured cap-error to the caller so every
+      // /command-center/message ingress delivers the same payload as
+      // /conversations. Portal switches from a transient inline error
+      // to the archive-first dialog.
+      throw cause;
+    }
+    throw cause;
+  }
   const organizationId = session.organizationId;
 
   await session.conversations.addMessage(conversation.id, "user", message);
@@ -1786,6 +1899,12 @@ export async function processCeoMessage(
           conversation.id,
           20,
         );
+        // Hierarchical context: [compaction summary] + [recent verbatim]
+        // Raw historical messages stay in conversation_messages and are
+        // reachable by retrieval / history endpoints, but the model never
+        // receives the entire transcript. This is the boundary: chat
+        // history is NOT company memory.
+        const ctx = assembleConversationContext(conversation, recentMessages);
         const outcome = await session.port.executeAction({
           actionId: `act_cc_${shortId()}`,
           agentId: "agent_marketing_director",
@@ -1794,8 +1913,13 @@ export async function processCeoMessage(
           args: {
             organizationId,
             message,
-            history: boundedConversationHistory(recentMessages),
-            extraContext: buildMemoryContextForChat(session),
+            history: ctx.recent,
+            summary: ctx.summary,
+            extraContext: serializeContextForModel({
+              ...(ctx.summary ? { summary: ctx.summary } : {}),
+              recent: ctx.recent,
+              extraContext: buildMemoryContextForChat(session),
+            }),
           },
         });
         if (outcome.status === "completed") {
@@ -2082,6 +2206,18 @@ export async function ensureConversation(
     session.state.currentConversationId = recent[0].id;
     await renameIfUntitled(session, recent[0], message);
     return recent[0];
+  }
+
+  // P-B part 26 — refuse to auto-create a 6th active conversation.
+  // Portal surfaces the cap dialog; the underlying create is never
+  // silent. The limit is enforced here so EVERY ingress path (POST
+  // /conversations, POST /command-center/message, POST .../messages)
+  // honours the same contract.
+  const activeCount = await session.conversations.countActiveForOrg(
+    organizationId,
+  );
+  if (activeCount >= MAX_ACTIVE_CONVERSATIONS_VALUE) {
+    throw new MaxActiveConversationsError(activeCount);
   }
 
   const created = await session.conversations.create(

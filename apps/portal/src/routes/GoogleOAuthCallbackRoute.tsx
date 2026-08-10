@@ -11,8 +11,25 @@ import { useOrg } from "@/app/org-context";
  * Google connection (`?code=...&state=...`). This route exchanges the code
  * server-side through the authenticated API callback (which validates the
  * state nonce, CSRF / replay / org+user binding and persists the tokens).
- * On success the CEO lands back on /conexiones.
+ *
+ * Failure UX is intentional and business-readable:
+ *   - `?error=access_denied` from Google → friendly Spanish/English copy.
+ *   - missing code/state → friendly copy, no technical leakage.
+ *   - API callback returns a non-connected status → friendly copy, no
+ *     exposure of credentials, codes or provider payloads.
+ *   - backend unreachable → friendly copy, no stack trace.
+ *
+ * On success the CEO lands back on /conexiones (replace: true so the
+ * /connections/google/callback URL does not become a browser-history
+ * entry it could re-execute on back-navigation).
  */
+const GOOGLE_ERROR_COPY: Record<string, { es: string; en: string }> = {
+  access_denied: {
+    es: "Has cancelado la autorización. Puedes volver a intentarlo cuando quieras.",
+    en: "You cancelled the authorization. You can try again whenever you want.",
+  },
+};
+
 export function GoogleOAuthCallbackRoute() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
@@ -25,17 +42,54 @@ export function GoogleOAuthCallbackRoute() {
     if (done.current) return;
     const code = params.get("code");
     const state = params.get("state");
-    if (!code || !state || !organizationId) {
+    const googleError = params.get("error");
+
+    // Google-side failure: user cancelled consent, provider issue, etc.
+    if (googleError) {
+      done.current = true;
+      const copy =
+        GOOGLE_ERROR_COPY[googleError] ??
+        {
+          es: "Google no completó la autorización. Vuelve a Conexiones e inténtalo otra vez.",
+          en: "Google did not complete the authorization. Go back to Connections and try again.",
+        };
       setStatus("error");
-      setMessage("La autorización de Google no se completó correctamente.");
+      setMessage(navigator.language.startsWith("es") ? copy.es : copy.en);
+      return;
+    }
+
+    if (!code || !state || !organizationId) {
+      done.current = true;
+      setStatus("error");
+      setMessage(
+        navigator.language.startsWith("es")
+          ? "La autorización de Google no se completó correctamente."
+          : "The Google authorization was not completed correctly.",
+      );
       return;
     }
     done.current = true;
     void (async () => {
       const out = await api.finishGoogleConnect(organizationId, code, state);
+      // Finish Google connect never returns raw credentials. We surface a
+      // business message based on a non-technical state: connection !=
+      // connected → connection failed; null → backend unreachable.
+      if (!out) {
+        setStatus("error");
+        setMessage(
+          navigator.language.startsWith("es")
+            ? "No hemos podido contactar con Departify. Vuelve a intentarlo en unos minutos."
+            : "We could not reach Departify. Please try again in a few minutes.",
+        );
+        return;
+      }
       if (!out?.connection || out.connection.status !== "connected") {
         setStatus("error");
-        setMessage("Google no devolvió una conexión válida. Inténtalo de nuevo.");
+        setMessage(
+          navigator.language.startsWith("es")
+            ? "Google no devolvió una conexión válida. Inténtalo de nuevo."
+            : "Google did not return a valid connection. Please try again.",
+        );
         return;
       }
       navigate("/conexiones", { replace: true });
@@ -54,6 +108,15 @@ export function GoogleOAuthCallbackRoute() {
             ? "Departify está completando la autorización. Vuelves a Conexiones en unos segundos."
             : message}
         </p>
+        {status === "error" && (
+          <div className="dfy-hero__actions">
+            <a href="/conexiones" className="dfy-button">
+              {navigator.language.startsWith("es")
+                ? "Volver a Conexiones"
+                : "Back to Connections"}
+            </a>
+          </div>
+        )}
       </section>
     </div>
   );

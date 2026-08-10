@@ -1,9 +1,10 @@
 /**
- * Supabase conversation store — Phase P-B (part 15).
+ * Supabase conversation store — Phase P-B (part 15 + 26).
  *
  * Durable conversations + messages backed by Supabase (service role; RLS is
  * defense-in-depth). Organization-scoped by construction — every lookup is
- * constrained to the organization id.
+ * constrained to the organization id. Compaction summary lives on the
+ * conversation row (see migration 20260810140000_conversations_compaction.sql).
  */
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
@@ -23,6 +24,10 @@ interface ConversationRow {
   created_at: string;
   updated_at: string;
   last_message_at: string | null;
+  summary: string | null;
+  compacted_at: string | null;
+  compacted_up_to_message_id: string | null;
+  compaction_message_count: number | null;
 }
 
 interface MessageRow {
@@ -68,6 +73,28 @@ export class SupabaseConversationStore implements ConversationStore {
       .order("last_message_at", { ascending: false, nullsFirst: false });
     if (error) throw error;
     return (data ?? []).map((row) => mapConversation(row as ConversationRow));
+  }
+
+  async listForOrgIncludingArchived(
+    organizationId: string,
+  ): Promise<ConversationRecord[]> {
+    const { data, error } = await this.admin
+      .from("conversations")
+      .select("*")
+      .eq("organization_id", organizationId)
+      .order("last_message_at", { ascending: false, nullsFirst: false });
+    if (error) throw error;
+    return (data ?? []).map((row) => mapConversation(row as ConversationRow));
+  }
+
+  async countActiveForOrg(organizationId: string): Promise<number> {
+    const { count, error } = await this.admin
+      .from("conversations")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organizationId)
+      .eq("status", "active");
+    if (error) throw error;
+    return count ?? 0;
   }
 
   async get(
@@ -155,6 +182,29 @@ export class SupabaseConversationStore implements ConversationStore {
     if (error) throw error;
     return (data ?? []).map((row) => mapMessage(row as MessageRow));
   }
+
+  async saveCompaction(
+    organizationId: string,
+    conversationId: string,
+    summary: string,
+    compactedUpToMessageId: string,
+    compactionMessageCount: number,
+  ): Promise<boolean> {
+    const { data, error } = await this.admin
+      .from("conversations")
+      .update({
+        summary,
+        compacted_at: new Date().toISOString(),
+        compacted_up_to_message_id: compactedUpToMessageId,
+        compaction_message_count: compactionMessageCount,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", conversationId)
+      .eq("organization_id", organizationId)
+      .select("id");
+    if (error) throw error;
+    return (data?.length ?? 0) > 0;
+  }
 }
 
 function mapConversation(row: ConversationRow): ConversationRecord {
@@ -166,6 +216,14 @@ function mapConversation(row: ConversationRow): ConversationRecord {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ...(row.last_message_at ? { lastMessageAt: row.last_message_at } : {}),
+    ...(row.summary ? { summary: row.summary } : {}),
+    ...(row.compacted_at ? { compactedAt: row.compacted_at } : {}),
+    ...(row.compacted_up_to_message_id
+      ? { compactedUpToMessageId: row.compacted_up_to_message_id }
+      : {}),
+    ...(typeof row.compaction_message_count === "number"
+      ? { compactionMessageCount: row.compaction_message_count }
+      : {}),
   };
 }
 

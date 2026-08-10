@@ -1,21 +1,44 @@
 /**
- * Conversation routes — Phase P-B part 15.
+ * Conversation routes — Phase P-B part 15 + 26.
  *
  * Durable, organization-scoped CEO chat sessions. Access goes through the
  * same P0-A tenant boundary (membership is enforced by the auth hook), and
  * every conversation operation is constrained to the organization id.
  *
- *   GET  /:org/conversations                        → list active conversations
- *   POST /:org/conversations                        → create (title optional)
- *   GET  /:org/conversations/:conversationId        → record + messages
- *   POST /:org/conversations/:conversationId/messages → send a CEO message
- *   POST /:org/conversations/:conversationId/archive  → archive
+ *   GET  /:org/conversations                          → list active (with activeCount + max)
+ *   GET  /:org/conversations/history                  → list including archived (recoverable)
+ *   POST /:org/conversations                          → create (title optional)
+ *   GET  /:org/conversations/:conversationId          → record + messages
+ *   POST /:org/conversations/:conversationId/messages  → send a CEO message (+ compaction)
+ *   POST /:org/conversations/:conversationId/archive   → archive
+ *
+ * Hard rules:
+ *   - Maximum 5 ACTIVE conversations. The 6th `POST /conversations` returns
+ *     409 with a structured payload that the portal renders as
+ *     "Ya tienes 5 conversaciones activas — archiva una para continuar".
+ *     No silent deletion. Historical information survives.
+ *   - Org isolation is structural: every operation carries
+ *     `organizationId` and the store refuses cross-org access.
+ *   - Compaction is run on demand, after the message add, when the
+ *     transcript exceeds the threshold. Raw history is never deleted.
+ *   - Archived conversations are recoverable from
+ *     `/conversations/history` and never count toward the 5-active cap.
  */
 
 import type { FastifyInstance } from "fastify";
-import { DEFAULT_CONVERSATION_TITLE } from "../../customer-zero/conversation-store.js";
-import { processCeoMessage, requireSession } from "./customer-zero-v2.js";
+import {
+  COMPACTION_THRESHOLD_CHARS,
+  DEFAULT_CONVERSATION_TITLE,
+  shouldCompact,
+  splitForCompaction,
+  summarizeOldMessages,
+  type ConversationMessage,
+} from "../../customer-zero/conversation-store.js";
+import { processCeoMessage, requireSession, MaxActiveConversationsError } from "./customer-zero-v2.js";
 import type { ServerDeps } from "../deps.js";
+
+/** Maximum user-visible active conversations for any organization. */
+export const MAX_ACTIVE_CONVERSATIONS = 5;
 
 export async function registerConversationRoutes(
   server: FastifyInstance,
@@ -27,6 +50,53 @@ export async function registerConversationRoutes(
       schema: {
         tags: ["command-center"],
         summary: "List the organization's active conversations",
+        params: {
+          type: "object",
+          required: ["organizationId"],
+          properties: { organizationId: { type: "string" } },
+        },
+        response: {
+          200: {
+            type: "object",
+            required: [
+              "organizationId",
+              "conversations",
+              "activeCount",
+              "maxActive",
+            ],
+            properties: {
+              organizationId: { type: "string" },
+              conversations: { type: "array" },
+              activeCount: { type: "integer" },
+              maxActive: { type: "integer" },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId } = request.params as { organizationId: string };
+      const session = await requireSession(organizationId, deps);
+      const conversations = await session.conversations.listForOrg(organizationId);
+      const activeCount = await session.conversations.countActiveForOrg(
+        organizationId,
+      );
+      return reply.code(200).send({
+        organizationId,
+        conversations,
+        activeCount,
+        maxActive: MAX_ACTIVE_CONVERSATIONS,
+      });
+    },
+  );
+
+  server.get(
+    "/api/customer-zero/:organizationId/conversations/history",
+    {
+      schema: {
+        tags: ["command-center"],
+        summary:
+          "List all conversations (including archived). Archived conversations stay recoverable and never count toward the 5-active cap.",
         params: {
           type: "object",
           required: ["organizationId"],
@@ -47,7 +117,8 @@ export async function registerConversationRoutes(
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
       const session = await requireSession(organizationId, deps);
-      const conversations = await session.conversations.listForOrg(organizationId);
+      const conversations =
+        await session.conversations.listForOrgIncludingArchived(organizationId);
       return reply.code(200).send({ organizationId, conversations });
     },
   );
@@ -63,13 +134,6 @@ export async function registerConversationRoutes(
           required: ["organizationId"],
           properties: { organizationId: { type: "string" } },
         },
-        body: {
-          type: "object",
-          properties: {
-            title: { type: "string" },
-          },
-          additionalProperties: false,
-        },
         response: {
           201: {
             type: "object",
@@ -81,16 +145,51 @@ export async function registerConversationRoutes(
               },
             },
           },
+          409: {
+            type: "object",
+            required: ["error"],
+            properties: {
+              error: {
+                type: "object",
+                required: ["code", "message", "activeCount", "maxActive"],
+                properties: {
+                  code: { type: "string" },
+                  message: { type: "string" },
+                  activeCount: { type: "integer" },
+                  maxActive: { type: "integer" },
+                },
+              },
+            },
+          },
         },
       },
     },
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
-      const body = request.body as { title?: string } | undefined;
+      const body = (request.body as { title?: string } | null | undefined) ?? {};
       const session = await requireSession(organizationId, deps);
+
+      // P-B part 26 — 5-active-cap with archive-first UX. The 6th
+      // conversation is REFUSED, not silently deleted. The portal asks
+      // the CEO to archive one first.
+      const activeCount = await session.conversations.countActiveForOrg(
+        organizationId,
+      );
+      if (activeCount >= MAX_ACTIVE_CONVERSATIONS) {
+        return reply.code(409).send({
+          error: {
+            code: "MAX_ACTIVE_CONVERSATIONS",
+            message:
+              "Ya tienes 5 conversaciones activas. Archiva una para empezar otra.",
+            activeCount,
+            maxActive: MAX_ACTIVE_CONVERSATIONS,
+          },
+        });
+      }
+
       const conversation = await session.conversations.create(
         organizationId,
-        body?.title?.trim() || DEFAULT_CONVERSATION_TITLE,
+        body.title?.trim() || DEFAULT_CONVERSATION_TITLE,
       );
       session.state.currentConversationId = conversation.id;
       return reply.code(201).send({ conversation });
@@ -177,10 +276,31 @@ export async function registerConversationRoutes(
               reply: { type: "string" },
               events: { type: "array" },
               routing: { type: "object", additionalProperties: true },
+              connectionSuggestion: {
+                type: ["object", "null"],
+                additionalProperties: true,
+              },
+              pendingToolId: { type: ["string", "null"] },
               conversationId: { type: "string" },
             },
           },
           404: { type: "object", properties: { error: { type: "string" } } },
+          409: {
+            type: "object",
+            required: ["error"],
+            properties: {
+              error: {
+                type: "object",
+                required: ["code", "message", "activeCount", "maxActive"],
+                properties: {
+                  code: { type: "string" },
+                  message: { type: "string" },
+                  activeCount: { type: "integer" },
+                  maxActive: { type: "integer" },
+                },
+              },
+            },
+          },
         },
       },
     },
@@ -198,7 +318,58 @@ export async function registerConversationRoutes(
       if (!conversation) {
         return reply.code(404).send({ error: "Conversation not found." });
       }
-      const result = await processCeoMessage(session, message, conversationId);
+      let result;
+      try {
+        result = await processCeoMessage(session, message, conversationId);
+      } catch (cause) {
+        if (cause instanceof MaxActiveConversationsError) {
+          return reply.code(409).send({
+            error: {
+              code: "MAX_ACTIVE_CONVERSATIONS",
+              message: cause.message,
+              activeCount: cause.activeCount,
+              maxActive: 5,
+            },
+          });
+        }
+        throw cause;
+      }
+
+      // After the message + assistant reply have been persisted, run
+      // compaction if the transcript exceeds the provider-independent
+      // character threshold. Raw history is preserved; only the model
+      // context is rewritten to `[summary, ...recent]`.
+      try {
+        const allMessages = await session.conversations.listMessages(
+          organizationId,
+          conversationId,
+        );
+        const totalChars = allMessages.reduce(
+          (sum, m) => sum + m.content.length,
+          0,
+        );
+        if (shouldCompact(totalChars)) {
+          const { older } = splitForCompaction(allMessages);
+          if (older.length > 0) {
+            const lastFolded = older[older.length - 1] as ConversationMessage;
+            const summary = summarizeOldMessages(
+              older.map((m) => ({ role: m.role, content: m.content })),
+            );
+            await session.conversations.saveCompaction(
+              organizationId,
+              conversationId,
+              summary,
+              lastFolded.id,
+              older.length,
+            );
+          }
+        }
+      } catch {
+        // Compaction is best-effort: a failure must NEVER break a CEO
+        // turn. The bounded window continues to operate without a
+        // summary until the next attempt.
+      }
+
       return reply.code(200).send(result);
     },
   );
@@ -233,7 +404,10 @@ export async function registerConversationRoutes(
         conversationId: string;
       };
       const session = await requireSession(organizationId, deps);
-      const ok = await session.conversations.archive(organizationId, conversationId);
+      const ok = await session.conversations.archive(
+        organizationId,
+        conversationId,
+      );
       if (!ok) {
         return reply.code(404).send({ error: "Conversation not found." });
       }
@@ -244,3 +418,7 @@ export async function registerConversationRoutes(
     },
   );
 }
+
+// Re-export the compaction threshold so a future test or operator tool
+// can read the same constant the route enforces.
+export const __COMPACTION_THRESHOLD_CHARS__ = COMPACTION_THRESHOLD_CHARS;

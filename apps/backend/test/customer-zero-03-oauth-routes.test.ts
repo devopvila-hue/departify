@@ -184,11 +184,18 @@ describe("CZ03 — Google OAuth unified handshake (routes)", () => {
     const state = connect.json().connection.oauthState as string;
     expect(state).toBeTruthy();
 
-    // Mock the Google token + userinfo exchange.
+    // Mock the Google token + userinfo exchange. We capture the body of
+    // the POST to oauth2.googleapis.com/token so we can P0-pin that
+    // redirect_uri handed to Google's token endpoint is byte-identical
+    // to the one used in the authorize URL.
     const realFetch = globalThis.fetch;
+    let tokenRequestBody: URLSearchParams | null = null;
     globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
       if (url.includes("oauth2.googleapis.com/token")) {
+        if (init?.body && typeof init.body === "string") {
+          tokenRequestBody = new URLSearchParams(init.body);
+        }
         return new Response(
           JSON.stringify({
             access_token: "access-1",
@@ -223,6 +230,13 @@ describe("CZ03 — Google OAuth unified handshake (routes)", () => {
       expect(tokens?.accessToken).toBe("access-1");
       expect(tokens?.refreshToken).toBe("refresh-1");
       expect(tokens?.email).toBe("ceo@departify.app");
+      // P0 — the redirect_uri sent to Google's token endpoint MUST
+      // match the authorize redirect_uri byte-for-byte. Otherwise
+      // Google rejects with `redirect_uri_mismatch`.
+      expect(tokenRequestBody).not.toBeNull();
+      expect(tokenRequestBody!.get("redirect_uri")).toBe(
+        "https://app.departify.app/connections/google/callback",
+      );
       // The connection is now connected — a second callback is rejected at the
       // handshake-state gate (409), and the consumed nonce is also gone.
       const replay = await authedInject({

@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import {
   api,
   type CommandCenterEvent,
   type CommandCenterMessageResult,
   type ConversationView,
+  type MaxActiveConversationsError,
+  type MessageView,
 } from "@/app/api";
 import { useOrg } from "@/app/org-context";
-import { readable } from "@/app/readable";
 import { renderMarkdown } from "@/app/markdown";
 import {
   CheckIcon,
@@ -22,32 +23,57 @@ import {
   SparkIcon,
   TasksIcon,
 } from "@/components/icons";
-import { useNavigate } from "react-router-dom";
 
 /**
- * The Conversation — Sprint 59 (Phase P-B part 15: durable sessions).
+ * The Conversation — Sprint 60 (Phase P-B part 15 + 26).
  *
- * The chat IS the application. Conversations and messages are durable and
- * organization-scoped: the CEO can start a new conversation, reopen a past
- * one, archive one, and always return to a clean chat — without losing the
- * company knowledge, connections or departments.
+ * Behaviour:
+ *   - The chat IS the application.
+ *   - Maximum 5 ACTIVE conversations. The 6th request opens a confirm
+ *     dialog: archive one to continue, or cancel. No silent deletes.
+ *   - Each conversation is durable server-side (Supabase) so a reload,
+ *     a backend restart, or a deploy preserves everything.
+ *   - Switching conversations reloads the recent transcript and scrolls
+ *     to the latest turn. Composer stays ready.
+ *   - New conversation: opens at first user input, not embedded in a
+ *     dashboard. Empty start shows a single grounded opening prompt.
+ *   - Long transcripts compact internally (deterministic summary). The
+ *     CEO sees ONE continuous conversation. The portal surfaces a
+ *     subtle hint when a compaction has run.
+ *   - Conversation titles default to "Nueva conversación" until enough
+ *     context exists; the backend derives a useful title without making
+ *     the user wait.
+ *   - Archived conversations remain visible from history and never
+ *     count toward the 5-active cap. History does not delete memory.
  */
 export function ChatRoute() {
   const { organizationId } = useOrg();
   const navigate = useNavigate();
   const location = useLocation();
   const [transcript, setTranscript] = useState<
-    { role: "user" | "assistant"; content: string }[]
+    { role: "user" | "assistant"; content: string; speaker?: "departify" | "elvira" }[]
   >([]);
   const [events, setEvents] = useState<readonly CommandCenterEvent[]>([]);
   const [conversations, setConversations] = useState<ConversationView[]>([]);
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [archivedConversations, setArchivedConversations] = useState<
+    ConversationView[]
+  >([]);
+  const [currentConversationId, setCurrentConversationId] = useState<
+    string | null
+  >(null);
+  const [currentSummary, setCurrentSummary] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [opening, setOpening] = useState(true);
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [processStatus, setProcessStatus] = useState<string | null>(null);
+  const [maxActive, setMaxActive] = useState(5);
+  const [capDialog, setCapDialog] = useState<{
+    open: boolean;
+    activeCount: number;
+    maxActive: number;
+  }>({ open: false, activeCount: 0, maxActive: 5 });
   const scrollerRef = useRef<HTMLDivElement | null>(null);
 
   const focusFromUrl = useMemo(() => {
@@ -55,30 +81,44 @@ export function ChatRoute() {
     return params.get("focus");
   }, [location.search]);
 
-  const loadConversation = useCallback(async (conversationId: string) => {
-    const data = await api.conversation(organizationId!, conversationId);
-    if (!data) return;
-    setTranscript(
-      data.messages.map((message) => ({
-        role: message.role as "user" | "assistant",
-        content: message.content,
-      })),
-    );
-    setCurrentConversationId(conversationId);
-  }, [organizationId]);
-
   const refreshConversations = useCallback(async () => {
     if (!organizationId) return;
     const data = await api.conversations(organizationId);
-    if (data) setConversations(data.conversations ?? []);
+    if (data) {
+      setConversations(data.conversations ?? []);
+      setMaxActive(data.maxActive ?? 5);
+    }
+    const history = await api.conversationHistory(organizationId);
+    if (history) {
+      setArchivedConversations(
+        (history.conversations ?? []).filter((c) => c.status === "archived"),
+      );
+    }
   }, [organizationId]);
+
+  const loadConversation = useCallback(
+    async (conversationId: string) => {
+      const data = await api.conversation(organizationId!, conversationId);
+      if (!data) return;
+      setTranscript(
+        data.messages.map((message: MessageView) => ({
+          role: message.role,
+          content: message.content,
+        })),
+      );
+      setCurrentConversationId(conversationId);
+      setCurrentSummary(data.conversation.summary ?? null);
+      setHistoryOpen(false);
+    },
+    [organizationId],
+  );
 
   const load = useCallback(async () => {
     if (!organizationId) return;
     await refreshConversations();
-    const [openingData] = await Promise.all([api.commandCenterOpening(organizationId)]);
+    const openingData = await api.commandCenterOpening(organizationId);
     if (openingData) setEvents(openingData.events);
-    // Reopen the most recent conversation if there is one; otherwise a clean chat.
+
     const data = await api.conversations(organizationId);
     const first = data?.conversations?.[0];
     if (first) {
@@ -86,6 +126,7 @@ export function ChatRoute() {
     } else {
       setTranscript([]);
       setCurrentConversationId(null);
+      setCurrentSummary(null);
     }
     setOpening(false);
   }, [organizationId, refreshConversations, loadConversation]);
@@ -103,8 +144,6 @@ export function ChatRoute() {
 
   // Customer Zero 01 P0 — poll the work feed so a final ELVIRA
   // message appears automatically when a long analysis finishes.
-  // The CEO does NOT need to send another message to recover the
-  // result.
   useEffect(() => {
     if (!organizationId) return;
     let cancelled = false;
@@ -112,12 +151,12 @@ export function ChatRoute() {
     async function pollOnce() {
       if (cancelled) return;
       try {
-        const feed = organizationId ? await api.workFeed(organizationId, lastSeen) : null;
+        const feed = organizationId
+          ? await api.workFeed(organizationId, lastSeen)
+          : null;
         if (!feed || cancelled) return;
         if (feed.newResults.length > 0) {
-          // Inject each new result as an ELVIRA turn in the transcript.
           for (const result of feed.newResults) {
-            const html = renderMarkdown(result.summary + "\n\n" + result.content);
             setTranscript((prev) => {
               const exists = prev.some(
                 (turn) =>
@@ -134,7 +173,6 @@ export function ChatRoute() {
                 },
               ];
             });
-            void html; // renderMarkdown is intentionally applied via the renderer below
           }
         }
         lastSeen = feed.serverTime;
@@ -151,9 +189,24 @@ export function ChatRoute() {
 
   async function newConversation() {
     if (!organizationId) return;
-    const created = await api.createConversation(organizationId);
-    if (!created?.conversation) return;
-    setCurrentConversationId(created.conversation.id);
+    setError(null);
+    const result = await api.createConversation(organizationId);
+    if (!result || !result.conversation) {
+      setError(
+        "Departify no ha podido abrir una nueva conversación. Inténtalo de nuevo.",
+      );
+      return;
+    }
+    if (result.error && result.error.code === "MAX_ACTIVE_CONVERSATIONS") {
+      setCapDialog({
+        open: true,
+        activeCount: result.error.activeCount,
+        maxActive: result.error.maxActive,
+      });
+      return;
+    }
+    setCurrentConversationId(result.conversation.id);
+    setCurrentSummary(null);
     setTranscript([]);
     setEvents([]);
     await refreshConversations();
@@ -166,7 +219,16 @@ export function ChatRoute() {
     if (currentConversationId === conversationId) {
       setCurrentConversationId(null);
       setTranscript([]);
+      setCurrentSummary(null);
     }
+  }
+
+  async function resumeArchived(conversationId: string) {
+    await loadConversation(conversationId);
+    // The previously-archived conversation becomes active again because
+    // a new CEO message re-opens it. We rely on the backend list
+    // refresh to update the sidebar.
+    await refreshConversations();
   }
 
   async function send() {
@@ -176,11 +238,22 @@ export function ChatRoute() {
     setError(null);
     setProcessStatus("Departify está pensando…");
     setInput("");
-    setTranscript((prev) => [...prev, { role: "user", content: value }]);
-    const result: (CommandCenterMessageResult & { conversationId?: string }) | null =
-      currentConversationId
-        ? await api.sendConversationMessage(organizationId, currentConversationId, value)
-        : await api.commandCenterMessage(organizationId, value);
+
+    // When no conversation is active, route through the same backend
+    // endpoint that auto-creates the durable conversation on first use.
+    // The 5-active-cap is enforced by the same endpoint via
+    // ensureConversation (see customer-zero-v2.ts). When a conversation
+    // is already selected, send the message to that conversation.
+    const result: (CommandCenterMessageResult & {
+      conversationId?: string;
+      error?: MaxActiveConversationsError;
+    }) | null = currentConversationId
+      ? await api.sendConversationMessage(
+          organizationId,
+          currentConversationId,
+          value,
+        )
+      : await api.commandCenterMessage(organizationId, value);
     setBusy(false);
     setProcessStatus(null);
     if (!result) {
@@ -189,21 +262,29 @@ export function ChatRoute() {
       );
       return;
     }
-    if (result.conversationId) setCurrentConversationId(result.conversationId);
-    // The assistant reply already arrives with speaker + work-state
-    // metadata in `result.events`; we surface those directly. We also
-    // append the assistant message to the transcript so users see a
-    // continuous conversation history.
-    const speaker = inferSpeaker(result.events);
+    if (
+      result.error &&
+      result.error.code === "MAX_ACTIVE_CONVERSATIONS"
+    ) {
+      setCapDialog({
+        open: true,
+        activeCount: result.error.activeCount,
+        maxActive: result.error.maxActive,
+      });
+      return;
+    }
+    // Append both the optimistic user line and the assistant reply so the
+    // CEO sees their own message immediately and a continuous history.
     setTranscript((prev) => [
       ...prev,
-      { role: "assistant", content: result.reply, speaker },
+      { role: "user", content: value },
+      { role: "assistant", content: result!.reply, speaker: inferSpeaker(result!.events) },
     ]);
     setEvents(result.events);
+    if (result.conversationId) setCurrentConversationId(result.conversationId);
     await refreshConversations();
   }
 
-  // If the URL passed a focus, prepopulate the composer (only once).
   const focusedRef = useRef(false);
   useEffect(() => {
     if (focusedRef.current) return;
@@ -227,7 +308,9 @@ export function ChatRoute() {
         <button
           type="button"
           className="dfy-chat-new"
+          data-testid="chat-new"
           onClick={() => void newConversation()}
+          disabled={opening}
         >
           <PlusIcon /> Nueva conversación
         </button>
@@ -235,13 +318,20 @@ export function ChatRoute() {
 
       {historyOpen && (
         <div className="dfy-chat-history" aria-label="Conversaciones recientes">
+          <p className="dfy-chat-history__count">
+            {conversations.length} activas de un máximo de {maxActive}
+          </p>
           {conversations.length === 0 ? (
             <p className="dfy-muted">Todavía no tienes conversaciones.</p>
           ) : (
             conversations.map((conversation) => (
               <div
                 key={conversation.id}
-                className={`dfy-chat-history__row${conversation.id === currentConversationId ? " dfy-chat-history__row--active" : ""}`}
+                className={`dfy-chat-history__row${
+                  conversation.id === currentConversationId
+                    ? " dfy-chat-history__row--active"
+                    : ""
+                }`}
               >
                 <button
                   type="button"
@@ -261,13 +351,47 @@ export function ChatRoute() {
               </div>
             ))
           )}
+          {archivedConversations.length > 0 && (
+            <div className="dfy-chat-history__archived">
+              <p className="dfy-chat-history__archived-title">Archivadas</p>
+              {archivedConversations.map((conversation) => (
+                <button
+                  key={conversation.id}
+                  type="button"
+                  className="dfy-chat-history__archived-row"
+                  onClick={() => void resumeArchived(conversation.id)}
+                >
+                  {conversation.title}{" "}
+                  <span className="dfy-muted dfy-muted--small">
+                    (recuperable)
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
-      <div className="dfy-chat-scroller" ref={scrollerRef}>
+      {currentSummary && (
+        <div
+          className="dfy-chat-summary-hint"
+          aria-label="Resumen compacto de la conversación"
+          data-testid="chat-summary"
+        >
+          <SparkIcon /> Conversación larga — Departify recuerda el contexto
+          automáticamente.
+        </div>
+      )}
+
+      <div
+        className="dfy-chat-scroller"
+        ref={scrollerRef}
+        data-testid="chat-scroller"
+      >
         <ConversationList
           transcript={transcript}
           events={events}
+          isFresh={transcript.length === 0 && events.length === 0 && !opening}
           onNavigate={(path) => navigate(path)}
         />
         {processStatus && (
@@ -284,6 +408,67 @@ export function ChatRoute() {
         busy={busy}
         error={error}
       />
+
+      {capDialog.open && (
+        <ArchiveCapDialog
+          activeCount={capDialog.activeCount}
+          maxActive={capDialog.maxActive}
+          conversations={conversations}
+          onArchive={async (conversationId) => {
+            await archiveConversation(conversationId);
+            setCapDialog({ open: false, activeCount: 0, maxActive: 5 });
+            // After archiving, retry the new-conversation creation
+            // automatically. This keeps the CEO's click → result path
+            // simple.
+            await newConversation();
+          }}
+          onCancel={() =>
+            setCapDialog({ open: false, activeCount: 0, maxActive: 5 })
+          }
+        />
+      )}
+    </div>
+  );
+}
+
+function ArchiveCapDialog(props: {
+  activeCount: number;
+  maxActive: number;
+  conversations: ConversationView[];
+  onArchive: (conversationId: string) => Promise<void> | void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="dfy-cap-dialog__backdrop" role="dialog" aria-modal="true">
+      <div className="dfy-cap-dialog">
+        <h2>Ya tienes {props.activeCount} conversaciones activas</h2>
+        <p>
+          Para abrir una nueva, archiva una de las existentes. Tu historial
+          nunca se pierde.
+        </p>
+        <ul className="dfy-cap-dialog__list">
+          {props.conversations.map((conversation) => (
+            <li key={conversation.id}>
+              <button
+                type="button"
+                onClick={() => void props.onArchive(conversation.id)}
+                className="dfy-button dfy-button--small"
+              >
+                Archivar «{conversation.title}»
+              </button>
+            </li>
+          ))}
+        </ul>
+        <div className="dfy-cap-dialog__actions">
+          <button
+            type="button"
+            className="dfy-button dfy-button--ghost"
+            onClick={props.onCancel}
+          >
+            Cancelar
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -295,14 +480,24 @@ function ConversationList(props: {
     speaker?: "departify" | "elvira";
   }[];
   events: readonly CommandCenterEvent[];
+  isFresh: boolean;
   onNavigate: (path: string) => void;
 }) {
-  const { transcript, events } = props;
+  const { transcript, events, isFresh, onNavigate } = props;
   if (transcript.length === 0 && events.length === 0) {
+    if (isFresh) {
+      return (
+        <div className="dfy-chat-empty" data-testid="chat-empty">
+          <SparkIcon size={28} />
+          <h2>¿Qué quieres conseguir?</h2>
+          <p>Escribe algo a tu empresa. Departify se encarga del resto.</p>
+        </div>
+      );
+    }
     return (
       <div className="dfy-chat-empty">
         <SparkIcon size={28} />
-        <p>Aquí aparecerá tu conversación con Departify.</p>
+        <p>Aqui aparecerá tu conversación con Departify.</p>
       </div>
     );
   }
@@ -310,24 +505,24 @@ function ConversationList(props: {
   return (
     <div className="dfy-thread">
       {transcript.map((turn, index) => {
-        const speakerLabel = turn.role === "user"
-          ? "Tú"
-          : turn.speaker === "elvira"
-            ? "ELVIRA · Directora de Marketing"
-            : "DEPARTIFY";
+        const speakerLabel =
+          turn.role === "user"
+            ? "Tú"
+            : turn.speaker === "elvira"
+              ? "ELVIRA · Directora de Marketing"
+              : "DEPARTIFY";
         const html = renderMarkdown(turn.content);
         return (
           <div
-            key={`turn_${index}`}
-            className={`dfy-bubble${turn.role === "user" ? " dfy-bubble--user" : " dfy-bubble--assistant"}`}
+            key={`turn_${index}_${turn.role}`}
+            className={`dfy-bubble${
+              turn.role === "user" ? " dfy-bubble--user" : " dfy-bubble--assistant"
+            }`}
             data-speaker={turn.speaker ?? "departify"}
           >
             <span className="dfy-bubble__who">{speakerLabel}</span>
             <div
               className="dfy-bubble__body"
-              // The Markdown renderer escapes all input and only emits
-              // a fixed tag whitelist (p, ul, ol, li, strong, em, code, a).
-              // See apps/portal/src/app/markdown.ts.
               dangerouslySetInnerHTML={{ __html: html }}
             />
           </div>
@@ -337,9 +532,11 @@ function ConversationList(props: {
         <div className="dfy-thread__opening">
           {events.map((event, index) => (
             <EventCard
-              key={`op_${index}_${event.kind}_${String((event as { state?: string }).state ?? index)}`}
+              key={`op_${index}_${event.kind}_${String(
+                (event as { state?: string }).state ?? index,
+              )}`}
               event={event}
-              onNavigate={props.onNavigate}
+              onNavigate={onNavigate}
             />
           ))}
         </div>
@@ -348,7 +545,9 @@ function ConversationList(props: {
   );
 }
 
-function inferSpeaker(events: readonly CommandCenterEvent[]): "departify" | "elvira" {
+function inferSpeaker(
+  events: readonly CommandCenterEvent[],
+): "departify" | "elvira" {
   for (const event of events) {
     if (event.kind === "transcript" && event.speaker) return event.speaker;
   }
@@ -454,7 +653,7 @@ function EventCard(props: {
             <strong>{event.item.title}</strong>
             <span className="dfy-event__pill dfy-event__pill--success">Terminado</span>
           </header>
-          {event.item.result && <p>{readable(event.item.result)}</p>}
+          {event.item.result && <p>{event.item.result}</p>}
           <button
             type="button"
             className="dfy-button dfy-button--ghost dfy-button--small"
@@ -494,7 +693,9 @@ function EventCard(props: {
               <li key={dept.id}>
                 <span>{dept.name}</span>
                 <span
-                  className={`dfy-event__pill ${dept.status === "active" ? "dfy-event__pill--success" : ""}`}
+                  className={`dfy-event__pill ${
+                    dept.status === "active" ? "dfy-event__pill--success" : ""
+                  }`}
                 >
                   {dept.status === "active" ? "Activo" : "Pronto"}
                 </span>

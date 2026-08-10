@@ -495,7 +495,9 @@ export interface ProgressiveQuestionView {
   hint?: string;
 }
 
-export interface ConversationView {
+/** Progressive-discovery conversation (intake phase). Distinct from
+ *  the durable chat ConversationView below. */
+export interface ProgressiveDiscoveryView {
   organizationId: string;
   question: ProgressiveQuestionView | null;
   ready: boolean;
@@ -526,6 +528,11 @@ export interface ConversationView {
   createdAt: string;
   updatedAt: string;
   lastMessageAt?: string;
+  /** Optional summary persisted by compaction. Surfaced in the portal
+   *  only as a hint ("Conversación larga — Departify recuerda el
+   *  contexto"). Never editable by the CEO. */
+  summary?: string;
+  compactedAt?: string;
 }
 
 export interface MessageView {
@@ -534,6 +541,20 @@ export interface MessageView {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+}
+
+export interface ConversationListView {
+  organizationId: string;
+  conversations: ConversationView[];
+  activeCount: number;
+  maxActive: number;
+}
+
+export interface MaxActiveConversationsError {
+  code: "MAX_ACTIVE_CONVERSATIONS";
+  message: string;
+  activeCount: number;
+  maxActive: number;
 }
 
 let accessToken: string | null = null;
@@ -588,9 +609,9 @@ export const api = {
   progress: (org: string) =>
     getJson<ProgressView>(`/api/customer-zero/${org}/progress`),
   nextQuestion: (org: string) =>
-    getJson<ConversationView>(`/api/customer-zero/${org}/next-question`),
+    getJson<ProgressiveDiscoveryView>(`/api/customer-zero/${org}/next-question`),
   answer: (org: string, questionId: string, answers: string[]) =>
-    postJson<ConversationView>(`/api/customer-zero/${org}/answer`, {
+    postJson<ProgressiveDiscoveryView>(`/api/customer-zero/${org}/answer`, {
       questionId,
       answers,
     }),
@@ -719,17 +740,24 @@ export const api = {
       `/api/customer-zero/${org}/command-center/opening`,
     ),
   commandCenterMessage: (org: string, message: string, conversationId?: string) =>
-    postJson<CommandCenterMessageResult & { conversationId?: string }>(
+    postJson<CommandCenterMessageResult & {
+      conversationId?: string;
+      error?: MaxActiveConversationsError;
+    }>(
       `/api/customer-zero/${org}/command-center/message`,
       conversationId ? { message, conversationId } : { message },
     ),
-  // Durable conversations (Phase P-B part 15).
+  // Durable conversations (Phase P-B part 15 + 26).
   conversations: (org: string) =>
-    getJson<{ conversations: ConversationView[] }>(
+    getJson<ConversationListView>(
       `/api/customer-zero/${org}/conversations`,
     ),
+  conversationHistory: (org: string) =>
+    getJson<{ conversations: ConversationView[] }>(
+      `/api/customer-zero/${org}/conversations/history`,
+    ),
   createConversation: (org: string, title?: string) =>
-    postJson<{ conversation: ConversationView }>(
+    postJson<{ conversation: ConversationView } & { error?: MaxActiveConversationsError }>(
       `/api/customer-zero/${org}/conversations`,
       title ? { title } : undefined,
     ),
