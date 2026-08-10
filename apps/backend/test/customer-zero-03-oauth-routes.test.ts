@@ -97,6 +97,61 @@ describe("CZ03 — Google OAuth unified handshake (routes)", () => {
     expect(gmailOAuthStateStore.get(body.connection.oauthState)).not.toBeNull();
   });
 
+  it("P0 redirect_uri: with PUBLIC_BASE_URL=https://app.departify.app the authorization URL contains exactly https://app.departify.app/connections/google/callback", async () => {
+    // Regression for the production redirect_uri_mismatch error.
+    // The Google Cloud OAuth Web Client was configured by the founder
+    // with:
+    //   Authorized JavaScript origin:  https://app.departify.app
+    //   Authorized redirect URI:       https://app.departify.app/connections/google/callback
+    // The backend must generate EXACTLY that redirect_uri. Nothing
+    // else, no trailing slash, no /api/... path, no localhost, no
+    // api.departify.app.
+    process.env.GOOGLE_OAUTH_CLIENT_ID = "client-test";
+    process.env.GOOGLE_OAUTH_CLIENT_SECRET = "secret-test";
+    process.env.PUBLIC_BASE_URL = "https://app.departify.app";
+    const org = await startOrg();
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/gmail/connect`,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const authorizationUrl = body.connection.authorizationUrl as string;
+
+    // Extract the exact redirect_uri the backend will hand to Google.
+    const parsed = new URL(authorizationUrl);
+    const redirectUri = parsed.searchParams.get("redirect_uri");
+    expect(redirectUri).not.toBeNull();
+    expect(redirectUri).toBe("https://app.departify.app/connections/google/callback");
+
+    // Defensive checks: every common production mistake must be absent.
+    expect(redirectUri).not.toMatch(/^http:\/\//);
+    expect(redirectUri).not.toContain("localhost");
+    expect(redirectUri).not.toContain("api.departify.app");
+    expect(redirectUri).not.toContain("/api/customer-zero/");
+    expect(redirectUri?.endsWith("/")).toBe(false);
+    expect(redirectUri).not.toMatch(/\/+$/);
+
+    // The same contract holds for every Google tool the founder can
+    // declare during onboarding.
+    for (const toolId of [
+      "gmail",
+      "google_workspace",
+      "google_calendar",
+      "google_drive",
+    ]) {
+      const r = await authedInject({
+        method: "POST",
+        url: `/api/customer-zero/${org}/connections/${toolId}/connect`,
+      });
+      expect(r.statusCode).toBe(200);
+      const u = r.json().connection.authorizationUrl as string;
+      expect(new URL(u).searchParams.get("redirect_uri")).toBe(
+        "https://app.departify.app/connections/google/callback",
+      );
+    }
+  });
+
   it("callback with a forged state is rejected (CSRF / replay)", async () => {
     process.env.GOOGLE_OAUTH_CLIENT_ID = "client-test";
     process.env.GOOGLE_OAUTH_CLIENT_SECRET = "secret-test";
