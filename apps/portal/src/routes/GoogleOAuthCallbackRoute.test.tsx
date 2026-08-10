@@ -295,4 +295,39 @@ describe("Google OAuth handshake — portal side", () => {
     await screen.findByText(/no se completó correctamente|no se pudo conectar/i);
     expect(fetchCalls).toBe(0);
   });
+
+  it("regression (P0 Google OAuth): backend error code `missing_token` surfaces the re-login hint instead of the generic Spanish fallback", async () => {
+    // Defense in depth: even if the synchronous token-restore fix ever
+    // regresses, an auth-boundary 401 with `error.code = "missing_token"`
+    // must tell the CEO to re-login instead of the generic copy.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return {
+          ok: false,
+          status: 401,
+          json: async () => ({
+            error: {
+              code: "missing_token",
+              message: "Authentication failed.",
+              requestId: "req-test",
+              statusCode: 401,
+            },
+          }),
+        } as Response;
+      }),
+    );
+    mountAt(
+      <Routes>
+        <Route
+          path="/connections/google/callback"
+          element={<GoogleOAuthCallbackRoute />}
+        />
+      </Routes>,
+      "/connections/google/callback?code=c&state=s",
+    );
+    expect(
+      await screen.findByText(/sesión ha caducado|sign out, sign back in/i),
+    ).toBeInTheDocument();
+  });
 });

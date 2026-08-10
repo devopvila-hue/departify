@@ -557,7 +557,54 @@ export interface MaxActiveConversationsError {
   maxActive: number;
 }
 
-let accessToken: string | null = null;
+/**
+ * P0 — The portal needs an Authorization header on the FIRST request after
+ * a top-level redirect (the Google OAuth callback). The `AuthProvider`
+ * hydrates this in-memory token via an async `client.auth.getSession()`,
+ * but a synchronous `useEffect` on the callback page can dispatch the
+ * exchange POST before the async hydration settles. When that happens the
+ * backend auth boundary rejects with `missing_token` and the portal
+ * surfaces a generic Spanish "no se pudo conectar" copy — masking the
+ * real, recoverable condition: the user IS authenticated, we just lost
+ * the race to read the token.
+ *
+ * supabase-js v2 persists the session in `localStorage` under
+ * `sb-<project-ref>-auth-token` (see @supabase/supabase-js
+ * DEFAULT_AUTH_OPTIONS + defaultStorageKey). Reading that key at module
+ * load time gives us a synchronous fallback for `buildHeaders()` so the
+ * callback exchange fires with a valid Bearer token on its very first
+ * attempt.
+ */
+function readPersistedSupabaseAccessToken(): string | null {
+  if (typeof window === "undefined") return null;
+  const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  if (!url) return null;
+  let projectRef: string | undefined;
+  try {
+    projectRef = new URL(url).hostname.split(".")[0];
+  } catch {
+    return null;
+  }
+  if (!projectRef) return null;
+  const key = `sb-${projectRef}-auth-token`;
+  let raw: string | null = null;
+  try {
+    raw = window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { access_token?: unknown };
+    return typeof parsed.access_token === "string" && parsed.access_token.length > 0
+      ? parsed.access_token
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+let accessToken: string | null = readPersistedSupabaseAccessToken();
 
 /** The portal keeps Supabase's session token in memory and attaches it to
  *  every protected API call. Cleared on logout. */

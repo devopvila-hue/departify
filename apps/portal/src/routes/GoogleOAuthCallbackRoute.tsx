@@ -44,6 +44,7 @@ function backendErrorCopy(
     "invalid_token",
     "expired_token",
     "auth_token_invalid",
+    "missing_token",
   ]);
   if (code && authCodes.has(code)) {
     return {
