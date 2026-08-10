@@ -41,13 +41,22 @@ export interface CapabilityDefinition {
   readonly nameEn: string;
 }
 
+export type ConnectionCategory =
+  | "crm"
+  | "email"
+  | "calendar"
+  | "documents"
+  | "marketing"
+  | "team"
+  | "other";
+
 export interface ConnectionDefinition {
   readonly id: string;
   readonly name: string;
-  readonly category: "crm" | "email" | "calendar" | "documents" | "marketing" | "team";
+  readonly category: ConnectionCategory;
   readonly categoryEs: string;
   readonly categoryEn: string;
-  /** SVG inline mark or initials used for the brand logo. */
+  /** Inline mark used for the brand logo (initials or short token). */
   readonly logoMark: string;
   /** Optional brand color (hex) for accents on the card. */
   readonly brandColor: string;
@@ -55,6 +64,9 @@ export interface ConnectionDefinition {
   readonly capabilities: readonly CapabilityDefinition[];
   /** Where configuration originates when present (e.g. "env:mautic"). */
   readonly configSourceLabel?: string;
+  /** Short business description surfaced under the card title. */
+  readonly descriptionEs?: string;
+  readonly descriptionEn?: string;
 }
 
 export interface ConnectionInstance {
@@ -208,6 +220,52 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
       { id: "workspace.documents", nameEs: "Leer y editar documentos", nameEn: "Read & edit documents" },
     ],
   },
+  // Customer Zero 03 — Google Workspace umbrella. The same OAuth
+  // handshake as Gmail; surfaces Drive + Docs capabilities.
+  {
+    id: "google_workspace",
+    name: "Google Workspace",
+    category: "documents",
+    categoryEs: "Documentos",
+    categoryEn: "Documents",
+    logoMark: "GW",
+    brandColor: "#4285f4",
+    capabilities: [
+      { id: "drive.read", nameEs: "Leer archivos de Drive", nameEn: "Read Drive files" },
+      { id: "drive.search", nameEs: "Buscar en Drive", nameEn: "Search Drive" },
+      { id: "drive.create", nameEs: "Crear archivos en Drive", nameEn: "Create Drive files" },
+    ],
+  },
+  // Customer Zero 03 — Google Calendar.
+  {
+    id: "google_calendar",
+    name: "Google Calendar",
+    category: "calendar",
+    categoryEs: "Calendario",
+    categoryEn: "Calendar",
+    logoMark: "Cal",
+    brandColor: "#1a73e8",
+    capabilities: [
+      { id: "calendar.read", nameEs: "Leer el calendario", nameEn: "Read the calendar" },
+      { id: "calendar.create", nameEs: "Crear eventos", nameEn: "Create events" },
+      { id: "calendar.update", nameEs: "Actualizar eventos", nameEn: "Update events" },
+    ],
+  },
+  // Customer Zero 03 — Google Drive (standalone).
+  {
+    id: "google_drive",
+    name: "Google Drive",
+    category: "documents",
+    categoryEs: "Documentos",
+    categoryEn: "Documents",
+    logoMark: "GD",
+    brandColor: "#fbbc04",
+    capabilities: [
+      { id: "drive.read", nameEs: "Leer archivos de Drive", nameEn: "Read Drive files" },
+      { id: "drive.search", nameEs: "Buscar en Drive", nameEn: "Search Drive" },
+      { id: "drive.create", nameEs: "Crear archivos en Drive", nameEn: "Create Drive files" },
+    ],
+  },
 ];
 
 const DEFINITIONS_BY_ID: Readonly<Record<string, ConnectionDefinition>> = (() => {
@@ -241,7 +299,10 @@ export function lifecycleToFiveState(lifecycle: ToolLifecycleStatus): Connection
 export interface ConnectionCardView {
   readonly id: string;
   readonly name: string;
+  /** Localized human label for the category (e.g. "Correo"). */
   readonly category: string;
+  /** Canonical category id (e.g. "email"). The portal groups by this. */
+  readonly categoryId: ConnectionCategory;
   readonly logoMark: string;
   readonly brandColor: string;
   readonly state: ConnectionState;
@@ -250,6 +311,8 @@ export interface ConnectionCardView {
   readonly verifiedAt: string | null;
   readonly capabilities: readonly CapabilityDefinition[];
   readonly actionLabel: string | null;
+  /** Short business description; intentional for genuinely unknown tools. */
+  readonly description: string | null;
 }
 
 /** Human label for a state in the CEO's locale. */
@@ -269,9 +332,47 @@ export function connectionStateLabel(state: ConnectionState, locale: SupportedLo
 }
 
 /**
+ * P0 — Intentional representation for genuinely unknown tools.
+ * The CEO-declared toolId is NOT in CONNECTION_DEFINITIONS, so the
+ * identity contract must be safe + explicit: never a "—" name, never
+ * a blank category, never a misleading CRM default. Surface a
+ * dedicated "other" bucket with a clear "no integration configured"
+ * description so the CEO understands what is happening.
+ */
+function unknownConnectionCard(
+  state: OrganizationToolState | null,
+  locale: SupportedLocale,
+): ConnectionCardView {
+  const toolId = state?.toolId ?? "unknown";
+  const label = state?.label ?? toolId;
+  return {
+    id: toolId,
+    name: label,
+    category: locale === "en" ? "Other" : "Otro",
+    categoryId: "other",
+    logoMark: "?",
+    brandColor: "#666666",
+    state: "not_connected",
+    stateLabel:
+      locale === "en"
+        ? "Tool not mapped yet"
+        : "Herramienta sin integración configurada",
+    configSource: null,
+    verifiedAt: null,
+    capabilities: [],
+    actionLabel: null,
+    description:
+      locale === "en"
+        ? "Tool detected, integration not yet configured."
+        : "Herramienta detectada, todavía sin integración configurada.",
+  };
+}
+
+/**
  * Render a single connection card view from the durable organization
- * tool state. Falls back to a "not_connected" view when there is no
- * stored state for this organization+tool.
+ * tool state. KNOWN tools (in CONNECTION_DEFINITIONS) always render a
+ * complete identity. UNKNOWN tools (toolId not in the catalog) render
+ * the intentional "other" representation above — never a blank card.
  */
 export function renderConnectionCard(
   state: OrganizationToolState | null,
@@ -279,19 +380,7 @@ export function renderConnectionCard(
 ): ConnectionCardView {
   const def = getConnectionDefinition(state?.toolId ?? "");
   if (!def) {
-    return {
-      id: state?.toolId ?? "unknown",
-      name: state?.label ?? state?.toolId ?? "—",
-      category: "",
-      logoMark: "?",
-      brandColor: "#666",
-      state: "not_connected",
-      stateLabel: connectionStateLabel("not_connected", locale),
-      configSource: null,
-      verifiedAt: null,
-      capabilities: [],
-      actionLabel: null,
-    };
+    return unknownConnectionCard(state, locale);
   }
   const lifecycle: ToolLifecycleStatus = state?.status ?? "needs_connection";
   const cs: ConnectionState = lifecycleToFiveState(lifecycle);
@@ -303,10 +392,13 @@ export function renderConnectionCard(
         : def.configSourceLabel
           ? t(locale, "Activar", "Activate")
           : t(locale, "Configurar", "Set up");
+  const description =
+    (locale === "en" ? def.descriptionEn : def.descriptionEs) ?? null;
   return {
     id: def.id,
     name: def.name,
     category: locale === "en" ? def.categoryEn : def.categoryEs,
+    categoryId: def.category,
     logoMark: def.logoMark,
     brandColor: def.brandColor,
     state: cs,
@@ -315,6 +407,7 @@ export function renderConnectionCard(
     verifiedAt: state?.verifiedAt ?? null,
     capabilities: def.capabilities,
     actionLabel,
+    description,
   };
 }
 

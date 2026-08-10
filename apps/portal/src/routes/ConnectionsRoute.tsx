@@ -20,7 +20,7 @@ import { Badge, Card, EmptyState } from "@/components/primitives";
  * in this UI.
  */
 
-const DOMAIN_ORDER = ["crm", "email", "calendar", "documents", "marketing", "team"];
+const DOMAIN_ORDER = ["crm", "email", "calendar", "documents", "marketing", "team", "other"];
 
 interface ConnectionsPayload {
   organizationId: string;
@@ -70,10 +70,13 @@ export function ConnectionsRoute() {
     }
   }
 
+  // P0 — group by backend-provided `categoryId` so the portal never
+  // maintains a duplicate, incomplete, locale-coupled tool-to-domain map.
+  // The backend is the single source of truth for connection identity.
   const groups = DOMAIN_ORDER.map((domain) => ({
     domain,
     label: DOMAIN_LABELS[domain] ?? domain,
-    tools: cards.filter((card) => primaryDomain(card.id) === domain),
+    tools: cards.filter((card) => card.categoryId === domain),
   })).filter((group) => group.tools.length > 0);
 
   return (
@@ -149,6 +152,9 @@ function ConnectionCardItem(props: {
           </Badge>
         </div>
         <p className="dfy-muted dfy-muted--small">{card.category}</p>
+        {card.description && (
+          <p className="dfy-muted dfy-muted--small">{card.description}</p>
+        )}
 
         {card.state === "connected" && card.configSource && (
           <p className="dfy-muted dfy-muted--small dfy-connection-card__config">
@@ -186,22 +192,8 @@ const DOMAIN_LABELS: Record<string, string> = {
   documents: "Documentos",
   marketing: "Marketing y publicidad",
   team: "Equipo",
+  other: "Otras herramientas",
 };
-
-const TOOL_DOMAIN: Record<string, string> = {
-  mautic: "crm",
-  hubspot: "crm",
-  gmail: "email",
-  google_analytics: "marketing",
-  google_ads: "marketing",
-  meta_ads: "marketing",
-  linkedin_ads: "marketing",
-  notion: "documents",
-};
-
-function primaryDomain(id: string): string {
-  return TOOL_DOMAIN[id] ?? "crm";
-}
 
 function toneFor(state: ConnectionCardView["state"]): "neutral" | "success" | "warning" | "danger" {
   switch (state) {

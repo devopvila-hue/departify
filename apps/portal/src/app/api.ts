@@ -73,7 +73,10 @@ export interface ConnectionCapabilityView {
 export interface ConnectionCardView {
   id: string;
   name: string;
+  /** Localized human label (e.g. "Correo" / "Email"). */
   category: string;
+  /** Canonical category id (e.g. "email"). The portal groups by this. */
+  categoryId: "crm" | "email" | "calendar" | "documents" | "marketing" | "team" | "other";
   logoMark: string;
   brandColor: string;
   state: ConnectionFiveState;
@@ -82,6 +85,8 @@ export interface ConnectionCardView {
   verifiedAt: string | null;
   capabilities: ConnectionCapabilityView[];
   actionLabel: string | null;
+  /** Short business description; intentional for genuinely unknown tools. */
+  description: string | null;
 }
 
 export interface ConnectionCardDetailView extends ConnectionCardView {
