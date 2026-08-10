@@ -36,6 +36,7 @@
  * blocked) and a machine-readable `requiredCredentials` list.
  */
 import { t, type SupportedLocale } from "./locale.js";
+import { isEmailSendRequest } from "./pending-email.js";
 import {
   hasWorkingConnector,
   resolveTool,
@@ -172,6 +173,7 @@ export interface RoutingDecision {
   readonly intent:
     | "direct_response"
     | "delegate_marketing"
+    | "email_action"
     | "request_approval"
     | "request_connection"
     | "explain_work"
@@ -277,6 +279,12 @@ const ROUTING_RULES: readonly RoutingRule[] = [
       /\b(como vamos|cómo vamos|c[óo]mo va|estado|situaci[óo]n|resumen|summary|how (are|is) (we|the company|things)|overview)\b/i.test(
         input.message,
       ),
+  },
+  {
+    intent: "email_action",
+    rationale:
+      "The CEO is asking to send/compose an email — an email capability action, never a generic marketing chat turn.",
+    match: (input) => isEmailSendRequest(input.message),
   },
   {
     intent: "external_tool_query",
@@ -581,6 +589,23 @@ function buildRuleOutcome(
       return buildConnectionOutcome(input);
     case "capability_status":
       return buildCapabilityStatusOutcome(input);
+    case "email_action":
+      // The orchestrator (processCeoMessage) runs the email pipeline:
+      // parse recipient/objective → draft → approval → send. This is a
+      // pass-through so the intent reaches the handler intact with a
+      // neutral opening line.
+      return {
+        decision: {
+          intent: "email_action",
+          departments: ["marketing"],
+          rationale: rule.rationale,
+        },
+        reply: t(
+          input.locale,
+          "Voy a preparar el correo. Dame un momento.",
+          "I'll prepare the email. Give me a moment.",
+        ),
+      };
     case "external_tool_query":
       // The orchestrator resolves the connected external tool and produces
       // the real answer through the Tool Runtime; this is a pass-through so

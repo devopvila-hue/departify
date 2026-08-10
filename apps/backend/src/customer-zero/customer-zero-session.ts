@@ -103,6 +103,8 @@ export interface CustomerZeroSessionState {
   conversation: readonly { role: "user" | "assistant"; content: string }[];
   /** The Marketing department's structured work for this organization. */
   marketingWork?: MarketingWorkState;
+  /** Pending email action (Customer Zero Email P0) — multi-turn send work. */
+  pendingEmailWork?: import("./pending-email.js").PendingEmailWork;
   /** UI/session locale — every generated visible text respects it. */
   locale: SupportedLocale;
   /** Onboarding intake (Fase 2). */

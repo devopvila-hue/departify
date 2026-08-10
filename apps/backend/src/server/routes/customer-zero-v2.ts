@@ -133,6 +133,21 @@ import {
 } from "../../customer-zero/gmail-adapter.js";
 import { getGoogleOAuthStateStore } from "../../customer-zero/oauth-state.js";
 import {
+  createPendingEmailWork,
+  extractRecipient,
+  extractObjective,
+  isEmailSendRequest,
+  isEmailApprovalResponse,
+  isEmailCancellation,
+  buildEmailDraft,
+  missingFieldsCopy,
+  type PendingEmailWork,
+} from "../../customer-zero/pending-email.js";
+import {
+  isEmailCapabilityOperational,
+  sendEmail,
+} from "../../customer-zero/email-capability.js";
+import {
   completeGoogleOAuthCallback,
   getGoogleTokenStore,
   type GoogleTokenProvider,
@@ -2075,12 +2090,28 @@ export async function processCeoMessage(
   const isEs = session.state.locale !== "en";
   let assistantReply = routed.reply;
   let marketingTurn: { role: "user" | "assistant"; content: string } | null = null;
+  // Customer Zero Email P0 — when the email pipeline surfaces a
+  // "Conecta tu correo" contextual card, it travels on this field so the
+  // portal renders it as a connection_need event for THIS turn.
+  let emailConnectionSuggestion: ConnectionSuggestion | null = null;
   // Set when the turn actually dispatched a Mautic tool execution
   // (vs. a Gmail read). Drives the work-state pills so a Gmail read
   // never claims "Consultando Mautic…".
   let mauticDispatched = false;
 
-  if (routed.decision.intent === "delegate_marketing") {
+  // Customer Zero Email P0 — the email action pipeline. Runs for BOTH
+  // fresh email requests (intent === "email_action") AND continuations
+  // of a pending email (session.state.pendingEmailWork). It NEVER
+  // depends on the engine/LLM: email work is deterministic, fast, and
+  // multi-turn — a follow-up like "Son A, B y C" continues the SAME
+  // pending email instead of falling into a generic route or timing out
+  // into the generic red error.
+  if (routed.decision.intent === "email_action" || session.state.pendingEmailWork) {
+    const emailOutcome = await runEmailTurn(session, message, isEs);
+    assistantReply = emailOutcome.reply;
+    marketingTurn = { role: "assistant", content: emailOutcome.reply };
+    emailConnectionSuggestion = emailOutcome.connectionSuggestion;
+  } else if (routed.decision.intent === "delegate_marketing") {
     // ENGINE 03: when the MarketingService is wired (EngineAdapter available),
     // Elvira's reply comes from the engine boundary.
     //
@@ -2389,7 +2420,13 @@ export async function processCeoMessage(
   // emitted.
   const enrichment = enrichForChat({
     intent: routed.decision.intent,
-    marketingInvoked: marketingTurn !== null || routed.decision.intent === "delegate_marketing",
+    // Email actions are direct Departify work, not Elvira delegation —
+    // no "Enviado a Elvira" pills for the email pipeline.
+    marketingInvoked:
+      routed.decision.intent === "email_action"
+        ? false
+        : marketingTurn !== null ||
+          routed.decision.intent === "delegate_marketing",
     marketingSucceeded: marketingTurn !== null,
     locale: session.state.locale,
     reply: assistantReply,
@@ -2425,7 +2462,8 @@ export async function processCeoMessage(
     reply: enrichment.normalizedReply,
     events: [transcriptEvent, ...workStateEvents, ...events],
     routing: routed.decision,
-    connectionSuggestion: routed.connectionSuggestion ?? null,
+    connectionSuggestion:
+      emailConnectionSuggestion ?? routed.connectionSuggestion ?? null,
     pendingToolId: routed.pendingToolId ?? null,
     conversationId: conversation.id,
   };
@@ -2686,6 +2724,244 @@ const EMAIL_QUESTION_PATTERN = new RegExp(
 
 function isEmailQuestion(message: string): boolean {
   return EMAIL_QUESTION_PATTERN.test(message);
+}
+
+/**
+ * Customer Zero Email P0 — the multi-turn email pipeline.
+ *
+ * Deterministic (no engine, no LLM): the CEO's email request is parsed
+ * into recipient + objective, missing fields are asked for in business
+ * language, the draft is shown for approval, and the send goes through
+ * the org's operational email provider. Every turn persists the pending
+ * state on the session so the next message continues the SAME work.
+ *
+ * Never fakes success. Never leaks credentials. The draft body is
+ * treated as DATA (prompt-injection boundary).
+ */
+async function runEmailTurn(
+  session: CustomerZeroSession,
+  message: string,
+  isEs: boolean,
+): Promise<{ reply: string; connectionSuggestion: ConnectionSuggestion | null }> {
+  const locale = session.state.locale;
+  let work = session.state.pendingEmailWork;
+
+  // Fresh email request → start (or restart) the pending work.
+  if (isEmailSendRequest(message)) {
+    work = createPendingEmailWork();
+    const recipient = extractRecipient(message);
+    const objective = extractObjective(message);
+    work.recipient = recipient;
+    work.objective = objective;
+    recomputeMissingFields(work);
+    session.state.pendingEmailWork = work;
+    if (work.missingFields.length > 0) {
+      // Ask for the missing business fields immediately — do NOT let the
+      // continuation branch below re-absorb the request itself.
+      return {
+        reply: missingFieldsCopy(work.missingFields, locale),
+        connectionSuggestion: null,
+      };
+    }
+    // Complete request → draft + approval question.
+    work.draft = buildEmailDraft(work.recipient!, work.objective!, locale);
+    work.status = "awaiting_approval";
+    return draftApprovalReply(work, isEs);
+  }
+
+  if (!work) {
+    // Defensive: no pending work and not a send request — fall back to
+    // the routing reply (should be unreachable given the gate).
+    return { reply: "", connectionSuggestion: null };
+  }
+
+  // Awaiting approval → accept approve / cancel / new-info.
+  if (work.status === "awaiting_approval" || work.status === "draft_ready") {
+    if (isEmailCancellation(message)) {
+      work.status = "cancelled";
+      delete session.state.pendingEmailWork;
+      return {
+        reply: isEs
+          ? "De acuerdo, he cancelado el correo. No se ha enviado nada."
+          : "OK, I've cancelled the email. Nothing was sent.",
+        connectionSuggestion: null,
+      };
+    }
+    if (isEmailApprovalResponse(message)) {
+      return sendPendingEmail(session, work, isEs);
+    }
+    // Not an approval: treat the message as additional objective info
+    // and rebuild the draft.
+    const objective = extractObjective(message) ?? message;
+    work.objective = objective.trim();
+    recomputeMissingFields(work);
+    if (work.missingFields.length === 0) {
+      work.draft = buildEmailDraft(work.recipient!, work.objective!, locale);
+      work.status = "awaiting_approval";
+      return draftApprovalReply(work, isEs);
+    }
+  }
+
+  // Awaiting info → absorb the continuation into the missing fields.
+  if (work.status === "awaiting_info") {
+    if (!work.recipient) {
+      const recipient = extractRecipient(message);
+      if (recipient) work.recipient = recipient;
+    }
+    if (!work.objective) {
+      // The continuation itself is the missing objective ("Son A, B y C").
+      const objective = extractObjective(message) ?? message;
+      work.objective = objective.trim();
+    }
+    recomputeMissingFields(work);
+    if (work.missingFields.length > 0) {
+      return {
+        reply: missingFieldsCopy(work.missingFields, locale),
+        connectionSuggestion: null,
+      };
+    }
+    // Everything gathered → build the draft and ask for approval.
+    work.draft = buildEmailDraft(work.recipient!, work.objective!, locale);
+    work.status = "awaiting_approval";
+    return draftApprovalReply(work, isEs);
+  }
+
+  // Missing info → ask in business language.
+  if (work.missingFields.length > 0) {
+    return {
+      reply: missingFieldsCopy(work.missingFields, locale),
+      connectionSuggestion: null,
+    };
+  }
+
+  // Draft built but not yet approved.
+  if (!work.draft) {
+    work.draft = buildEmailDraft(work.recipient!, work.objective!, locale);
+    work.status = "awaiting_approval";
+    return draftApprovalReply(work, isEs);
+  }
+
+  return draftApprovalReply(work, isEs);
+}
+
+function recomputeMissingFields(work: PendingEmailWork): void {
+  const missing: string[] = [];
+  if (!work.recipient) missing.push("destinatario");
+  if (!work.objective) missing.push("mensaje");
+  work.missingFields = missing;
+}
+
+function draftApprovalReply(
+  work: PendingEmailWork,
+  isEs: boolean,
+): { reply: string; connectionSuggestion: null } {
+  work.status = "awaiting_approval";
+  const draft = work.draft!;
+  const intro = isEs
+    ? "He preparado este correo:"
+    : "I've prepared this email:";
+  const draftLines = isEs
+    ? [
+        intro,
+        "",
+        `**Para:** ${draft.to}`,
+        `**Asunto:** ${draft.subject}`,
+        "",
+        draft.body,
+        "",
+        isEs
+          ? "¿Lo envío? Responde «sí, envíalo» para enviarlo, o dime qué quieres cambiar."
+          : "Should I send it? Reply \"yes, send it\" to send, or tell me what to change.",
+      ]
+    : [
+        intro,
+        "",
+        `**To:** ${draft.to}`,
+        `**Subject:** ${draft.subject}`,
+        "",
+        draft.body,
+        "",
+        'Should I send it? Reply "yes, send it" to send, or tell me what to change.',
+      ];
+  return { reply: draftLines.join("\n"), connectionSuggestion: null };
+}
+
+/** Execute the send for an approved pending email. Never fakes success. */
+async function sendPendingEmail(
+  session: CustomerZeroSession,
+  work: PendingEmailWork,
+  isEs: boolean,
+): Promise<{ reply: string; connectionSuggestion: ConnectionSuggestion | null }> {
+  const organizationId = session.organizationId;
+  // Guard: if the connection disappeared, go back to a contextual
+  // "Conecta tu correo" state instead of failing with a red error.
+  if (!work.draft) {
+    work.status = "awaiting_info";
+    recomputeMissingFields(work);
+    return {
+      reply: isEs
+        ? "Todavía no tengo el contenido del correo. Dime qué quieres decir."
+        : "I don't have the email content yet. Tell me what you want to say.",
+      connectionSuggestion: null,
+    };
+  }
+  const operational = await isEmailCapabilityOperational(organizationId);
+  if (!operational) {
+    work.status = "awaiting_approval";
+    return {
+      reply: isEs
+        ? "Tu correo todavía no está conectado, así que no puedo enviarlo. Conecta tu correo en Conexiones y volveré a intentarlo con el borrador que ya tengo."
+        : "Your email is not connected yet, so I can't send it. Connect your email in Connections and I'll retry with the draft I already have.",
+      connectionSuggestion: buildEmailConnectionSuggestion(isEs),
+    };
+  }
+  work.status = "sending";
+  const outcome = await sendEmail(session, {
+    to: work.draft.to,
+    subject: work.draft.subject,
+    bodyText: work.draft.body,
+  });
+  if (outcome.ok) {
+    work.status = "sent";
+    work.provider = outcome.provider;
+    work.sendResult = {
+      provider: outcome.provider ?? "unknown",
+      recipient: work.draft.to,
+      sentAt: outcome.sentAt ?? new Date().toISOString(),
+      providerMessageId: outcome.providerMessageId,
+    };
+    delete session.state.pendingEmailWork;
+    return {
+      reply: isEs
+        ? `Enviado a ${work.draft.to}.`
+        : `Sent to ${work.draft.to}.`,
+      connectionSuggestion: null,
+    };
+  }
+  // Failed send: keep the draft, surface an actionable recovery.
+  work.status = "awaiting_approval";
+  const hint = isEs
+    ? "No he podido enviar el correo ahora mismo. Vuelve a intentarlo en unos minutos; el borrador sigue preparado."
+    : "I couldn't send the email right now. Try again in a few minutes; the draft is still ready.";
+  return { reply: hint, connectionSuggestion: null };
+}
+
+/** Contextual "Conecta tu correo" suggestion — product wording, never
+ *  provider jargon. */
+function buildEmailConnectionSuggestion(
+  isEs: boolean,
+): ConnectionSuggestion {
+  return {
+    toolId: "email",
+    label: isEs ? "Correo" : "Email",
+    capability: "email.send.personal",
+    why: isEs
+      ? "Para enviar tus correos, Departify necesita acceso a tu correo de empresa."
+      : "To send your emails, Departify needs access to your company email.",
+    connectable: true,
+    requiredCredentials: [],
+    rawInput: "email",
+  };
 }
 
 async function runGmailRead(
