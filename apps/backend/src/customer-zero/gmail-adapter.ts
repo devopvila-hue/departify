@@ -211,6 +211,43 @@ class GmailTokenStore {
 export const gmailTokenStore = new GmailTokenStore();
 
 /* ----------------------------------------------------------------------------
+ * Canonical Google OAuth redirect URI — single source of truth.
+ *
+ * The Google Cloud Web Client has ONE authorized redirect URI:
+ *   ${PUBLIC_BASE_URL}/connections/google/callback
+ *
+ * This is the SAME URL the browser hits after consent, AND the SAME
+ * URL the backend exchanges at oauth2.googleapis.com/token. The two
+ * MUST be byte-identical, otherwise Google rejects with
+ * `redirect_uri_mismatch`.
+ *
+ * organizationId / userId / toolId travel through the OAuth `state`
+ * nonce (see gmailOAuthStateStore), NEVER through the URL.
+ * --------------------------------------------------------------------------*/
+
+/** The canonical path component of the Google OAuth callback. */
+export const GOOGLE_OAUTH_REDIRECT_PATH = "/connections/google/callback";
+
+/**
+ * Build the canonical Google OAuth redirect URI.
+ *
+ * @param publicBaseUrl The PUBLIC_BASE_URL of the portal
+ *   (e.g. "https://app.departify.app"). When undefined the helper
+ *   reads process.env.PUBLIC_BASE_URL at call time (so it tracks the
+ *   latest env value in dev / test), then falls back to the local-dev
+ *   origin. EVERY call site MUST pass this — never per-organization
+ *   paths.
+ */
+export function googleOAuthRedirectUri(publicBaseUrl?: string): string {
+  const fromArg = (publicBaseUrl ?? "").trim().replace(/\/+$/, "");
+  const fromEnv = (
+    process.env["PUBLIC_BASE_URL"] ?? ""
+  ).trim().replace(/\/+$/, "");
+  const base = fromArg || fromEnv || "http://localhost:3000";
+  return `${base}${GOOGLE_OAUTH_REDIRECT_PATH}`;
+}
+
+/* ----------------------------------------------------------------------------
  * OAuth start + callback.
  * --------------------------------------------------------------------------*/
 

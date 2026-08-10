@@ -121,6 +121,7 @@ import { InboxSync } from "../../customer-zero/inbox-sync.js";
 import {
   startGmailOAuth,
   completeGmailOAuth,
+  googleOAuthRedirectUri,
   GmailOAuthError,
   type GmailOAuthCallbackInput,
 } from "../../customer-zero/gmail-adapter.js";
@@ -984,13 +985,17 @@ export async function registerCustomerZeroV2Routes(
           return reply.code(200).send({ organizationId, connection });
         }
         const oauthUserId = request.authUser?.id ?? organizationId;
-        const portalBase = deps.publicBaseUrl ?? publicBaseUrl();
+        // P0 — Use the canonical Google OAuth redirect URI helper.
+        // organizationId/userId/toolId travel through the state nonce,
+        // NOT through the URL. This URL is identical to the one the
+        // browser reaches after consent AND the one we send to
+        // oauth2.googleapis.com/token.
         const out = startGmailOAuth({
           organizationId,
           userId: oauthUserId,
           returnPath: "/connections/google/callback",
           locale: session.state.locale,
-          redirectUri: `${portalBase}/connections/google/callback`,
+          redirectUri: googleOAuthRedirectUri(deps.publicBaseUrl),
           clientId: clientId as string,
         });
         connection.status = "connecting";
@@ -1000,12 +1005,17 @@ export async function registerCustomerZeroV2Routes(
         return reply.code(200).send({ organizationId, connection });
       }
 
+      // Non-Google tools (Outlook / Microsoft 365). Each provider has
+      // its own OAuth Web Client registered against a stable portal
+      // path. Per-organization URLs are NEVER used; organization
+      // identity travels through the OAuth state.
+      const fallbackRedirectUri = `${(deps.publicBaseUrl ?? publicBaseUrl()).replace(/\/+$/, "")}/connections/${tool.id}/callback`;
       startConnection(
         connection,
         tool,
         {
           env: process.env,
-          redirectUri: `${deps.publicBaseUrl ?? publicBaseUrl()}/api/customer-zero/${organizationId}/connections/${tool.id}/callback`,
+          redirectUri: fallbackRedirectUri,
         },
         session.state.locale,
       );
@@ -1102,12 +1112,12 @@ export async function registerCustomerZeroV2Routes(
         const oauthUserId = request.authUser?.id ?? organizationId;
         // P0 — The redirect_uri exchanged at the Google token endpoint
         // MUST be byte-identical to the one used when the user was sent
-        // to `accounts.google.com/.../auth` (line 993 above). Otherwise
-        // Google rejects the token exchange with `redirect_uri_mismatch`.
-        // The portal route `/connections/google/callback` is the single
-        // authorized redirect URI configured on the OAuth Web Client.
-        const portalBase = deps.publicBaseUrl ?? publicBaseUrl();
-        const tokenExchangeRedirectUri = `${portalBase}/connections/google/callback`;
+        // to `accounts.google.com/.../auth`. Both come from
+        // `googleOAuthRedirectUri(deps.publicBaseUrl)` so they CANNOT
+        // drift apart. Otherwise Google rejects the token exchange
+        // with `redirect_uri_mismatch`. The portal route
+        // `/connections/google/callback` is the single authorized
+        // redirect URI configured on the OAuth Web Client.
         try {
           const input: GmailOAuthCallbackInput = {
             code,
@@ -1116,7 +1126,7 @@ export async function registerCustomerZeroV2Routes(
             userId: oauthUserId,
             clientId,
             clientSecret,
-            redirectUri: tokenExchangeRedirectUri,
+            redirectUri: googleOAuthRedirectUri(deps.publicBaseUrl),
           };
           const { identity } = await completeGmailOAuth(input);
           completeConnection(connection);
