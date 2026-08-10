@@ -1230,37 +1230,14 @@ export function buildProactiveOpening(
     }
   }
 
-  // Surface connection needs (Mautic discovery or any declared but unconnected
-  // tool). This is the proactive "integration discovery" UX: instead of
-  // "no soportado", we say "Vemos que usas X; Marketing necesita Y".
-  const connections = [...session.state.connections.values()];
-  const unmapped = session.state.unmappedTools ?? [];
-  for (const conn of connections) {
-    if (conn.status !== "connected") {
-      events.push({
-        kind: "connection_need",
-        suggestion: projectConnectionSuggestion(conn, session.state.locale),
-      });
-    }
-  }
-  for (const unmappedName of unmapped) {
-    events.push({
-      kind: "connection_need",
-      suggestion: {
-        toolId: resolveTool(unmappedName)?.id ?? null,
-        label: humanizeToolId(unmappedName),
-        capability: inferCapability(unmappedName),
-        why: t(
-          session.state.locale,
-          `${humanizeToolId(unmappedName)} todavía no está preparado en Departify, pero tu equipo lo necesita.`,
-          `${humanizeToolId(unmappedName)} is not ready in Departify yet, but your team needs it.`,
-        ),
-        connectable: false,
-        requiredCredentials: [],
-        rawInput: unmappedName,
-      },
-    });
-  }
+  // Central Chat UX P0 — connection_need cards are NOT emitted from
+  // the proactive opening payload. The chat is conversational, not a
+  // dashboard. A connection card only renders in chat when:
+  //   A. the CEO mentions the tool (handled by buildConnectionOutcome),
+  //   B. the current task requires this capability (added per turn), or
+  //   C. the current task is blocked by this missing connection.
+  // The full catalog stays in /conexiones — never spammed inside chat.
+  void session.state.unmappedTools;
 
   // Multi-department future hint, kept honest: Marketing is the only active
   // department today. The CEO doesn't need to manage this — but they need
@@ -1334,22 +1311,6 @@ function projectItem(item: MarketingWorkItemState): WorkItemView {
     ...(item.result !== undefined ? { result: item.result } : {}),
     ...(item.capability !== undefined ? { capability: item.capability } : {}),
     kind: item.kind,
-  };
-}
-
-function projectConnectionSuggestion(
-  conn: ConnectionState,
-  locale: SupportedLocale,
-): ConnectionSuggestion {
-  const tool = resolveTool(conn.toolId);
-  return {
-    toolId: conn.toolId,
-    label: conn.label,
-    capability: conn.capability,
-    why: whyForCapability(conn.capability, locale),
-    connectable: hasWorkingConnector(conn.toolId),
-    requiredCredentials: tool?.requiredCredentials ?? [],
-    rawInput: conn.toolId,
   };
 }
 

@@ -526,7 +526,16 @@ describe("P0 — post-OAuth HTTP: connect → callback → /conexiones", () => {
       payload: { message: "¿Tengo algún correo importante?" },
     });
     expect(chat.statusCode).toBe(200);
-    expect(chat.json().reply).toContain("He encontrado");
+    // Central Chat UX P0 — never expose raw Gmail query jargon or the
+    // legacy "He encontrado" robotic phrasing. The reply must come from
+    // the intent-aware presenter and reference real Gmail data only.
+    const reply = chat.json().reply as string;
+    expect(reply).not.toContain("newer_than:");
+    expect(reply).not.toContain("in:inbox");
+    expect(reply).not.toContain("criterio");
+    // The reply uses the presenter and references the mocked Gmail data.
+    expect(reply).toContain("cliente@acme.com");
+    expect(reply).toContain("Asunto");
   });
 
   it("O: failed probe → NOT falsely connected; blocked with recovery reason", async () => {
@@ -834,8 +843,11 @@ describe("P0 — Central Chat reality", () => {
     });
     expect(response.statusCode).toBe(200);
     const reply = response.json().reply as string;
-    expect(reply).toContain("He encontrado");
-    // Grounded in the mocked inbox contents — sender + subject present.
+    // Central Chat UX P0 — the reply never exposes raw query jargon.
+    expect(reply).not.toContain("newer_than:");
+    expect(reply).not.toContain("in:inbox");
+    expect(reply).not.toContain("criterio");
+    // The reply uses the presenter and references real Gmail data.
     expect(reply).toContain("cliente@acme.com");
     expect(reply).toContain("Asunto");
   });
@@ -851,8 +863,12 @@ describe("P0 — Central Chat reality", () => {
     });
     expect(response.statusCode).toBe(200);
     const reply = response.json().reply as string;
-    expect(reply).toContain("No he encontrado correos relevantes");
+    // Central Chat UX P0 — empty important mailbox renders the
+    // presenter's honest empty copy.
+    expect(reply.toLowerCase()).toContain("no");
+    expect(reply).toMatch(/atenci[oó]n|necesitan|importantes/);
     expect(reply).not.toMatch(/He encontrado \d/);
+    expect(reply).not.toContain("criterio");
   });
 
   it("W: Gmail API failure → actionable recovery (not a fake answer)", async () => {

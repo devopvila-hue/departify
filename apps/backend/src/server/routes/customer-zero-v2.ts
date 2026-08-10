@@ -103,6 +103,11 @@ import {
   hasOperationalGoogleIdentityForOrg,
 } from "../../customer-zero/credential-resolver.js";
 import {
+  deriveGmailReadPlan as gmailDeriveReadPlan,
+  renderGmailSummary,
+  summarizeGmailMessage,
+} from "../../customer-zero/run-gmail-presentation.js";
+import {
   CONNECTION_DEFINITIONS,
   renderConnectionCard,
   listAvailableCapabilitiesForOrg,
@@ -2683,23 +2688,6 @@ function isEmailQuestion(message: string): boolean {
   return EMAIL_QUESTION_PATTERN.test(message);
 }
 
-/** Heuristic Gmail query: build a search expression from the CEO's words. */
-function deriveGmailQuery(message: string): string {
-  // Default to recent inbox reading.
-  const trimmed = message.trim();
-  if (/importantes|important|unread|no le[ií]dos/i.test(trimmed)) {
-    return "is:unread newer_than:7d";
-  }
-  if (/hoy|today/i.test(trimmed)) {
-    return "newer_than:1d";
-  }
-  if (/esta semana|this week|semana/i.test(trimmed)) {
-    return "newer_than:7d";
-  }
-  // Fallback: recent inbox.
-  return "in:inbox newer_than:7d";
-}
-
 async function runGmailRead(
   organizationId: string,
   message: string,
@@ -2724,30 +2712,18 @@ async function runGmailRead(
     clientId,
     clientSecret,
   );
-  const query = deriveGmailQuery(message);
-  const result = await adapter.searchMessages(query, 10);
+  const query = gmailDeriveReadPlan(message).query;
+  const maxResults = gmailDeriveReadPlan(message).maxResults;
+  const result = await adapter.searchMessages(query, maxResults);
   if (result.success && result.value) {
-    const messages = result.value;
-    if (messages.length === 0) {
-      return isEs
-        ? `No he encontrado correos relevantes en tu bandeja${query ? ` que coincidan con "${query}"` : ""}. Si me indicas un remitente o un tema más concreto te ayudo a afinar la búsqueda.`
-        : `I didn't find any relevant emails in your inbox${query ? ` matching "${query}"` : ""}. If you give me a sender or topic I can narrow the search.`;
-    }
-    // Build a Spanish business summary. Each line uses sender,
-    // subject, why-this-matters hint from snippet.
-    const lines: string[] = [];
-    for (const m of messages.slice(0, 5)) {
-      const sender = m.from.displayName
-        ? `${m.from.displayName} <${m.from.email}>`
-        : m.from.email;
-      const subj = m.subject || "(sin asunto)";
-      const snippet = m.snippet ? ` — ${m.snippet.slice(0, 80)}` : "";
-      lines.push(`• ${sender} · ${subj}${snippet}`);
-    }
-    const intro = isEs
-      ? `He encontrado ${messages.length} correo(s) relevante(s)${query ? ` con criterio "${query}"` : ""}:`
-      : `I found ${messages.length} relevant email(s)${query ? ` matching "${query}"` : ""}:`;
-    return [intro, ...lines].join("\n");
+    const plan = gmailDeriveReadPlan(message);
+    const items = result.value.map(summarizeGmailMessage);
+    return renderGmailSummary({
+      intent: plan.intent,
+      items,
+      locale,
+      totalFound: items.length,
+    });
   }
   // Gmail API did not respond correctly (auth / rate limit / down).
   // Honest, actionable recovery — never a fabricated inbox.

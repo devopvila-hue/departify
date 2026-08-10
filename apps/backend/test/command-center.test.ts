@@ -387,14 +387,12 @@ describe("Proactive opening", () => {
     expect(kinds).toContain("intent_proactive");
     expect(kinds).toContain("department_active");
     expect(kinds).toContain("approval_request");
-    expect(kinds).toContain("connection_need");
     expect(kinds).toContain("multiple_departments_note");
-    // The connection event describes Mautic with a why.
-    const connection = events.find((event) => event.kind === "connection_need");
-    if (connection?.kind === "connection_need") {
-      expect(connection.suggestion.toolId).toBe("mautic");
-      expect(connection.suggestion.why.length).toBeGreaterThan(20);
-    }
+    // Central Chat UX P0 — connection_need cards are NOT emitted from
+    // the proactive opening. They render only when the CEO mentions
+    // the tool, when the current task needs it, or when the current
+    // task is blocked by it. The full catalog stays in /conexiones.
+    expect(kinds).not.toContain("connection_need");
     // Multi-department note is honest: only Marketing is active.
     const multi = events.find((event) => event.kind === "multiple_departments_note");
     if (multi?.kind === "multiple_departments_note") {

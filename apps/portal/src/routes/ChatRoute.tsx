@@ -117,7 +117,7 @@ export function ChatRoute() {
     if (!organizationId) return;
     await refreshConversations();
     const openingData = await api.commandCenterOpening(organizationId);
-    if (openingData) setEvents(openingData.events);
+    if (openingData) setEvents(filterContextualEvents(openingData.events));
 
     const data = await api.conversations(organizationId);
     const first = data?.conversations?.[0];
@@ -135,8 +135,45 @@ export function ChatRoute() {
     void load();
   }, [load]);
 
-  // Auto-scroll on new messages.
+  // Central Chat UX P0 — auto-scroll that respects the CEO's manual
+  // scroll position. Three independent triggers:
+  //   1. New send → snap to bottom (forced).
+  //   2. New assistant turn/event (passive) → only auto-follow if the
+  //      CEO is near the bottom; if they scrolled up, preserve their
+  //      position and surface a "Ir al último mensaje" affordance.
+  //   3. Conversation switch → snap to bottom.
+  const stickToBottomRef = useRef(true);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const [followRequested, setFollowRequested] = useState(false);
+
+  // Observe whether the CEO is near the bottom of the transcript.
   useEffect(() => {
+    const node = scrollerRef.current;
+    if (!node) return;
+    function onScroll() {
+      const el = node;
+      if (!el) return;
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      // < 80px from the bottom counts as "near".
+      stickToBottomRef.current = distance < 80;
+    }
+    node.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => node.removeEventListener("scroll", onScroll);
+  }, []);
+
+  // Force scroll on send OR when the user clicks "Ir al último mensaje".
+  useEffect(() => {
+    if (!followRequested) return;
+    const node = scrollerRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+    setFollowRequested(false);
+  }, [followRequested, transcript, events]);
+
+  // Auto-follow passive updates only while the CEO is near the bottom.
+  useEffect(() => {
+    if (!stickToBottomRef.current) return;
     const node = scrollerRef.current;
     if (!node) return;
     node.scrollTop = node.scrollHeight;
@@ -238,6 +275,10 @@ export function ChatRoute() {
     setError(null);
     setProcessStatus("Departify está pensando…");
     setInput("");
+    // Sending a new message always returns focus to the latest exchange,
+    // even if the CEO was reading older history. Distinct from passive
+    // updates, which respect the manual scroll override.
+    setFollowRequested(true);
 
     // When no conversation is active, route through the same backend
     // endpoint that auto-creates the durable conversation on first use.
@@ -273,14 +314,29 @@ export function ChatRoute() {
       });
       return;
     }
+    // Central Chat UX P0 — only the assistant reply is appended. The
+    // connection_need / process_event cards from the proactive opening
+    // payload are filtered out so they don't pollute the visible
+    // transcript after every send.
+    const cleanEvents = [...filterContextualEvents(result.events)];
+    // Contextual connection cards DO still render, but only when they
+    // are genuinely tied to THIS turn: the routing produced a
+    // connectionSuggestion because the CEO mentioned the tool or the
+    // current task needs it. Unrelated cards from the opening are gone.
+    if (result.connectionSuggestion) {
+      cleanEvents.push({
+        kind: "connection_need",
+        suggestion: result.connectionSuggestion,
+      });
+    }
     // Append both the optimistic user line and the assistant reply so the
     // CEO sees their own message immediately and a continuous history.
     setTranscript((prev) => [
       ...prev,
       { role: "user", content: value },
-      { role: "assistant", content: result!.reply, speaker: inferSpeaker(result!.events) },
+      { role: "assistant", content: result!.reply, speaker: inferSpeaker(cleanEvents) },
     ]);
-    setEvents(result.events);
+    setEvents(cleanEvents);
     if (result.conversationId) setCurrentConversationId(result.conversationId);
     await refreshConversations();
   }
@@ -399,6 +455,21 @@ export function ChatRoute() {
             <SparkIcon /> {processStatus}
           </div>
         )}
+        {!stickToBottomRef.current && (transcript.length > 0 || events.length > 0) && (
+          <button
+            type="button"
+            className="dfy-chat-jump-latest"
+            data-testid="chat-jump-latest"
+            onClick={() => {
+              setFollowRequested(true);
+              stickToBottomRef.current = true;
+            }}
+            aria-label="Ir al último mensaje"
+          >
+            ↓ Ir al último mensaje
+          </button>
+        )}
+        <div ref={sentinelRef} aria-hidden="true" />
       </div>
 
       <Composer
@@ -552,6 +623,25 @@ function inferSpeaker(
     if (event.kind === "transcript" && event.speaker) return event.speaker;
   }
   return "departify";
+}
+
+/**
+ * Central Chat UX P0 — filter the events that may render inside the
+ * visible transcript. Keep only the contextual events tied to the
+ * current turn; drop the proactive opening cards and the transient
+ * work-state pill (shown once via `processStatus`, not as a durable
+ * bubble).
+ */
+function filterContextualEvents(
+  events: readonly CommandCenterEvent[],
+): readonly CommandCenterEvent[] {
+  return events.filter((event) => {
+    if (event.kind === "process_event") return false;
+    if (event.kind === "work_state") return false;
+    if (event.kind === "connection_need") return false;
+    if (event.kind === "multiple_departments_note") return false;
+    return true;
+  });
 }
 
 function EventCard(props: {

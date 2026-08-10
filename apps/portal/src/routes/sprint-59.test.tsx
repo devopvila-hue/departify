@@ -301,7 +301,10 @@ describe("Sprint 59 — Conversational Operating System", () => {
     expect(true).toBe(true);
   });
 
-  it("8. Connection event appears in the chat as a card", async () => {
+  it("8. Connection events: unrelated opening cards are filtered; contextual cards render from the CEO's message", async () => {
+    // The proactive opening may carry a connection_need (legacy payload);
+    // it must NOT be spammed into the visible transcript — the chat is
+    // conversational, /conexiones is the catalog home.
     const openingWithConnection = {
       organizationId: "org_moon",
       events: [
@@ -320,9 +323,31 @@ describe("Sprint 59 — Conversational Operating System", () => {
         },
       ],
     };
+    const mauticSuggestion = {
+      toolId: "mautic",
+      label: "Mautic",
+      capability: "crm.contacts",
+      why: "Para gestionar tus leads y su seguimiento, Marketing necesita acceso a tu CRM.",
+      connectable: false,
+      requiredCredentials: ["MAUTIC_BASE_URL", "MAUTIC_CLIENT_ID"],
+      rawInput: "mautic",
+    };
     mockFetch((url) => {
       if (url.includes("/command-center/opening")) return openingWithConnection;
-      if (url.endsWith("/org_moon")) return baseStatus;
+      if (url.includes("/command-center/message")) {
+        return {
+          organizationId: "org_moon",
+          reply: "Mautic necesita conectarse para consultar tus contactos.",
+          events: [{ kind: "transcript", role: "assistant", content: "Mautic necesita conectarse para consultar tus contactos." }],
+          routing: {
+            intent: "request_connection",
+            departments: ["marketing"],
+            rationale: "CEO mencionó Mautic.",
+          },
+          connectionSuggestion: mauticSuggestion,
+          pendingToolId: null,
+        };
+      }
       return baseStatus;
     });
     render(
@@ -332,8 +357,19 @@ describe("Sprint 59 — Conversational Operating System", () => {
         </OrgProvider>
       </MemoryRouter>,
     );
-    await waitFor(() => expect(screen.getByText(/mautic/i)).toBeInTheDocument());
-    expect(screen.getByText(/para gestionar tus leads/i)).toBeInTheDocument();
+    // The opening connection card is filtered: the CEO's transcript does
+    // not start with a Mautic card just because the catalog knows Mautic.
+    await screen.findByText(/elvira toma la iniciativa/i);
+    expect(screen.queryByText(/para gestionar tus leads/i)).not.toBeInTheDocument();
+    // A genuine contextual need (CEO mentions the tool) DOES render as a
+    // connection card after the message.
+    const input = await screen.findByLabelText(/mensaje para departify/i);
+    await waitFor(() => expect(input).toBeEnabled());
+    fireEvent.change(input, { target: { value: "conecta mautic" } });
+    fireEvent.click(screen.getByRole("button", { name: /enviar/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/para gestionar tus leads/i)).toBeInTheDocument(),
+    );
   });
 
   it("9. Missing Mautic does not block internal work — the chat explains it", () => {
