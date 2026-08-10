@@ -401,6 +401,8 @@ export interface ConnectionState {
   missingCredentials?: readonly string[];
   /** The real provider authorization URL, when the handshake can start. */
   authorizationUrl?: string;
+  /** OAuth `state` nonce issued for this handshake (CSRF + replay). */
+  oauthState?: string;
   connectedAt?: string;
   /** Authoritative lifecycle (Phase P-B). When absent, status is the truth. */
   lifecycle?: ToolLifecycleStatus;

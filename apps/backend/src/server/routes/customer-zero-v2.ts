@@ -112,6 +112,17 @@ import {
 } from "../../customer-zero/department-work.js";
 import { DepartmentWorkExecutor } from "../../customer-zero/department-work-executor.js";
 import type { MarketingActivityRepository } from "../../customer-zero/marketing-repositories.js";
+import {
+  InMemoryInboxStore,
+  type InboxStore,
+} from "../../customer-zero/inbox-domain.js";
+import { InboxSync } from "../../customer-zero/inbox-sync.js";
+import {
+  startGmailOAuth,
+  completeGmailOAuth,
+  GmailOAuthError,
+  type GmailOAuthCallbackInput,
+} from "../../customer-zero/gmail-adapter.js";
 import type { CompanyDiscoveryReport } from "@departify/business-discovery";
 import type { ServerDeps } from "../deps.js";
 import {
@@ -639,6 +650,67 @@ export async function registerCustomerZeroV2Routes(
     },
   );
 
+  // Customer Zero 03 — unified inbox endpoints.
+  const inboxStore: InboxStore = new InMemoryInboxStore();
+  const inboxSync = new InboxSync(inboxStore);
+
+  server.get<{
+    Params: { organizationId: string };
+    Querystring: { category?: string; state?: string; limit?: string };
+  }>(
+    "/api/customer-zero/:organizationId/inbox",
+    async (request) => {
+      const { organizationId } = request.params;
+      await requireSession(organizationId, deps);
+      const items = await inboxStore.list({
+        organizationId,
+        ...(request.query?.category
+          ? { category: request.query.category as Parameters<typeof inboxStore.list>[0]["category"] }
+          : {}),
+        ...(request.query?.state
+          ? { state: request.query.state as Parameters<typeof inboxStore.list>[0]["state"] }
+          : {}),
+        limit: Number(request.query?.limit ?? 50),
+      } as Parameters<typeof inboxStore.list>[0]);
+      return { organizationId, items };
+    },
+  );
+
+  server.post<{
+    Params: { organizationId: string };
+    Body: { maxResults?: number };
+  }>(
+    "/api/customer-zero/:organizationId/inbox/sync",
+    async (request) => {
+      const { organizationId } = request.params;
+      await requireSession(organizationId, deps);
+      // V1 sync uses the organizationId as the user key. Production
+      // should resolve the CEO's user id from the authenticated
+      // session.
+      const result = await inboxSync.run({
+        organizationId,
+        userId: organizationId,
+        ...(request.body?.maxResults ? { maxResults: request.body.maxResults } : {}),
+      });
+      return { organizationId, ...result };
+    },
+  );
+
+  server.get<{
+    Params: { organizationId: string; itemId: string };
+  }>(
+    "/api/customer-zero/:organizationId/inbox/:itemId",
+    async (request, reply) => {
+      const { organizationId, itemId } = request.params;
+      await requireSession(organizationId, deps);
+      const item = await inboxStore.get(itemId);
+      if (!item || item.organizationId !== organizationId) {
+        return reply.code(404).send({ error: "inbox_item_not_found" });
+      }
+      return { organizationId, item };
+    },
+  );
+
   // Customer Zero 01 P0 — trigger a long-running work item.
   server.post<{
     Params: { organizationId: string };
@@ -815,6 +887,51 @@ export async function registerCustomerZeroV2Routes(
         return reply.code(200).send({ organizationId, connection });
       }
 
+      const googleTools = new Set([
+        "gmail",
+        "google_workspace",
+        "google_calendar",
+        "google_drive",
+      ]);
+      const clientId = process.env["GOOGLE_OAUTH_CLIENT_ID"]?.trim();
+      const clientSecret = process.env["GOOGLE_OAUTH_CLIENT_SECRET"]?.trim();
+
+      if (googleTools.has(tool.id)) {
+        // CZ03 — unified Google handshake. One authorization URL grants the
+        // Google capabilities. The `state` nonce is bound to
+        // (organizationId, userId, intent, returnPath) in the OAuth state
+        // store for CSRF / replay / org+user mismatch protection.
+        const missing = [];
+        if (!clientId) missing.push("GOOGLE_OAUTH_CLIENT_ID");
+        if (!clientSecret) missing.push("GOOGLE_OAUTH_CLIENT_SECRET");
+        if (missing.length > 0) {
+          connection.status = "blocked";
+          connection.blockedReason = t(
+            session.state.locale,
+            `Faltan las credenciales de Google para conectar ${tool.label}.`,
+            `Missing Google credentials to connect ${tool.label}.`,
+          );
+          connection.missingCredentials = missing;
+          await persistToolState(session, toolStateFromConnection(session, connection));
+          return reply.code(200).send({ organizationId, connection });
+        }
+        const oauthUserId = request.authUser?.id ?? organizationId;
+        const portalBase = deps.publicBaseUrl ?? publicBaseUrl();
+        const out = startGmailOAuth({
+          organizationId,
+          userId: oauthUserId,
+          returnPath: "/connections/google/callback",
+          locale: session.state.locale,
+          redirectUri: `${portalBase}/connections/google/callback`,
+          clientId: clientId as string,
+        });
+        connection.status = "connecting";
+        connection.authorizationUrl = out.authorizationUrl;
+        connection.oauthState = out.state;
+        await persistToolState(session, toolStateFromConnection(session, connection));
+        return reply.code(200).send({ organizationId, connection });
+      }
+
       startConnection(
         connection,
         tool,
@@ -846,13 +963,19 @@ export async function registerCustomerZeroV2Routes(
         body: {
           type: "object",
           required: ["code"],
-          properties: { code: { type: "string", minLength: 1 } },
+          properties: {
+            code: { type: "string", minLength: 1 },
+            state: { type: "string", minLength: 1 },
+          },
           additionalProperties: false,
         },
         response: {
           200: { type: "object", additionalProperties: true },
+          400: { type: "object", additionalProperties: true },
+          401: { type: "object", additionalProperties: true },
           404: { type: "object", properties: { error: { type: "string" } } },
           409: { type: "object", additionalProperties: true },
+          500: { type: "object", additionalProperties: true },
         },
       },
     },
@@ -878,6 +1001,83 @@ export async function registerCustomerZeroV2Routes(
           },
         });
       }
+
+      const googleTools = new Set([
+        "gmail",
+        "google_workspace",
+        "google_calendar",
+        "google_drive",
+      ]);
+      if (googleTools.has(toolId)) {
+        const clientId = process.env["GOOGLE_OAUTH_CLIENT_ID"]?.trim();
+        const clientSecret = process.env["GOOGLE_OAUTH_CLIENT_SECRET"]?.trim();
+        if (!clientId || !clientSecret) {
+          return reply.code(409).send({
+            organizationId,
+            connection,
+            error: {
+              code: "GOOGLE_OAUTH_NOT_CONFIGURED",
+              message: "Google OAuth client credentials are not configured.",
+            },
+          });
+        }
+        const { code, state } = (request.body ?? {}) as {
+          code?: string;
+          state?: string;
+        };
+        if (!code || !state) {
+          return reply.code(400).send({
+            organizationId,
+            error: { code: "MISSING_CODE_OR_STATE", message: "code and state are required." },
+          });
+        }
+        const oauthUserId = request.authUser?.id ?? organizationId;
+        try {
+          const input: GmailOAuthCallbackInput = {
+            code,
+            state,
+            organizationId,
+            userId: oauthUserId,
+            clientId,
+            clientSecret,
+            redirectUri: `${deps.publicBaseUrl ?? publicBaseUrl()}/api/customer-zero/${organizationId}/connections/${toolId}/callback`,
+          };
+          const { identity } = await completeGmailOAuth(input);
+          completeConnection(connection);
+          connection.configSource = "oauth:google";
+          connection.verifiedAt = new Date().toISOString();
+          connection.connectedAt = new Date().toISOString();
+          await persistToolState(session, toolStateFromConnection(session, connection));
+          return reply.code(200).send({
+            organizationId,
+            connection,
+            identity,
+          });
+        } catch (cause) {
+          if (cause instanceof GmailOAuthError) {
+            return reply.code(401).send({
+              organizationId,
+              error: {
+                code: cause.code,
+                message: cause.message,
+                requestId: request.id,
+                statusCode: 401,
+              },
+            });
+          }
+          request.log.error({ error: cause }, "Google OAuth callback failed");
+          return reply.code(500).send({
+            organizationId,
+            error: {
+              code: "GOOGLE_OAUTH_FAILED",
+              message: "Google OAuth callback failed.",
+              requestId: request.id,
+              statusCode: 500,
+            },
+          });
+        }
+      }
+
       completeConnection(connection);
       return reply.code(200).send({ organizationId, connection });
     },

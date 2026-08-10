@@ -52,6 +52,17 @@ export function ConnectionsRoute() {
     if (!organizationId) return;
     setBusy(card.id);
     try {
+      // Customer Zero 03 — the card action starts the REAL OAuth handshake.
+      // api.connect returns the provider authorization URL; the browser is
+      // redirected to Google. After the user authorizes, Google redirects
+      // back to the portal callback which completes the handshake server-side.
+      const out = await api.connect(organizationId, card.id);
+      const authorizationUrl = out?.connection?.authorizationUrl;
+      if (authorizationUrl) {
+        window.location.href = authorizationUrl;
+        return;
+      }
+      // Non-OAuth tools fall back to a read-only verification.
       await api.testConnection(organizationId, card.id);
     } finally {
       setBusy(null);

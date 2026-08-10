@@ -6,6 +6,8 @@ import { ConnectionsRoute } from "@/routes/ConnectionsRoute";
 import { ControlPlaneRoute } from "@/routes/ControlPlaneRoute";
 import { DecisionsRoute } from "@/routes/DecisionsRoute";
 import { DepartmentsRoute } from "@/routes/DepartmentsRoute";
+import { GoogleOAuthCallbackRoute } from "@/routes/GoogleOAuthCallbackRoute";
+import { InboxRoute } from "@/routes/InboxRoute";
 import { MarketingRoute } from "@/routes/MarketingRoute";
 import { ResultsRoute } from "@/routes/ResultsRoute";
 import { RootRoute } from "@/routes/RootRoute";
@@ -19,6 +21,7 @@ import { TasksRoute } from "@/routes/TasksRoute";
  *   /inicio              → TU EMPRESA (Control Plane, org chart) — ENGINE 04
  *   /chat                → THE central conversation
  *   /tareas              → operational inbox of real work items
+ *   /inbox               → unified business inbox (CZ03)
  *   /departamentos       → active + future departments
  *   /conexiones          → capability-first connection management
  *   /aprobaciones        → inbox of approvals (DecisionesRoute)
@@ -37,8 +40,13 @@ export const router = createBrowserRouter([
       { path: "/inicio", element: <ControlPlaneRoute /> },
       { path: "/chat", element: <ChatRoute /> },
       { path: "/tareas", element: <TasksRoute /> },
+      { path: "/inbox", element: <InboxRoute /> },
       { path: "/departamentos", element: <DepartmentsRoute /> },
       { path: "/conexiones", element: <ConnectionsRoute /> },
+      {
+        path: "/connections/google/callback",
+        element: <GoogleOAuthCallbackRoute />,
+      },
       { path: "/aprobaciones", element: <DecisionsRoute /> },
       { path: "/resultados", element: <ResultsRoute /> },
       { path: "/empresa", element: <CompanyRoute /> },

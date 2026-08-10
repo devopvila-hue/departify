@@ -177,6 +177,47 @@ export interface DepartmentResult {
   producedByCapability: string;
 }
 
+/* -------------------------------------------------------------------------
+ * Customer Zero 03 — Unified Inbox types.
+ * -----------------------------------------------------------------------*/
+
+export type InboxCategory =
+  | "lead"
+  | "customer_question"
+  | "campaign_response"
+  | "support"
+  | "administrative"
+  | "unknown";
+
+export type InboxItemState =
+  | "received"
+  | "classified"
+  | "routed"
+  | "in_work"
+  | "resolved"
+  | "archived";
+
+export interface InboxItemView {
+  id: string;
+  organizationId: string;
+  source: string;
+  sourceMessageId: string;
+  channel: string;
+  category: InboxCategory;
+  subject: string;
+  senderEmail: string;
+  senderName?: string;
+  preview: string;
+  receivedAt: string;
+  unread: boolean;
+  importance: number;
+  departmentId: string | null;
+  isLead: boolean;
+  state: InboxItemState;
+  relatedWorkItemId: string | null;
+  relatedConversationId: string | null;
+}
+
 export interface CeoOverview {
   organizationId: string;
   goal: string;
@@ -592,6 +633,27 @@ export const api = {
       organizationId: string;
       results: DepartmentResult[];
     }>(`/api/customer-zero/${org}/results`),
+  inbox: (org: string, query?: { category?: string; state?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (query?.category) params.set("category", query.category);
+    if (query?.state) params.set("state", query.state);
+    if (query?.limit) params.set("limit", String(query.limit));
+    const q = params.toString();
+    return getJson<{
+      organizationId: string;
+      items: InboxItemView[];
+    }>(`/api/customer-zero/${org}/inbox${q ? `?${q}` : ""}`);
+  },
+  inboxSync: (org: string, body?: { maxResults?: number }) =>
+    postJson<{
+      organizationId: string;
+      imported: number;
+      classified: number;
+      highImportance: number;
+    }>(
+      `/api/customer-zero/${org}/inbox/sync`,
+      body ?? {},
+    ),
   testConnection: (org: string, provider: string) =>
     postJson<{
       provider: string;
@@ -614,6 +676,11 @@ export const api = {
   connect: (org: string, toolId: string) =>
     postJson<{ connection: ConnectionCard }>(
       `/api/customer-zero/${org}/connections/${toolId}/connect`,
+    ),
+  finishGoogleConnect: (org: string, code: string, state: string) =>
+    postJson<{ connection: ConnectionCard } & { identity?: { email: string } }>(
+      `/api/customer-zero/${org}/connections/gmail/callback`,
+      { code, state },
     ),
   plan: (org: string, goal: string) =>
     postJson<{ summary: string; items: MarketingWorkItem[]; error?: { message: string } }>(
