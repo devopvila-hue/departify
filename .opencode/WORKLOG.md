@@ -264,3 +264,24 @@ connect 200 en 4h); nonces sin consumir; `google_oauth_tokens` vacío; tool stat
 
 
 
+
+## Sesión 5 (2026-08-11) — Finalización del sprint heredado "Central Chat UX P0"
+
+Claude se detuvo por 429 (token-plan) con backend 466/466 y "portal tests + lint
++ typecheck" pendientes. Working tree heredado: presenter Gmail
+(run-gmail-presentation), filtrado de connection_need del opening, auto-scroll con
+respeto a la posición manual.
+
+Trabajo de OpenCode:
+- Fixes mínimos de lint del código heredado (5 errores: projectConnectionSuggestion
+  muerto, params sin usar en el presenter).
+- Portal: tarjeta contextual de conexión sintetizada desde `connectionSuggestion`
+  del mensaje (el filtro no rompe las tarjetas genuinas); test 8 de sprint-59
+  actualizado al nuevo contrato (opening filtrado + tarjeta contextual del mensaje).
+- 4 tests nuevos de UX del chat (chat-ux.test.tsx): filtrado de opening,
+  send vuelve al último mensaje, affordance jump-to-latest, no-yank pasivo.
+- Gates: lint/typecheck/test/build/check verdes; backend 466/466, portal 98/98.
+- Commit 78f13cf "fix(chat): polish Gmail presentation and conversational UX",
+  push a main, deploy Railway SUCCESS + Netlify (bundle con jump-latest), health 200.
+- Scope: sin cambios en OAuth redirect/tokens/scopes, Calendar, Drive, OpenClaw,
+  departamentos, ni gate de onboarding (salvo commits heredados de Claude).

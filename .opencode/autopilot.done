@@ -1,47 +1,76 @@
-# AUTOPILOT DONE — Gmail stuck in "CONECTANDO…" — root cause found and fixed
+# AUTOPILOT DONE — Central Chat UX P0 (sprint heredado de Claude, finalizado)
 
-## LAST SUCCESSFUL PRODUCTION CHECKPOINT:
-`POST /api/customer-zero/{org}/connections/gmail/connect 200` (2026-08-10 20:09:45 UTC) —
-the OAuth state nonce was created and persisted durably (2 nonces in `oauth_state`).
+## 1. STATE INHERITED FROM CLAUDE
+Sprint "Central Chat UX P0" detenido por 429 (token-plan) con backend 466/466
+verde. Working tree sin commitear: presenter de Gmail (run-gmail-presentation),
+filtrado de connection_need del opening, auto-scroll con respeto a la posición
+manual. Pendiente: portal tests + lint + typecheck + commit/deploy.
 
-## FIRST FAILED/MISSING PRODUCTION CHECKPOINT:
-`google_oauth_callback_received` — the callback POST `/connections/gmail/callback` NEVER
-reached the backend. Railway HTTP logs show zero callback requests (only two `connect 200`);
-both nonces remain unconsumed; `google_oauth_tokens` is empty; the gmail tool state is
-"selected". The handshake stopped before the first backend callback checkpoint.
+## 2. FILES CLAUDE HAD ALREADY CHANGED
+- `apps/backend/src/customer-zero/command-center.ts` (connection_need fuera del opening)
+- `apps/backend/src/server/routes/customer-zero-v2.ts` (runGmailRead usa el presenter)
+- `apps/backend/test/command-center.test.ts`, `customer-zero-05-post-oauth.test.ts`
+- `apps/portal/src/routes/ChatRoute.tsx` (scroll + filterContextualEvents)
+- `apps/portal/src/styles/tokens.css` (jump-latest)
+- Nuevos: `run-gmail-presentation.ts`, `run-gmail-presentation.test.ts`
 
-## ROOT CAUSE:
-1. **Portal (primary)**: `GoogleOAuthCallbackRoute` was nested inside `ShellGate`. When the
-   browser returns from Google consent, ShellGate can redirect the callback page to "/"
-   (auth / org / overview gate) before the route mounts, silently dropping `code+state`.
-   The exchange POST is therefore never fired → the backend never completes the handshake.
-2. **Backend (secondary)**: no path transitioned a connection out of `connecting` when the
-   callback never arrives — the session connection stayed `connecting` forever and the
-   durable state stayed `selected` with no expiry, producing the indefinite
-   "CONECTANDO…" card.
+## 3. WORK COMPLETED BY OPENCODE
+- Fixes mínimos de lint del código heredado (5 errores: función muerta, params sin usar).
+- Portal: tarjeta contextual de conexión desde `connectionSuggestion` del mensaje
+  (las tarjetas genuinas siguen apareciendo; las del opening se filtran).
+- sprint-59 test 8 actualizado al nuevo contrato.
+- 4 tests nuevos de UX del chat (chat-ux.test.tsx).
+- Gates completos verdes; commit 78f13cf; push; deploy Railway + Netlify verificados.
 
-## FIXES (commit 6ae7bb0, deployed)
-- Portal: callback route moved to a TOP-LEVEL route outside ShellGate (exchange always
-  fires); org id falls back to the stored localStorage value.
-- Backend state machine (invariant: connecting → terminal always):
-  - every callback failure path transitions the connection to blocked/needs_connection
-    with an actionable reason and persists it;
-  - a stale-handshake reaper in `requireSession` verifies the OAuth nonce is alive for
-    any "connecting" Google connection and reaps missing/expired/consumed ones;
-  - bounded 15s timeouts on all outbound Google calls (exchange, userinfo, probe,
-    refresh); probe timeouts classified as `gmail_probe_timeout`;
-  - OAuth validation codes stay 401; other coded failures stay 500.
-- Tests: probe 403 (C), probe timeout (D), readback failure (E), callback exception
-  never leaves connecting (F), Z2 updated to the no-connecting-forever invariant.
+## 4. GMAIL PRESENTATION FINAL BEHAVIOR
+Intent-aware: "último correo" → 1 correo estructurado (De/Asunto/Recibido/snippet);
+"importantes/sin leer" → hasta 5 priorizados por importancia con razón; "busca X" →
+hasta 5; genérico → hasta 5 recientes. Nunca expone sintaxis de query Gmail ni
+entidades HTML; decode seguro de &quot; &#39; &amp; &lt; &gt;.
 
-## VALIDATION
-- Backend 446/446, portal 80/80, lint / typecheck / build / check green (36 packages).
-- Railway deploy SUCCESS (6ae7bb0); durable stores wired; health 200; portal bundle
-  updated (top-level callback route verified in the deployed bundle).
-- Production Supabase verified: founder org gmail state "selected" (terminal/honest),
-  expired nonces — the reaper cleans the stale session on the next request.
+## 5. TOOL-CARD FINAL BEHAVIOR
+El opening proactivo ya NO emite connection_need (el catálogo vive en /conexiones).
+Una tarjeta contextual aparece solo cuando el mensaje del CEO produce un
+`connectionSuggestion` (menciona la herramienta o la tarea la requiere). Verificado:
+tarjeta Brevo del opening filtrada; tarjeta Mautic tras "conecta mautic" visible.
 
-## FINAL STATUS
-**READY FOR FOUNDER HUMAN VALIDATION** — the next Google consent attempt must complete
-the exchange (the callback now always fires and the backend always lands on a terminal
-state). Real Gmail read requires the founder's account/browser.
+## 6. AUTO-SCROLL FINAL BEHAVIOR
+Enviar un mensaje → snap al último mensaje (forzado). Actualizaciones pasivas →
+auto-follow SOLO si el CEO está cerca del fondo (<80px).
+
+## 7. USER-SCROLL OVERRIDE
+Si el CEO se desplaza hacia arriba, las actualizaciones pasivas NO mueven el
+viewport; aparece el botón "↓ Ir al último mensaje" (sticky) para volver.
+
+## 8. EVENT ORDERING
+El transcripto visible = línea del usuario + respuesta del asistente (última),
+más SOLO eventos contextuales del turno. El filtro descarta process_event,
+work_state, connection_need del opening y multiple_departments_note.
+
+## 9. BACKEND TEST RESULT — 466/466 (36 files) PASS
+## 10. PORTAL TEST RESULT — 98/98 (12 files) PASS
+## 11. LINT — `pnpm -r lint` VERDE (0 errores)
+## 12. TYPECHECK — `pnpm -r typecheck` VERDE
+## 13. BUILD — `pnpm -r build` VERDE
+## 14. PNPM CHECK — VERDE (36/36 paquetes)
+## 15. FINAL COMMIT SHA — 78f13cf (main)
+## 16. PUSH STATUS — pushed a origin/main
+## 17. RAILWAY STATUS — departify-api SUCCESS (78f13cf); stores durables cableados; health 200
+## 18. NETLIFY STATUS — bundle del portal con "Ir al último mensaje" desplegado
+## 19. NOT VALIDATED
+Gmail real (requiere cuenta/browser del founder); comportamiento visual en
+navegador real (scroll/afordance); continuidad conversacional real.
+
+## 20. EXACT FOUNDER TEST
+A. En /chat: "¿Cuál es el último correo recibido?" → UN correo real, remitente
+   legible, asunto, fecha/hora si disponible, snippet corto. SIN query Gmail
+   (newer_than/in:inbox), SIN &quot;, SIN tarjeta Brevo/irrelevante.
+B. "¿Tengo correos importantes?" → lista concisa priorizada (con razón de
+   importancia), sin dump de API, sin tarjetas de conexión irrelevantes.
+C. Scroll: abre una conversación larga → desplázate hacia arriba → una
+   actualización pasiva NO debe bajar el viewport → envía un mensaje nuevo →
+   el viewport vuelve al último intercambio → la respuesta final es visible
+   sin scroll manual.
+
+FINAL STATUS: **READY FOR FOUNDER HUMAN VALIDATION** (STOP — no Calendar/Drive,
+no otro departamento, espera validación humana).
