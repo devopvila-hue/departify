@@ -1,76 +1,153 @@
-# AUTOPILOT DONE — Central Chat UX P0 (sprint heredado de Claude, finalizado)
+# AUTOPILOT DONE — Customer Zero Email P0 closure
 
-## 1. STATE INHERITED FROM CLAUDE
-Sprint "Central Chat UX P0" detenido por 429 (token-plan) con backend 466/466
-verde. Working tree sin commitear: presenter de Gmail (run-gmail-presentation),
-filtrado de connection_need del opening, auto-scroll con respeto a la posición
-manual. Pendiente: portal tests + lint + typecheck + commit/deploy.
+## 1. ROSA PRE-FLIGHT
+Read: rosa.yaml, docs/architecture.md, existing Gmail OAuth (google-tokens,
+oauth-state, gmail-adapter), credential layer (credential-resolver,
+google_oauth_tokens), command-center routing, conversation durability,
+approval system, marketing work. No runtime/credential/OAuth redesign.
+Gmail OAuth untouched. No Calendar/Drive. No new department.
 
-## 2. FILES CLAUDE HAD ALREADY CHANGED
-- `apps/backend/src/customer-zero/command-center.ts` (connection_need fuera del opening)
-- `apps/backend/src/server/routes/customer-zero-v2.ts` (runGmailRead usa el presenter)
-- `apps/backend/test/command-center.test.ts`, `customer-zero-05-post-oauth.test.ts`
-- `apps/portal/src/routes/ChatRoute.tsx` (scroll + filterContextualEvents)
-- `apps/portal/src/styles/tokens.css` (jump-latest)
-- Nuevos: `run-gmail-presentation.ts`, `run-gmail-presentation.test.ts`
+## 2. EXISTING EMAIL ARCHITECTURE FOUND
+Capability vocabulary already provider-independent (email.read/search/draft/
+send.personal), GmailAdapter (read/search/draft/send), durable Google token
+store, email-delivery-adapter (Resend, campaigns). MISSING: email send routing
+in chat, multi-turn pending email state, corporate (non-Google) provider.
 
-## 3. WORK COMPLETED BY OPENCODE
-- Fixes mínimos de lint del código heredado (5 errores: función muerta, params sin usar).
-- Portal: tarjeta contextual de conexión desde `connectionSuggestion` del mensaje
-  (las tarjetas genuinas siguen apareciendo; las del opening se filtran).
-- sprint-59 test 8 actualizado al nuevo contrato.
-- 4 tests nuevos de UX del chat (chat-ux.test.tsx).
-- Gates completos verdes; commit 78f13cf; push; deploy Railway + Netlify verificados.
+## 3. RED-ERROR LAST_SUCCESSFUL_CHECKPOINT
+POST /conversations/{id}/messages 200 (22:52:43, 8.5s) — the CEO's email
+request was understood and Elvira asked for missing info.
 
-## 4. GMAIL PRESENTATION FINAL BEHAVIOR
-Intent-aware: "último correo" → 1 correo estructurado (De/Asunto/Recibido/snippet);
-"importantes/sin leer" → hasta 5 priorizados por importancia con razón; "busca X" →
-hasta 5; genérico → hasta 5 recientes. Nunca expone sintaxis de query Gmail ni
-entidades HTML; decode seguro de &quot; &#39; &amp; &lt; &gt;.
+## 4. RED-ERROR FIRST_FAILED_CHECKPOINT
+The follow-up POST /conversations/{id}/messages → **HTTP 499 after 28s**
+(Railway log 22:53:33) — the client closed the request while the engine
+(OpenClaw, 120s timeout) was still processing the generic `delegate_marketing`
+turn. Portal `postJson` returned null → ChatRoute rendered
+"Departify no ha podido responderte ahora mismo."
 
-## 5. TOOL-CARD FINAL BEHAVIOR
-El opening proactivo ya NO emite connection_need (el catálogo vive en /conexiones).
-Una tarjeta contextual aparece solo cuando el mensaje del CEO produce un
-`connectionSuggestion` (menciona la herramienta o la tarea la requiere). Verificado:
-tarjeta Brevo del opening filtrada; tarjeta Mautic tras "conecta mautic" visible.
+## 5. ROOT CAUSE
+Email requests fell into `delegate_marketing` → engine/LLM turn (slow,
+unbounded for UX, no email context) and there was NO pending-email state, so a
+follow-up could not continue the objective. The 28s+ engine turn exceeded the
+client's patience → 499 → red error, work lost.
 
-## 6. AUTO-SCROLL FINAL BEHAVIOR
-Enviar un mensaje → snap al último mensaje (forzado). Actualizaciones pasivas →
-auto-follow SOLO si el CEO está cerca del fondo (<80px).
+## 6. FILES CHANGED
+pending-email.ts (new), email-capability.ts (new), corporate-email-store.ts (new),
+corporate-email-adapter.ts (new), command-center.ts, customer-zero-session.ts,
+customer-zero-v2.ts, main.ts, portal api.ts / ConnectionsRoute.tsx / tokens.css,
+package.json + pnpm-lock (imapflow, nodemailer), migration
+20260811090000_email_accounts.sql, tests customer-zero-06/07 + portal tests.
 
-## 7. USER-SCROLL OVERRIDE
-Si el CEO se desplaza hacia arriba, las actualizaciones pasivas NO mueven el
-viewport; aparece el botón "↓ Ir al último mensaje" (sticky) para volver.
+## 7. EMAIL CAPABILITY ARCHITECTURE
+email.read/search/compose/send boundary; provider resolution:
+corporate (IMAP/SMTP) first, Google fallback. Business code never names a
+provider. Gmail is a provider, not the capability.
 
-## 8. EVENT ORDERING
-El transcripto visible = línea del usuario + respuesta del asistente (última),
-más SOLO eventos contextuales del turno. El filtro descarta process_event,
-work_state, connection_need del opening y multiple_departments_note.
+## 8. GMAIL PROVIDER BEHAVIOR
+Unchanged OAuth; reads via presenter (no query jargon); sends via
+GmailAdapter.sendMessage through the capability boundary; durable send evidence
+(messageId, recipient, sentAt).
 
-## 9. BACKEND TEST RESULT — 466/466 (36 files) PASS
-## 10. PORTAL TEST RESULT — 98/98 (12 files) PASS
-## 11. LINT — `pnpm -r lint` VERDE (0 errores)
-## 12. TYPECHECK — `pnpm -r typecheck` VERDE
-## 13. BUILD — `pnpm -r build` VERDE
-## 14. PNPM CHECK — VERDE (36/36 paquetes)
-## 15. FINAL COMMIT SHA — 78f13cf (main)
-## 16. PUSH STATUS — pushed a origin/main
-## 17. RAILWAY STATUS — departify-api SUCCESS (78f13cf); stores durables cableados; health 200
-## 18. NETLIFY STATUS — bundle del portal con "Ir al último mensaje" desplegado
-## 19. NOT VALIDATED
-Gmail real (requiere cuenta/browser del founder); comportamiento visual en
-navegador real (scroll/afordance); continuidad conversacional real.
+## 9. IMAP PROVIDER BEHAVIOR
+imapflow, bounded 15s; read inbox (unseen→recent), presents via the same
+business presenter. Valid creds → operational (probe IMAP connect + INBOX).
 
-## 20. EXACT FOUNDER TEST
-A. En /chat: "¿Cuál es el último correo recibido?" → UN correo real, remitente
-   legible, asunto, fecha/hora si disponible, snippet corto. SIN query Gmail
-   (newer_than/in:inbox), SIN &quot;, SIN tarjeta Brevo/irrelevante.
-B. "¿Tengo correos importantes?" → lista concisa priorizada (con razón de
-   importancia), sin dump de API, sin tarjetas de conexión irrelevantes.
-C. Scroll: abre una conversación larga → desplázate hacia arriba → una
-   actualización pasiva NO debe bajar el viewport → envía un mensaje nuevo →
-   el viewport vuelve al último intercambio → la respuesta final es visible
-   sin scroll manual.
+## 10. SMTP PROVIDER BEHAVIOR
+nodemailer, bounded; send via transporter.sendMail; probe = verify() session
+(never sends mail). Operational only when IMAP AND SMTP probes succeed.
 
-FINAL STATUS: **READY FOR FOUNDER HUMAN VALIDATION** (STOP — no Calendar/Drive,
-no otro departamento, espera validación humana).
+## 11. CREDENTIAL SECURITY
+Corporate password stored server-side (email_accounts, service-role only, RLS
+block-all, org+user scoped), NEVER returned by APIs, never logged, never in
+chat/DNA/model. Same posture as Google tokens.
+
+## 12. CONNECTION STATE MODEL
+Connected = durable credentials + real bounded probe success
+(operationalVerifiedAt). Probe failure → honest non-connected state with a
+business reason. No "connected" without capability.
+
+## 13. MULTI-TURN CONTINUATION FIX
+pendingEmailWork (session): recipient/objective/missingFields/draft/status.
+Follow-ups absorb missing info, preserve recipient+objective, rebuild draft,
+never fall to generic routing, never pick Mautic, never emit the red error.
+Deterministic pipeline — no engine dependency.
+
+## 14. APPROVAL FLOW
+Conversational: draft shown with "¿Lo envío? Responde «sí, envíalo»"; approval
+sends; cancellation cancels; new info rebuilds the draft.
+
+## 15. SEND-RESULT DURABILITY
+PendingEmailWork.sendResult { provider, recipient, sentAt, providerMessageId }
+persisted on the session + the send confirmation is a durable conversation
+message. Failed sends never report success; draft survives for retry.
+
+## 16. PROMPT-INJECTION BOUNDARY
+Email body is DATA: malicious content is echoed as draft content to send,
+never executed as instructions (CZ06 Z test).
+
+## 17. ORG ISOLATION
+Credential stores + capability resolution are org-scoped; cross-org access
+rejected (CZ06 X, CZ07 X tests).
+
+## 18. UX CHANGES
+/conexiones → "Correo" capability with providers: Google/Gmail (Conectar),
+Microsoft 365 (honest "Próximamente"), Otro correo de empresa (IMAP/SMTP form).
+Product wording everywhere; contextual "Conecta tu correo" card when email is
+needed but not connected.
+
+## 19. TESTS ADDED
+CZ06 (10): multi-turn draft/approval/send, missing-info continuation,
+"Conecta tu correo", no unnecessary card, no Mautic/red error, failed send,
+org isolation, prompt-injection. CZ07 (6): corporate probe ok/invalid,
+no credential leakage, corporate send/read dispatch, org isolation.
+
+## 20. BACKEND TESTS — 482/482 (37 files) PASS
+## 21. PORTAL TESTS — 98/98 (12 files) PASS
+## 22. LINT — pnpm -r lint VERDE
+## 23. TYPECHECK — pnpm -r typecheck VERDE
+## 24. BUILD — pnpm -r build VERDE
+## 25. PNPM CHECK — VERDE (36/36 packages)
+## 26. COMMITS
+0594e05 (multi-turn email capability, no red error)
+78e7f10 (corporate IMAP/SMTP provider + Correo UX)
+
+## 27. PRODUCTION DEPLOY
+Railway departify-api SUCCESS (78e7f10); boot logs confirm durable
+google-oauth + oauth-state + corporate-email stores; health 200. Netlify
+bundle contains the Correo section. Migration applied to production Supabase;
+smoke write→read-back OK on both google_oauth_tokens and email_accounts.
+
+## 28. BROWSER VALIDATION PERFORMED
+None (requires founder accounts). Portal tests cover the Correo section render
+and the Gmail handshake; backend tests cover the full flows with mocked
+providers.
+
+## 29. VALIDATED
+Multi-turn email pipeline (draft→approval→send), no red error on follow-ups,
+corporate provider configure/probe/send/read with mocks, credential secrecy,
+org isolation, prompt-injection boundary, all gates, deploy, production
+durable-store smoke.
+
+## 30. NOT VALIDATED
+Real Gmail send receipt; real IMAP/SMTP against a live corporate account;
+real browser scroll/UX; conversational continuation with the real engine.
+
+## 31. BLOCKED
+None.
+
+## 32. FOUNDER GOOGLE TEST
+1. /conexiones → Correo → Google/Gmail operational. 2. /chat:
+"¿Cuál es mi último correo recibido?" → one real email (sender/subject/date/
+snippet). 3. "¿Tengo algún correo importante?" → concise prioritized list.
+4. "Prepara un correo para [address] diciendo [message]." → draft shown.
+5. Reply "sí, envíalo". 6. Verify actual receipt.
+
+## 33. FOUNDER CORPORATE-EMAIL TEST
+1. /conexiones → Correo → "Otro correo de empresa". 2. Configure a real
+IMAP/SMTP account. 3. Verify connection (probe result). 4. "¿Cuál es el
+último correo?" → real inbox email. 5. Search a known email. 6. Draft a
+message. 7. "sí, envíalo". 8. Verify actual receipt.
+
+## 34. FINAL STATUS
+**READY FOR FOUNDER HUMAN VALIDATION**
+(Golden Department not declared. STOP — no Calendar, no Drive, no other
+department. Waiting for founder validation.)

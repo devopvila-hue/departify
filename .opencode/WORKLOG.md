@@ -285,3 +285,34 @@ Trabajo de OpenCode:
   push a main, deploy Railway SUCCESS + Netlify (bundle con jump-latest), health 200.
 - Scope: sin cambios en OAuth redirect/tokens/scopes, Calendar, Drive, OpenClaw,
   departamentos, ni gate de onboarding (salvo commits heredados de Claude).
+
+## Sesión 6 (2026-08-11) — Customer Zero Email P0 closure
+
+### Diagnóstico del error rojo (evidencia de producción)
+- El error "Departify no ha podido responderte ahora mismo" = `result === null` en
+  ChatRoute (postJson null = fetch falló/cuerpo no-JSON).
+- Logs Railway: el último POST de mensaje de conversación devolvió **499 tras 28s**
+  (cliente cerró la petición) — el turno del engine/Elvira tardó demasiado.
+- Causa raíz: los turnos de EMAIL caían en `delegate_marketing` → engine (OpenClaw,
+  timeout 120s) → lento/cuelgue → 499 → error rojo; sin estado de trabajo pendiente
+  el follow-up no continuaba el objetivo.
+
+### Implementado (commits 0594e05 + 78e7f10)
+- Pipeline de email multi-turno determinista (SIN engine): intent `email_action`,
+  `pendingEmailWork` en sesión, extracción destinatario/objetivo, borrador +
+  aprobación conversacional, envío vía boundary de capacidad, resultado durable.
+  Follow-ups ("Son A, B y C", "a juan@…") continúan el MISMO trabajo.
+- Boundary `email-capability`: email.read/search/compose/send; providers
+  corporate (IMAP/SMTP) primero, Google como identidad por defecto.
+- Provider corporativo: tabla `email_accounts` (mismo patrón seguro), adaptadores
+  imapflow + nodemailer acotados a 15s, probes reales (IMAP connect+INBOX, SMTP
+  session — nunca envía como probe), configure/verify endpoints.
+- Portal: sección "Correo" con providers (Google/Gmail, Microsoft honesto
+  "Próximamente", Otro correo de empresa con formulario IMAP/SMTP).
+- Tests: 10 CZ06 (multi-turno, aprobación, envío, fallo, aislamiento, injection)
+  + 6 CZ07 (corporate probe ok/invalid, sin fuga de credenciales, send corporativo,
+  read corporativo, aislamiento).
+- Gates: backend 482/482, portal 98/98, lint/typecheck/build/check verdes (36 paq).
+- Migración `20260811090000_email_accounts` aplicada a producción (verificada).
+- Deploy Railway SUCCESS (78e7f10) con store corporativo cableado; Netlify bundle
+  con sección Correo; health 200; smoke Supabase prod write→read-back OK.
