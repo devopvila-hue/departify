@@ -84,11 +84,14 @@ describe("A. selection never means connected", () => {
     expect(declared.status).toBe("needs_connection");
   });
 
-  it("declares a tool without an implemented connector as SELECTED, never a fake needs_connection", () => {
+  it("declares Gmail as NEEDS_CONNECTION (OAuth handshake is the real connector), never a fake CONNECTED", () => {
+    // P0 — Gmail now has a real connector (the OAuth handshake + Gmail
+    // operational probe). Declaring Gmail therefore places it in
+    // needs_connection (CEO can act via /conexiones) — NOT in "selected",
+    // and absolutely NOT in "connected" until the probe succeeds.
     const declared = buildDeclaredToolState("org", "gmail", "Gmail", "email.send");
     expect(declared.declared).toBe(true);
-    expect(declared.status).toBe("selected");
-    expect(declared.status).not.toBe("needs_connection");
+    expect(declared.status).toBe("needs_connection");
     expect(declared.status).not.toBe("connected");
   });
 

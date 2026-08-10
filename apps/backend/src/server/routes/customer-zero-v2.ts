@@ -2668,7 +2668,10 @@ function mauticNotOperationalReply(
 
 const EMAIL_QUESTION_PATTERN = new RegExp(
   [
-    "\\b(correos?|emails?|inbox|bandeja|buz[oó]n|buz[oó]n\\s+de\\s+entrada)",
+    // P0 — bare "mail" must match. The previous regex missed it and the
+    // message fell through to the Mautic branch instead of runGmailRead.
+    // `\bmail\b` does NOT match "mailchimp" (one word, no boundary).
+    "\\b(correos?|emails?|mail|mailbox|inbox|bandeja|buz[oó]n|buz[oó]n\\s+de\\s+entrada)",
     "important|importantes|unread|no\\s+le[ií]dos?|pendientes",
     "responder|respuesta|respu[eé]stame",
     "gmail|google\\s+mail|googlemail",

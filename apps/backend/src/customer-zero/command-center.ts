@@ -947,14 +947,22 @@ const TOOL_KEYWORDS: readonly { keywords: readonly RegExp[]; toolId: string }[] 
  */
 export function isEmailReadQuestion(message: string): boolean {
   const lower = message.toLowerCase();
+  // P0 — the CEO's email vocabulary must include the bare English word
+  // "mail" (e.g. "¿puedes leer mi último mail recibido?"). The previous
+  // regex missed it and the message fell through to delegate_marketing,
+  // which routed through Elvira → Mautic → "no ha podido acceder a
+  // Mautic en este momento" — even though Gmail was operational.
+  // `mailchimp` is one word, so the `\b` boundaries keep it out.
   const mentionsEmail =
-    /\b(correos?|emails?|inbox|bandeja\s+de\s+entrada|bandeja|buz[oó]n(?: de entrada)?|gmail|google\s+mail)\b/i.test(
+    /\b(correos?|emails?|mail|mailbox|inbox|bandeja\s+de\s+entrada|bandeja|buz[oó]n(?: de entrada)?|gmail|google\s+mail|googlemail)\b/i.test(
       lower,
     );
   if (mentionsEmail) {
     // An email vocabulary mention combined with an inbox-reading
-    // intent (importance, unread, review, "tengo", "hay"...).
-    return /\b(important|importantes?|unread|pendientes?|no\s+le[ií]dos?|le[ií]dos?|nuevos?|revisar|revisa|tengo|hay|alguno|contestar|responder|respuestas?|respu[eé]stame)\b/i.test(
+    // intent. The reading/intent verbs now include "leer" (infinitive)
+    // and "recibido" so messages like "¿puedes leer mi último mail
+    // recibido?" route here instead of falling through.
+    return /\b(important|importantes?|unread|pendientes?|no\s+le[ií]dos?|le[ií]dos?|leer|lee|leeme|le[íi]me|recibido|recibidos|nuevo|nuevos?|ver|mu[eé]strame|ense[ñn]ame|dime|revisar|revisa|tengo|hay|alguno|contestar|responder|respuestas?|respu[eé]stame|busca|search|find)\b/i.test(
       lower,
     );
   }

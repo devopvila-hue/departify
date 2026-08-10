@@ -124,16 +124,16 @@ describe("P-B production fix — connections catalog", () => {
     expect(declared.statusCode).toBe(200);
     const durable = await toolState.get(org, "gmail");
     expect(durable?.declared).toBe(true);
-    // Gmail has no implemented connector: it is SELECTED, never a fake
-    // "needs_connection" with no mechanism to complete it.
-    expect(durable?.status).toBe("selected");
+    // P0 — Gmail now has a real connector (OAuth handshake). Declaring
+    // Gmail without OAuth places it in needs_connection (CEO can act
+    // via /conexiones), NEVER in "connected".
+    expect(durable?.status).toBe("needs_connection");
     expect(durable?.status).not.toBe("connected");
 
     const views = await connections(org);
     const gmail = views.find((view) => view.toolId === "gmail");
-    expect(gmail?.state).toBe("selected");
-    expect(gmail?.action).toBeNull();
-    expect(gmail?.humanLabel).toBe("Seleccionada");
+    expect(gmail?.state).toBe("needs_connection");
+    expect(gmail?.state).not.toBe("connected");
   });
 
   it("E. another organization does not inherit the selection", async () => {
@@ -149,7 +149,7 @@ describe("P-B production fix — connections catalog", () => {
     expect(await toolState.get(orgB, "gmail")).toBeNull();
   });
 
-  it("F. restart/hydration preserves selected tools", async () => {
+  it("F. restart/hydration preserves Gmail's needs_connection state", async () => {
     const org = await start();
     await server.inject({
       method: "POST",
@@ -160,7 +160,9 @@ describe("P-B production fix — connections catalog", () => {
     // durable store (same instance in deps) survives.
     resetCustomerZeroSessionsForTest();
     const views = await connections(org);
-    expect(views.find((view) => view.toolId === "gmail")?.state).toBe("selected");
+    // P0 — Gmail has a real connector (OAuth handshake) so its durable
+    // lifecycle on declare is needs_connection, not the legacy "selected".
+    expect(views.find((view) => view.toolId === "gmail")?.state).toBe("needs_connection");
   });
 
   it("G. environment configuration alone never makes a catalog entry CONNECTED", async () => {
@@ -175,7 +177,7 @@ describe("P-B production fix — connections catalog", () => {
     expect(mautic?.state).not.toBe("connected");
   });
 
-  it("I. chat does not claim Gmail is connected when no connector exists", async () => {
+  it("I. chat does not claim Gmail is connected without durable token evidence", async () => {
     const org = await start();
     const response = await server.inject({
       method: "POST",
@@ -188,9 +190,12 @@ describe("P-B production fix — connections catalog", () => {
       reply: string;
       connectionSuggestion: { connectable: boolean } | null;
     };
-    expect(body.reply.toLowerCase()).toContain("conexiones");
+    // P0 — Gmail now has a real OAuth connector. The chat says the
+    // connector exists and instructs the CEO to connect it. It MUST
+    // NOT claim "conectado y operativo" because no durable Google
+    // token row exists for this org yet.
     expect(body.reply.toLowerCase()).not.toContain("conectado y operativo");
-    expect(body.connectionSuggestion?.connectable).toBe(false);
+    expect(body.connectionSuggestion?.connectable).toBe(true);
   });
 
   it("J. /connections does not duplicate Mautic across domains", async () => {

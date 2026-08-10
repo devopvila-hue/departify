@@ -363,7 +363,17 @@ export function compileDepartmentContext(
         : "not_connected";
     const source = publicCredentialSource({
       organizationId: session.organizationId,
-      provider: provider === "mautic" ? "mautic" : "mautic",
+      // P0 — both ternary branches were "mautic" so every non-Mautic
+      // provider was silently coerced into the Mautic credential
+      // lookup. Gmail's configSource is now reported honestly.
+      // Narrow to the known set so downstream typed providers stay safe.
+      provider:
+        provider === "mautic" ||
+        provider === "gmail" ||
+        provider === "resend" ||
+        provider === "google"
+          ? provider
+          : "mautic",
     });
     connections.push({
       provider,

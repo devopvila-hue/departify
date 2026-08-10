@@ -22,6 +22,7 @@ import {
   buildCommandCenterInput,
   buildProactiveOpening,
   discoverConnection,
+  isEmailReadQuestion,
   routeCommandCenter,
   type CommandCenterInput,
 } from "../src/customer-zero/command-center.js";
@@ -145,6 +146,36 @@ describe("Command Center routing", () => {
       makeInput({ message: "¿Cuántos contactos tenemos en Mautic?" }),
     );
     expect(decision.decision.intent).toBe("request_connection");
+  });
+
+  it("P0 — ¿puedes leer mi último mail recibido? routes to external_tool_query (Gmail, not Mautic)", () => {
+    // Regression for the routing bug: the bare English word "mail" was
+    // missing from the email vocabulary regex, so "¿puedes leer mi último
+    // mail recibido?" fell through to delegate_marketing → Elvira →
+    // Mautic → "no ha podido acceder a Mautic en este momento" even
+    // when Gmail was operationally connected.
+    const decision = routeCommandCenter(
+      makeInput({ message: "¿puedes leer mi último mail recibido?" }),
+    );
+    expect(decision.decision.intent).toBe("external_tool_query");
+  });
+
+  it("P0 — ¿tengo correos importantes? routes to external_tool_query (Gmail)", () => {
+    const decision = routeCommandCenter(
+      makeInput({ message: "¿tengo correos importantes?" }),
+    );
+    expect(decision.decision.intent).toBe("external_tool_query");
+  });
+
+  it("P0 — isEmailReadQuestion recognizes 'mail' as email vocabulary", () => {
+    // Regression: bare "mail" was previously not in the alternation.
+    expect(isEmailReadQuestion("¿puedes leer mi último mail recibido?")).toBe(true);
+    expect(isEmailReadQuestion("lee mi último mail")).toBe(true);
+    expect(isEmailReadQuestion("busca en mi mail")).toBe(true);
+    // mailchimp must still NOT match (one word, no boundary).
+    expect(isEmailReadQuestion("configura mailchimp")).toBe(false);
+    // Non-email messages stay non-email.
+    expect(isEmailReadQuestion("¿cuántos contactos tenemos?")).toBe(false);
   });
 
   it("routes 'pero ya tienes acceso al mautic' to capability_status with operational truth", () => {

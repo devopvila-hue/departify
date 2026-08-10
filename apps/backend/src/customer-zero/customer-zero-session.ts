@@ -457,6 +457,84 @@ export async function hydrateSessionToolState(
       : buildFallbackConnection(record);
     session.state.connections.set(record.toolId, connection);
   }
+
+  // P0 — single source of truth reconciliation. If a durable Google
+  // OAuth token row exists for this org (refresh token persisted +
+  // operational probe verified), but the durable organization_tool_states
+  // row is missing or stale, we synthesize a `connected` state for the
+  // affected Google tools here. This keeps /conexiones cards and chat
+  // capability answers perfectly aligned with the durable Google token
+  // store — no more "Connected in chat but Not Connected in card".
+  await reconcileGoogleConnectionsFromDurableTokens(session, records);
+}
+
+/**
+ * For each Google tool (gmail, google_workspace, google_calendar,
+ * google_drive) check whether the durable Google token store reports
+ * an operational refresh-token row for this org. If yes, upsert a
+ * `connected` row into organization_tool_states and add the matching
+ * ConnectionState to the in-memory session. Idempotent: an existing
+ * `connected` record is left untouched; a `needs_connection` /
+ * `blocked` record is upgraded to `connected`.
+ */
+async function reconcileGoogleConnectionsFromDurableTokens(
+  session: CustomerZeroSession,
+  existingRecords: readonly OrganizationToolState[],
+): Promise<void> {
+  let operational = false;
+  try {
+    const { hasOperationalGoogleIdentityForOrg } = await import(
+      "./credential-resolver.js"
+    );
+    operational = await hasOperationalGoogleIdentityForOrg(
+      session.organizationId,
+    );
+  } catch {
+    // Credential resolver not wired (test env) — nothing to reconcile.
+    return;
+  }
+  if (!operational) return;
+  const googleToolIds = ["gmail", "google_workspace", "google_calendar", "google_drive"];
+  for (const toolId of googleToolIds) {
+    const existing = existingRecords.find((r) => r.toolId === toolId);
+    if (
+      existing &&
+      existing.status === "connected" &&
+      existing.configSource === "oauth:google"
+    ) {
+      continue;
+    }
+    const verifiedAt = new Date().toISOString();
+    const tool = TOOL_CATALOG.find((entry) => entry.id === toolId);
+    const label = tool?.label ?? toolId;
+    const record: OrganizationToolState = {
+      organizationId: session.organizationId,
+      toolId,
+      label,
+      ...(tool?.capability ? { capability: tool.capability } : {}),
+      declared: true,
+      status: "connected",
+      configSource: "oauth:google",
+      verifiedAt,
+      health: "operational",
+    };
+    try {
+      await session.toolState.upsert(record);
+    } catch {
+      // If the durable tool-state store is unavailable, still patch
+      // the in-memory session so the chat surface and the
+      // /conexiones view agree for the rest of this request.
+    }
+    if (tool) {
+      const connection = buildConnectionStateWithLifecycle(
+        tool,
+        session.state.locale,
+        "connected",
+        { configSource: "oauth:google", verifiedAt },
+      );
+      session.state.connections.set(toolId, connection);
+    }
+  }
 }
 
 /** Persists a declaration/connection update to the durable store. */

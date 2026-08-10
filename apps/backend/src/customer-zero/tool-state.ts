@@ -77,10 +77,23 @@ export function hasEnv(variableNames: readonly string[]): boolean {
 
 /**
  * Whether Departify has a REAL, working connector (verification handshake)
- * for the tool. Today only Mautic. A catalog entry is NOT a connector.
+ * for the tool. Mautic uses env-side OAuth client credentials;
+ * the Google tools (gmail, google_workspace, google_calendar, google_drive)
+ * use the durable OAuth handshake that completes a verified Gmail
+ * profile probe before marking the connection operational. The previous
+ * implementation only returned true for "mautic" — that silently broke
+ * every capability lookup that gates on this predicate (the engine's
+ * "available capabilities" block reported Gmail as credentials_missing
+ * even after the CEO completed the OAuth handshake).
  */
 export function hasWorkingConnector(toolId: string): boolean {
-  return toolId === "mautic";
+  return (
+    toolId === "mautic" ||
+    toolId === "gmail" ||
+    toolId === "google_workspace" ||
+    toolId === "google_calendar" ||
+    toolId === "google_drive"
+  );
 }
 
 /**
