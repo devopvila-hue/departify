@@ -24,6 +24,7 @@ import {
 } from "../../customer-zero/web-analysis.js";
 import {
   getOrCreateCustomerZeroSession,
+  getCustomerZeroSession,
   hydrateSessionToolState,
   persistToolState,
   runDiscoveryForSession,
@@ -93,6 +94,24 @@ import {
   type DepartmentMemoryProvenance,
 } from "../../customer-zero/department-memory.js";
 import { buildSessionOperationalContext } from "../../customer-zero/operational-context.js";
+import {
+  enrichForChat,
+  buildWorkStateEvents,
+} from "../../customer-zero/chat-response-enrichment.js";
+import { publicCredentialSource } from "../../customer-zero/credential-resolver.js";
+import {
+  CONNECTION_DEFINITIONS,
+  renderConnectionCard,
+  listAvailableCapabilitiesForOrg,
+} from "../../customer-zero/connections-domain.js";
+import { isCapabilityAvailable } from "../../customer-zero/capability-registry.js";
+import {
+  InMemoryDepartmentWorkStore,
+  checkReplyForUnsupportedPromises,
+  type DepartmentWorkStore,
+} from "../../customer-zero/department-work.js";
+import { DepartmentWorkExecutor } from "../../customer-zero/department-work-executor.js";
+import type { MarketingActivityRepository } from "../../customer-zero/marketing-repositories.js";
 import type { CompanyDiscoveryReport } from "@departify/business-discovery";
 import type { ServerDeps } from "../deps.js";
 import {
@@ -464,11 +483,224 @@ export async function registerCustomerZeroV2Routes(
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
       const session = await requireSession(organizationId, deps);
+      // Customer Zero 01 — render the canonical 5-state card view for
+      // every supported connection, including those not yet declared.
+      const toolStates = await listToolStatesForSession(session);
+      const cards = CONNECTION_DEFINITIONS.map((def) => {
+        const orgState = toolStates.find((s) => s.toolId === def.id) ?? null;
+        return renderConnectionCard(orgState, session.state.locale);
+      });
       return reply.code(200).send({
         organizationId,
         connections: buildCatalogConnectionViews(session, session.state.locale),
+        cards,
         unmappedTools: session.state.unmappedTools,
       });
+    },
+  );
+
+  // Customer Zero 01 — single connection detail.
+  server.get<{
+    Params: { organizationId: string; provider: string };
+  }>(
+    "/api/customer-zero/:organizationId/connections/:provider",
+    async (request, reply) => {
+      const { organizationId, provider } = request.params;
+      const session = await requireSession(organizationId, deps);
+      const toolStates = await listToolStatesForSession(session);
+      const orgState = toolStates.find((s) => s.toolId === provider) ?? null;
+      const card = renderConnectionCard(orgState, session.state.locale);
+      if (card.id === "unknown") {
+        return reply.code(404).send({ error: "unknown_provider" });
+      }
+      return {
+        organizationId,
+        provider: card.id,
+        name: card.name,
+        state: card.state,
+        stateLabel: card.stateLabel,
+        capabilities: card.capabilities,
+        configSource: card.configSource,
+        verifiedAt: card.verifiedAt,
+      };
+    },
+  );
+
+  // Customer Zero 01 — live test of a connection.
+  server.post<{
+    Params: { organizationId: string; provider: string };
+  }>(
+    "/api/customer-zero/:organizationId/connections/:provider/test",
+    async (request, reply) => {
+      const { organizationId, provider } = request.params;
+      if (provider !== "mautic") {
+        return reply.code(404).send({ error: "unsupported_provider" });
+      }
+      const session = await requireSession(organizationId, deps);
+      const resolution = await testMauticForOrg(session);
+      // Update the tool state based on the test result.
+      const toolStateStore = session.toolState;
+      const now = new Date().toISOString();
+      const current = (await toolStateStore.get(organizationId, "mautic")) ?? null;
+      await toolStateStore.upsert({
+        organizationId,
+        toolId: "mautic",
+        label: "Mautic",
+        capability: "crm.contacts.read",
+        declared: true,
+        status: resolution.success ? "connected" : resolution.code === "auth" ? "degraded" : "needs_connection",
+        ...(resolution.available ? { configSource: "env:mautic" as const } : {}),
+        ...(resolution.success ? { verifiedAt: now } : current?.verifiedAt ? { verifiedAt: current.verifiedAt } : {}),
+        health: resolution.success ? "operational" : "down",
+        updatedAt: now,
+      });
+      return {
+        provider,
+        state: resolution.success ? "connected" : "needs_attention",
+        message: resolution.message,
+        available: resolution.available,
+      };
+    },
+  );
+
+  // Customer Zero 01 — capabilities available to this organization.
+  server.get<{
+    Params: { organizationId: string };
+  }>(
+    "/api/customer-zero/:organizationId/capabilities",
+    async (request) => {
+      const { organizationId } = request.params;
+      const session = await requireSession(organizationId, deps);
+      const toolStates = await listToolStatesForSession(session);
+      const caps = listAvailableCapabilitiesForOrg(toolStates);
+      return {
+        organizationId,
+        capabilities: caps,
+      };
+    },
+  );
+
+  // Customer Zero 01 P0 — durable work feed.
+  server.get<{
+    Params: { organizationId: string };
+    Querystring: { since?: string; limit?: string };
+  }>(
+    "/api/customer-zero/:organizationId/work-feed",
+    async (request) => {
+      const { organizationId } = request.params;
+      const since = request.query?.since ?? "1970-01-01T00:00:00.000Z";
+      const limit = Number(request.query?.limit ?? 50);
+      await requireSession(organizationId, deps);
+      const workStore = getWorkStore();
+      const tasks = await workStore.listTasksForOrg(organizationId, limit);
+      const results = await workStore.listResultsForOrg(organizationId, limit);
+      const fresh = await workStore.feedSince(organizationId, since);
+      return {
+        organizationId,
+        tasks,
+        results,
+        newTasks: fresh.tasks,
+        newResults: fresh.results,
+        serverTime: fresh.serverTime,
+      };
+    },
+  );
+
+  // Customer Zero 01 P0 — list results.
+  server.get<{
+    Params: { organizationId: string };
+    Querystring: { limit?: string };
+  }>(
+    "/api/customer-zero/:organizationId/results",
+    async (request) => {
+      const { organizationId } = request.params;
+      const limit = Number(request.query?.limit ?? 50);
+      await requireSession(organizationId, deps);
+      const workStore = getWorkStore();
+      const results = await workStore.listResultsForOrg(organizationId, limit);
+      return { organizationId, results };
+    },
+  );
+
+  // Customer Zero 01 P0 — single result detail.
+  server.get<{
+    Params: { organizationId: string; resultId: string };
+  }>(
+    "/api/customer-zero/:organizationId/results/:resultId",
+    async (request, reply) => {
+      const { organizationId, resultId } = request.params;
+      await requireSession(organizationId, deps);
+      const workStore = getWorkStore();
+      const result = await workStore.getResult(resultId);
+      if (!result || result.organizationId !== organizationId) {
+        return reply.code(404).send({ error: "result_not_found" });
+      }
+      return { organizationId, result };
+    },
+  );
+
+  // Customer Zero 01 P0 — trigger a long-running work item.
+  server.post<{
+    Params: { organizationId: string };
+    Body: {
+      capability: string;
+      title: string;
+      summary: string;
+      conversationId: string;
+      objectiveId?: string;
+    };
+  }>(
+    "/api/customer-zero/:organizationId/work-items",
+    async (request, reply) => {
+      const { organizationId } = request.params;
+      const body = request.body;
+      const session = await requireSession(organizationId, deps);
+      const locale = resolveLocale(session.state.locale);
+      const executor = createWorkExecutor(organizationId);
+      try {
+        const outcome = await executor.run({
+          organizationId,
+          conversationId: body.conversationId,
+          departmentId: "marketing",
+          objectiveId: body.objectiveId ?? null,
+          requestedBy: "ceo",
+          title: body.title,
+          summary: body.summary,
+          capability: body.capability as Parameters<typeof isCapabilityAvailable>[1],
+          locale,
+        });
+        // Auto-inject the final message into the conversation.
+        await session.conversations.addMessage(
+          body.conversationId,
+          "assistant",
+          outcome.finalMessage,
+        );
+        return {
+          organizationId,
+          task: outcome.task,
+          result: outcome.result,
+          activity: outcome.activity,
+        };
+      } catch (error) {
+        return reply.code(500).send({
+          error: "work_failed",
+          message: error instanceof Error ? error.message : "Unknown failure",
+        });
+      }
+    },
+  );
+
+  // Customer Zero 01 P0 — promise guard. The frontend can call this
+  // before trusting an engine reply that includes "te aviso" /
+  // "lo dejo en Resultados" phrases.
+  server.post<{
+    Body: { reply: string };
+  }>(
+    "/api/customer-zero/promise-guard",
+    async (request) => {
+      const { reply } = request.body;
+      const guard = checkReplyForUnsupportedPromises(reply);
+      return guard;
     },
   );
 
@@ -1430,6 +1662,59 @@ export async function processCeoMessage(
     }
   }
 
+  // Customer Zero 01 P0 — durable long-analysis. When the CEO asks
+  // for an analysis + report, route through the DepartmentWorkExecutor
+  // so the work is durable, observable, and the final message is
+  // auto-injected into the conversation (no "¿ya está?" required).
+  const mauticConnForP0 = session.state.connections.get("mautic");
+  const mauticLifecycleForP0: ToolLifecycleStatus =
+    mauticConnForP0?.lifecycle ??
+    (mauticConnForP0?.status === "connected" ? "connected" : "needs_connection");
+  if (
+    routed.decision.intent === "external_tool_query" &&
+    mauticLifecycleForP0 === "connected"
+  ) {
+    const asksForAnalysis = /\b(analiz[ae]r?|informe|report[ae]|resum[ie]n|prepara(r)?|deja(r)?\s+en\s+resultados)\b/i.test(
+      message,
+    );
+    if (asksForAnalysis) {
+      try {
+        const executor = createWorkExecutor(organizationId);
+        const outcome = await executor.run({
+          organizationId,
+          conversationId: conversation.id,
+          departmentId: "marketing",
+          objectiveId: null,
+          requestedBy: "ceo",
+          title: t(
+            session.state.locale,
+            `Análisis de contactos de Mautic`,
+            `Mautic contacts analysis`,
+          ),
+          summary: t(
+            session.state.locale,
+            `Resumen de contactos de Mautic`,
+            `Mautic contacts summary`,
+          ),
+          capability: "crm.contacts.summary",
+          locale: session.state.locale,
+        });
+        // Auto-inject the final message into the conversation and
+        // override the assistant reply with the same content.
+        await session.conversations.addMessage(
+          conversation.id,
+          "assistant",
+          outcome.finalMessage,
+        );
+        assistantReply = outcome.finalMessage;
+        marketingTurn = { role: "assistant", content: assistantReply };
+      } catch {
+        // Executor already records the failure and emits a final
+        // message; nothing to do here.
+      }
+    }
+  }
+
   await session.conversations.addMessage(
     conversation.id,
     "assistant",
@@ -1446,10 +1731,49 @@ export async function processCeoMessage(
 
   const events: CommandCenterEvent[] = buildProactiveOpening(session);
 
+  // Customer Zero 01 — chat enrichment. The portal now renders the
+  // assistant reply with the correct speaker identity (DEPARTIFY vs
+  // ELVIRA · Directora de Marketing) and a live work-state strip that
+  // reflects the real routing decision + whether the engine call
+  // succeeded. No fake timers; if a state did not occur, no event is
+  // emitted.
+  const enrichment = enrichForChat({
+    intent: routed.decision.intent,
+    marketingInvoked: marketingTurn !== null || routed.decision.intent === "delegate_marketing",
+    marketingSucceeded: marketingTurn !== null,
+    locale: session.state.locale,
+    reply: assistantReply,
+    mauticToolUsed: routed.decision.intent === "external_tool_query",
+    connectionBlocked:
+      routed.decision.intent === "external_tool_query" &&
+      (() => {
+        const conn = session.state.connections.get("mautic");
+        if (!conn) return true;
+        const lifecycle =
+          conn.lifecycle ?? (conn.status === "connected" ? "connected" : "needs_connection");
+        return lifecycle !== "connected";
+      })(),
+  });
+
+  const transcriptEvent: CommandCenterEvent = {
+    kind: "transcript",
+    role: "assistant",
+    content: enrichment.normalizedReply,
+    speaker: enrichment.speaker,
+  };
+
+  const workStateEvents = buildWorkStateEvents(
+    enrichment.workStates,
+    session.state.locale,
+  );
+
+  // Front of the events list: the new assistant turn + its work states.
+  // The proactive opening is kept as context after the new turn so the
+  // chat continues to feel alive without overriding the latest reply.
   return {
     organizationId,
-    reply: assistantReply,
-    events,
+    reply: enrichment.normalizedReply,
+    events: [transcriptEvent, ...workStateEvents, ...events],
     routing: routed.decision,
     connectionSuggestion: routed.connectionSuggestion ?? null,
     pendingToolId: routed.pendingToolId ?? null,
@@ -1819,4 +2143,156 @@ function shortId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
+/**
+ * Customer Zero 01 — read all tool states for the session's
+ * organization, defaulting to an empty list when none are stored.
+ */
+async function listToolStatesForSession(
+  session: CustomerZeroSession,
+): Promise<readonly OrganizationToolState[]> {
+  return session.toolState.listForOrg(session.organizationId);
+}
+
+interface MauticTestResolution {
+  readonly success: boolean;
+  readonly available: boolean;
+  readonly code: "auth" | "timeout" | "unavailable" | "rate_limit" | "invalid_response" | "missing";
+  readonly message: string;
+}
+
+/**
+ * Customer Zero 01 — test the live Mautic connection. Returns a
+ * business-language resolution that the portal can render directly.
+ * NEVER throws to the caller; never returns secret values.
+ */
+async function testMauticForOrg(
+  session: CustomerZeroSession,
+): Promise<MauticTestResolution> {
+  const resolution = publicCredentialSource({
+    organizationId: session.organizationId,
+    provider: "mautic",
+  });
+  if (!resolution.available) {
+    return {
+      success: false,
+      available: false,
+      code: "missing",
+      message:
+        "Mautic no está configurado. Pídele a tu equipo de sistemas que añada las credenciales.",
+    };
+  }
+  // Invoke the canonical test-connection tool through the runtime port.
+  try {
+    const outcome = await session.port.executeAction({
+      actionId: `act_test_${shortId()}`,
+      agentId: "agent_marketing_director",
+      organizationId: session.organizationId,
+      toolId: "mautic.test_connection",
+      args: {},
+    });
+    if (outcome.status === "completed") {
+      const output = outcome.output as
+        | { success?: boolean; message?: string }
+        | undefined;
+      if (output?.success) {
+        return {
+          success: true,
+          available: true,
+          code: "invalid_response",
+          message: output.message ?? "Conexión verificada.",
+        };
+      }
+      return {
+        success: false,
+        available: true,
+        code: "auth",
+        message: output?.message ?? "La autenticación con Mautic ha fallado.",
+      };
+    }
+    return {
+      success: false,
+      available: true,
+      code: "unavailable",
+      message: "Mautic no respondió a la prueba.",
+    };
+  } catch {
+    return {
+      success: false,
+      available: true,
+      code: "unavailable",
+      message: "No se pudo conectar con Mautic.",
+    };
+  }
+}
+
 export type { ConnectionState };
+
+/* ----------------------------------------------------------------------------
+ * DepartmentWorkStore + DepartmentWorkExecutor factories.
+ * --------------------------------------------------------------------------*/
+
+let _workStoreSingleton: DepartmentWorkStore | null = null;
+function getWorkStore(): DepartmentWorkStore {
+  if (!_workStoreSingleton) {
+    _workStoreSingleton = new InMemoryDepartmentWorkStore();
+  }
+  return _workStoreSingleton;
+}
+
+function createWorkExecutor(
+  organizationId: string,
+): DepartmentWorkExecutor {
+  const session = getCustomerZeroSession(organizationId);
+  if (!session) {
+    throw new Error(`Session not found for org ${organizationId}`);
+  }
+  // P0 — the work executor only needs a write-capable activity
+  // repository. The session keeps one in memory; we use a typed
+  // cast since the session's activity store is itself a thin facade
+  // over the same in-memory implementation.
+  const activityRepo = (session as unknown as {
+    activity?: {
+      create: (entry: Record<string, unknown>) => Promise<Record<string, unknown>>;
+    };
+  }).activity;
+  const activityRepoFinal: MarketingActivityRepository = activityRepo
+    ? (activityRepo as unknown as MarketingActivityRepository)
+    : {
+        async create(entry) {
+          return {
+            id: `act_${Date.now().toString(36)}`,
+            createdAt: new Date().toISOString(),
+            organizationId: organizationId,
+            departmentId: "marketing",
+            ...(entry.objectiveId ? { objectiveId: entry.objectiveId } : {}),
+            actor: entry.actor,
+            kind: entry.type,
+            message: entry.message,
+          } as unknown as Awaited<ReturnType<MarketingActivityRepository["create"]>>;
+        },
+        async listRecent() {
+          return [];
+        },
+      };
+  return new DepartmentWorkExecutor({
+    workStore: getWorkStore(),
+    activityRepo: activityRepoFinal,
+    onMessageInjected: async (input) => {
+      try {
+        process.stdout.write(
+          JSON.stringify({
+            kind: "department.work.message_injected",
+            ...input,
+          }) + "\n",
+        );
+      } catch {
+        // Observability is best-effort.
+      }
+    },
+  });
+}
+
+/** Exposed for tests. */
+export function __resetWorkStoreForTests(): void {
+  _workStoreSingleton = null;
+}

@@ -14,6 +14,7 @@ import {
   approveMarketingWorkItemForSession,
 } from "../../customer-zero/customer-zero-session.js";
 import { isToolDiscoveryComplete } from "../../customer-zero/progressive-discovery.js";
+import { evaluateReadiness } from "../../customer-zero/context-readiness.js";
 import type { ServerDeps } from "../deps.js";
 import { curateMandatoryQuestions } from "../../customer-zero/questions.js";
 import { buildAnswersRawData } from "../../customer-zero/answers.js";
@@ -745,6 +746,22 @@ export async function registerCustomerZeroRoutes(
       }
 
       const report = mostRecentReport(session);
+      const department = findMarketingDepartment(session);
+      // Customer Zero hotfix — structural backend readiness gate. The
+      // gate is the single source of truth for whether the CEO may
+      // move past onboarding. The portal consults `contextReady` to
+      // route between CustomerZeroRoute and /chat.
+      const contextReady = evaluateReadiness({
+        hasIntake: Boolean(session.state.onboarding?.companyName),
+        hasCompanyDna:
+          Boolean(report) ||
+          Boolean(session.state.understood),
+        ceoConfirmed: isCeoConfirmed(session),
+        blockingDiscoveryComplete: isToolDiscoveryComplete(
+          session.state.discovery,
+        ),
+        departmentProvisioned: department !== null,
+      });
       return reply.code(200).send({
         organizationId,
         ...(session.state.url ? { url: session.state.url } : {}),
@@ -760,13 +777,32 @@ export async function registerCustomerZeroRoutes(
         discoveryTranscript: session.state.discoveryTranscript,
         connections: [...session.state.connections.values()],
         unmappedTools: session.state.unmappedTools,
-        department: findMarketingDepartment(session),
+        department,
+        // Customer Zero readiness — portal uses this to decide whether to
+        // route to CustomerZeroRoute (continue) or /chat (post-handoff).
+        contextReady: contextReady.ready,
+        contextMissing: contextReady.missing,
         ...(session.state.marketingWork
           ? { marketingWork: session.state.marketingWork }
           : {}),
         conversation: session.state.conversation,
       });
     },
+  );
+}
+
+/**
+ * Customer Zero confirmation gate — the CEO has explicitly accepted
+ * the research output. Today we accept any progress that has passed
+ * the "confirmation_complete" milestone (set when the CEO presses
+ * "Confirmar" on the "Esto es lo que hemos entendido" screen).
+ */
+function isCeoConfirmed(session: {
+  state: { progress?: { stages?: readonly { id: string; status: string }[] } };
+}): boolean {
+  const stages = session.state.progress?.stages ?? [];
+  return stages.some(
+    (m) => m.id === "confirmation" && m.status === "done",
   );
 }
 

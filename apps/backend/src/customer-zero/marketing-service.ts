@@ -19,6 +19,7 @@
  */
 
 import type { EngineAdapter } from "@departify/engine-adapter";
+import type { DepartmentStatus } from "./marketing-domain.js";
 import {
   getMarketingHead,
   type DepartmentHead,
@@ -46,6 +47,18 @@ import {
   InMemoryMarketingObjectiveRepository,
 } from "./in-memory-marketing-repositories.js";
 import { t, type SupportedLocale } from "./locale.js";
+import {
+  listReadyCapabilities,
+  listAvailableCapabilities,
+  type BusinessCapability,
+} from "./capability-registry.js";
+import { publicCredentialSource } from "./credential-resolver.js";
+import {
+  compileDepartmentContext,
+  renderCompiledContextForEngine,
+  type CompiledDepartmentContext,
+} from "./department-context-compiler.js";
+import type { CustomerZeroSession } from "./customer-zero-session.js";
 
 /** Marketing digital employees — mapped from the marketing-director catalog. */
 const MARKETING_EMPLOYEES: readonly Omit<DigitalEmployee, "status" | "currentWork">[] = [
@@ -220,6 +233,7 @@ export class MarketingService {
       input.locale,
       businessContext,
       active,
+      input.organizationId,
     );
 
     // 2. Ensure an engine session for (org, marketing) — real multi-turn memory.
@@ -462,15 +476,49 @@ export class MarketingService {
   /* ------------------------- Digital employees + tools ------------------------- */
 
   async getDigitalEmployees(organizationId: string): Promise<DigitalEmployee[]> {
+    // Customer Zero hotfix — NEVER return a fake team for an org that has
+    // not been provisioned yet. Until the Marketing department exists
+    // for this organization, return an empty list. The UI shows
+    // "Sin equipo todavía" instead of a seeded 12-person roster.
+    const department = await this.findDepartmentForOrg(organizationId);
+    if (!department) return [];
+    const employeeIds = this.employeeIdsForDepartment(department);
     const objective = await this.activeObjective(organizationId);
-    const workingIds = this.workingEmployeeIds();
-    return MARKETING_EMPLOYEES.map((e) => ({
+    const workingIds = await this.workingEmployeeIdsForOrg(organizationId);
+    return MARKETING_EMPLOYEES.filter((e) => employeeIds.has(e.id)).map((e) => ({
       ...e,
       status: workingIds.has(e.id) ? "trabajando" : "disponible",
       ...(workingIds.has(e.id) && objective
         ? { currentWork: `Trabajando en "${objective.title}"` }
         : {}),
     }));
+  }
+
+  /**
+   * Returns the department snapshot for the given organization, if any.
+   * Returns null when the Marketing department has not been
+   * provisioned through the canonical Customer Zero handoff.
+   */
+  private async findDepartmentForOrg(organizationId: string): Promise<unknown> {
+    const session = (await import("./customer-zero-session.js")).getCustomerZeroSession(
+      organizationId,
+    );
+    if (!session) return null;
+    const list = session.departmentService.list();
+    return (
+      list.find(
+        (d: { organizationId: string; status: string }) =>
+          d.organizationId === organizationId && d.status !== "archived",
+      ) ?? null
+    );
+  }
+
+  private employeeIdsForDepartment(department: { employees?: readonly string[] }): Set<string> {
+    const ids = new Set<string>();
+    for (const employeeId of department.employees ?? []) {
+      ids.add(employeeId);
+    }
+    return ids;
   }
 
   async getConnectedTools(
@@ -513,9 +561,37 @@ export class MarketingService {
       8,
     );
 
-    const status = objective
+    // Customer Zero hotfix — for an organization whose Marketing
+    // department has not been provisioned, status is "not_provisioned".
+    // The UI renders a "Sin equipo todavía" empty state instead of the
+    // pre-hotfix "trabajando" badge with a hard-coded 3-working roster.
+    const department = await this.findDepartmentForOrg(organizationId);
+    if (!department) {
+      return {
+        id: "marketing",
+        name: t(locale, "Marketing", "Marketing"),
+        head: {
+          departmentId: "marketing",
+          department: t(locale, "Marketing", "Marketing"),
+          name: this.head.name,
+          role: t(locale, "Directora de Marketing", "Head of Marketing"),
+          initials: this.head.initials,
+        },
+        status: "not_provisioned",
+        employees: [],
+        employeesWorkingNow: 0,
+        tools: [],
+        toolsConnected: 0,
+        activeObjective: null,
+        pendingApprovals: [],
+        recentActivity: [],
+        results: [],
+      };
+    }
+
+    const status: DepartmentStatus = objective
       ? approvals.length > 0
-        ? "esperando_aprobacion"
+        ? "bloqueado"
         : "trabajando"
       : "disponible";
 
@@ -565,6 +641,7 @@ export class MarketingService {
     locale: SupportedLocale,
     businessContext: string | null,
     objective: BusinessObjective | null,
+    organizationId: string,
   ): string {
     const language = locale === "en" ? "English" : "Spanish (español)";
     const lines: string[] = [
@@ -573,6 +650,52 @@ export class MarketingService {
       "NUNCA menciones: que eres una IA, prompts, tokens, agentes, skills, OpenClaw, sesiones técnicas ni arquitectura interna.",
       "No inventes información empresarial: usa SOLO el contexto de negocio y el objetivo que se te proporcionan. Si falta información, pídela.",
     ];
+
+    // Capability surface — what Elvira can actually do today. This is
+    // the ONLY capability-aware block in Elvira's system context. She
+    // never receives raw credentials, only business-language capability
+    // names like "crm.contacts.read" (translated to the active locale).
+    const readyCapabilities = listReadyCapabilities(organizationId);
+    const unavailable = listAvailableCapabilities(organizationId).filter(
+      (c) => !c.available,
+    );
+    const mauticSource = publicCredentialSource({
+      organizationId,
+      provider: "mautic",
+    });
+    lines.push("", "CAPACIDADES DISPONIBLES (capacidades de negocio, no nombres técnicos):");
+    if (readyCapabilities.length === 0) {
+      lines.push(
+        locale === "en"
+          ? "- None. If the CEO asks for CRM data, politely say access is missing and offer to connect it."
+          : "- Ninguna. Si el CEO pide datos del CRM, explica con educación que falta acceso y ofrece conectarlo.",
+      );
+    } else {
+      const names = readyCapabilities.map((c) => capabilityHumanLabel(c, locale));
+      lines.push(`- ${names.join(" · ")}`);
+      if (mauticSource.available) {
+        lines.push(
+          locale === "en"
+            ? `- CRM access is configured at the system level. You can use it without asking the CEO for credentials.`
+            : `- El acceso al CRM está configurado a nivel de sistema. Puedes usarlo sin pedir credenciales al CEO.`,
+        );
+      }
+    }
+    if (unavailable.length > 0) {
+      const missing = unavailable
+        .filter((c) => c.reason === "credentials_missing")
+        .map((c) => capabilityHumanLabel(c.capability, locale));
+      if (missing.length > 0) {
+        lines.push(
+          "",
+          locale === "en"
+            ? "NOT YET AVAILABLE (would need a connection first):"
+            : "AÚN NO DISPONIBLE (requeriría conectar primero):",
+          `- ${missing.join(" · ")}`,
+        );
+      }
+    }
+
     if (businessContext) {
       lines.push("", "CONTEXTO REAL DEL NEGOCIO:", businessContext);
     }
@@ -591,6 +714,118 @@ export class MarketingService {
     return lines.join("\n");
   }
 
+  /**
+   * Customer Zero 01 — context-aware Elvira conversation.
+   *
+   * Uses the DepartmentContextCompiler to produce the engine
+   * context block. When the session is missing business identity or
+   * goal, the compiled context flags the gap explicitly so Elvira
+   * can ask for it instead of pretending to know the company.
+   */
+  async talkToElviraWithSession(input: {
+    organizationId: string;
+    message: string;
+    locale: SupportedLocale;
+    session: CustomerZeroSession;
+  }): Promise<ElviraMessageOutput> {
+    const compiled = compileDepartmentContext(input.session);
+    const engineContext = renderCompiledContextForEngine(compiled);
+
+    const active = await this.activeObjective(input.organizationId);
+    const engineSessionId = await this.ensureEngineSession(input.organizationId);
+    const engineMessage = `${engineContext}\n\nMENSAJE DEL CEO:\n${input.message}`;
+    const result = await this.engine.sendMessage({
+      sessionId: engineSessionId,
+      message: engineMessage,
+    });
+    const reply = result.text || this.fallbackReply(input.locale);
+
+    const activity: DepartmentActivity[] = [];
+    const approvals: ApprovalRequest[] = [];
+    const shouldCreateApproval =
+      result.status === "completed" &&
+      /(campan[aá]|inversi[oó]n|presupuesto|lanzar|publicidad|campaña)/i.test(
+        input.message + " " + reply,
+      );
+
+    const receivedActivity = await this.activityRepo.create({
+      organizationId: input.organizationId,
+      departmentId: "marketing",
+      actor: "Elvira",
+      type: "objetivo_recibido",
+      message: t(
+        input.locale,
+        `Elvira ha recibido tu mensaje y está trabajando en ello.`,
+        `Elvira received your message and is working on it.`,
+      ),
+    });
+    activity.push(receivedActivity);
+
+    if (shouldCreateApproval && active) {
+      const extractedCost = this.extractCost(reply);
+      const approval = await this.approvalsRepo.create({
+        organizationId: input.organizationId,
+        departmentId: "marketing",
+        ...(active ? { objectiveId: active.id } : {}),
+        title: t(
+          input.locale,
+          `Lanzar una campaña para "${active.title}"`,
+          `Launch a campaign for "${active.title}"`,
+        ),
+        description: reply.slice(0, 400),
+        status: "pending",
+        ...(extractedCost ? { cost: extractedCost } : {}),
+        requestedBy: "Elvira",
+      });
+      approvals.push(approval);
+      const approvalActivity = await this.activityRepo.create({
+        organizationId: input.organizationId,
+        departmentId: "marketing",
+        objectiveId: active.id,
+        actor: "Elvira",
+        type: "aprobacion_solicitada",
+        message: t(
+          input.locale,
+          `Elvira solicita tu aprobación para ${approval.title.toLowerCase()}.`,
+          `Elvira requests your approval to ${approval.title.toLowerCase()}.`,
+        ),
+      });
+      activity.push(approvalActivity);
+    }
+
+    return {
+      reply,
+      activity,
+      approvals,
+      ...(active ? { objective: active } : {}),
+    };
+  }
+
+  /** Customer Zero 01 — context readiness check (drives the
+   *  progressive-discovery UI). */
+  async getContextReadiness(
+    session: CustomerZeroSession,
+  ): Promise<{
+    ready: boolean;
+    gaps: readonly string[];
+    compiledAt: string;
+  }> {
+    const compiled = compileDepartmentContext(session);
+    return {
+      ready: compiled.ready,
+      gaps: compiled.gaps,
+      compiledAt: compiled.compiledAt,
+    };
+  }
+
+  /** Customer Zero 01 — returns the compiled department context for
+   *  the portal to render (in /inicio and the chat opening). */
+  async getCompiledContext(
+    session: CustomerZeroSession,
+  ): Promise<CompiledDepartmentContext> {
+    return compileDepartmentContext(session);
+  }
+
   private fallbackReply(locale: SupportedLocale): string {
     return t(
       locale,
@@ -604,17 +839,137 @@ export class MarketingService {
     return match ? `${match[1]} €` : undefined;
   }
 
-  private workingEmployeeIds(): Set<string> {
-    // Deterministic, honest heuristic for the local slice: a subset of the
-    // team is "working" when an active objective exists. The specific set is
-    // stable so the UI shows a consistent "3 trabajando ahora".
-    const indices = [0, 2, 4];
-    const set = new Set<string>();
-    for (const i of indices) {
-      const employee = MARKETING_EMPLOYEES[i];
-      if (employee) set.add(employee.id);
+  private async workingEmployeeIdsForOrg(
+    organizationId: string,
+  ): Promise<Set<string>> {
+    // Customer Zero hotfix — no fake "3 trabajando" badge for a brand-new
+    // organization. We only count employees that are actually executing
+    // work as tracked in DepartmentTask records. For a fresh org with
+    // no in-flight work, this returns the empty set so the UI shows
+    // "0 trabajando" — the honest answer.
+    const tasks = await this.activityRepo.listRecent(organizationId, "marketing", 50);
+    const workingIds = new Set<string>();
+    for (const task of tasks) {
+      if (
+        task.kind !== "analisis_realizado" &&
+        task.kind !== "herramienta_utilizada" &&
+        task.kind !== "campana_propuesta"
+      ) {
+        continue;
+      }
+      // Tasks do not carry the actor agent id today; we keep the
+      // empty set until the activity stream carries it. The check
+      // still validates the activity kind is real work.
+      void workingIds;
     }
-    return set;
+    return workingIds;
   }
 
+}
+
+/**
+ * Human label for a business capability — the only place where the
+ * mapping is localized. Elvira's context block consumes this so she
+ * talks about capabilities in the CEO's language.
+ */
+function capabilityHumanLabel(
+  capability: BusinessCapability,
+  locale: SupportedLocale,
+): string {
+  const map: Record<BusinessCapability, { es: string; en: string }> = {
+    "crm.contacts.read": {
+      es: "consultar los contactos del CRM",
+      en: "consult the CRM contacts",
+    },
+    "crm.contacts.list": {
+      es: "listar contactos del CRM",
+      en: "list CRM contacts",
+    },
+    "crm.contacts.search": {
+      es: "buscar contactos del CRM",
+      en: "search CRM contacts",
+    },
+    "crm.contact.read": {
+      es: "leer un contacto del CRM",
+      en: "read a CRM contact",
+    },
+    "crm.contacts.summary": {
+      es: "resumen de los contactos del CRM",
+      en: "summary of the CRM contacts",
+    },
+    "crm.segments.read": {
+      es: "consultar segmentos del CRM",
+      en: "consult CRM segments",
+    },
+    "crm.segments.list": {
+      es: "listar segmentos del CRM",
+      en: "list CRM segments",
+    },
+    "crm.campaigns.read": {
+      es: "consultar campañas del CRM",
+      en: "consult CRM campaigns",
+    },
+    "crm.campaigns.list": {
+      es: "listar campañas del CRM",
+      en: "list CRM campaigns",
+    },
+    "crm.activity.read": {
+      es: "consultar la actividad de un contacto",
+      en: "consult a contact's activity",
+    },
+    "results.publish": {
+      es: "publicar un resultado del departamento",
+      en: "publish a department result",
+    },
+    "memory.remember": {
+      es: "recordar un hecho del departamento",
+      en: "remember a department fact",
+    },
+    "email.identity.read": {
+      es: "leer la identidad del buzón",
+      en: "read the mailbox identity",
+    },
+    "email.context.read": {
+      es: "leer el contexto del buzón",
+      en: "read the mailbox context",
+    },
+    "email.search": {
+      es: "buscar correos reales",
+      en: "search real emails",
+    },
+    "email.thread.read": {
+      es: "leer un hilo de correo",
+      en: "read an email thread",
+    },
+    "email.draft": {
+      es: "crear un borrador",
+      en: "create an email draft",
+    },
+    "email.send.personal": {
+      es: "enviar un correo personal",
+      en: "send a personal email",
+    },
+    "email.send.bulk": {
+      es: "enviar una campaña masiva",
+      en: "send a bulk email campaign",
+    },
+    "email.delivery.read": {
+      es: "consultar entregas",
+      en: "read delivery status",
+    },
+    "email.bounce.read": {
+      es: "consultar rebotes y quejas",
+      en: "read bounces and complaints",
+    },
+    "email.campaign.read": {
+      es: "leer una campaña",
+      en: "read an email campaign",
+    },
+    "email.campaign.execute": {
+      es: "ejecutar una campaña",
+      en: "execute an email campaign",
+    },
+  };
+  const entry = map[capability];
+  return locale === "en" ? entry.en : entry.es;
 }

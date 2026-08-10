@@ -9,6 +9,7 @@ import {
 } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import { readable } from "@/app/readable";
+import { renderMarkdown } from "@/app/markdown";
 import {
   CheckIcon,
   CompanyIcon,
@@ -100,6 +101,54 @@ export function ChatRoute() {
     node.scrollTop = node.scrollHeight;
   }, [transcript, events]);
 
+  // Customer Zero 01 P0 — poll the work feed so a final ELVIRA
+  // message appears automatically when a long analysis finishes.
+  // The CEO does NOT need to send another message to recover the
+  // result.
+  useEffect(() => {
+    if (!organizationId) return;
+    let cancelled = false;
+    let lastSeen = new Date().toISOString();
+    async function pollOnce() {
+      if (cancelled) return;
+      try {
+        const feed = organizationId ? await api.workFeed(organizationId, lastSeen) : null;
+        if (!feed || cancelled) return;
+        if (feed.newResults.length > 0) {
+          // Inject each new result as an ELVIRA turn in the transcript.
+          for (const result of feed.newResults) {
+            const html = renderMarkdown(result.summary + "\n\n" + result.content);
+            setTranscript((prev) => {
+              const exists = prev.some(
+                (turn) =>
+                  turn.role === "assistant" &&
+                  turn.content.includes(result.title),
+              );
+              if (exists) return prev;
+              return [
+                ...prev,
+                {
+                  role: "assistant",
+                  speaker: "elvira",
+                  content: result.summary + "\n\n" + result.content,
+                },
+              ];
+            });
+            void html; // renderMarkdown is intentionally applied via the renderer below
+          }
+        }
+        lastSeen = feed.serverTime;
+      } catch {
+        // polling errors are best-effort
+      }
+    }
+    const handle = window.setInterval(pollOnce, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [organizationId]);
+
   async function newConversation() {
     if (!organizationId) return;
     const created = await api.createConversation(organizationId);
@@ -141,9 +190,14 @@ export function ChatRoute() {
       return;
     }
     if (result.conversationId) setCurrentConversationId(result.conversationId);
+    // The assistant reply already arrives with speaker + work-state
+    // metadata in `result.events`; we surface those directly. We also
+    // append the assistant message to the transcript so users see a
+    // continuous conversation history.
+    const speaker = inferSpeaker(result.events);
     setTranscript((prev) => [
       ...prev,
-      { role: "assistant", content: result.reply },
+      { role: "assistant", content: result.reply, speaker },
     ]);
     setEvents(result.events);
     await refreshConversations();
@@ -235,7 +289,11 @@ export function ChatRoute() {
 }
 
 function ConversationList(props: {
-  transcript: { role: "user" | "assistant"; content: string }[];
+  transcript: {
+    role: "user" | "assistant";
+    content: string;
+    speaker?: "departify" | "elvira";
+  }[];
   events: readonly CommandCenterEvent[];
   onNavigate: (path: string) => void;
 }) {
@@ -249,30 +307,52 @@ function ConversationList(props: {
     );
   }
 
-  // Interleave proactive events at the top (before the first user turn),
-  // then continue with the transcript.
   return (
     <div className="dfy-thread">
+      {transcript.map((turn, index) => {
+        const speakerLabel = turn.role === "user"
+          ? "Tú"
+          : turn.speaker === "elvira"
+            ? "ELVIRA · Directora de Marketing"
+            : "DEPARTIFY";
+        const html = renderMarkdown(turn.content);
+        return (
+          <div
+            key={`turn_${index}`}
+            className={`dfy-bubble${turn.role === "user" ? " dfy-bubble--user" : " dfy-bubble--assistant"}`}
+            data-speaker={turn.speaker ?? "departify"}
+          >
+            <span className="dfy-bubble__who">{speakerLabel}</span>
+            <div
+              className="dfy-bubble__body"
+              // The Markdown renderer escapes all input and only emits
+              // a fixed tag whitelist (p, ul, ol, li, strong, em, code, a).
+              // See apps/portal/src/app/markdown.ts.
+              dangerouslySetInnerHTML={{ __html: html }}
+            />
+          </div>
+        );
+      })}
       {events.length > 0 && (
         <div className="dfy-thread__opening">
           {events.map((event, index) => (
-            <EventCard key={`op_${index}_${event.kind}`} event={event} onNavigate={props.onNavigate} />
+            <EventCard
+              key={`op_${index}_${event.kind}_${String((event as { state?: string }).state ?? index)}`}
+              event={event}
+              onNavigate={props.onNavigate}
+            />
           ))}
         </div>
       )}
-      {transcript.map((turn, index) => (
-        <div
-          key={`turn_${index}`}
-          className={`dfy-bubble${turn.role === "user" ? " dfy-bubble--user" : " dfy-bubble--assistant"}`}
-        >
-          <span className="dfy-bubble__who">
-            {turn.role === "user" ? "Tú" : "Departify"}
-          </span>
-          <p>{turn.content}</p>
-        </div>
-      ))}
     </div>
   );
+}
+
+function inferSpeaker(events: readonly CommandCenterEvent[]): "departify" | "elvira" {
+  for (const event of events) {
+    if (event.kind === "transcript" && event.speaker) return event.speaker;
+  }
+  return "departify";
 }
 
 function EventCard(props: {
@@ -464,6 +544,19 @@ function EventCard(props: {
             una propuesta: tu DNA compartido no se modifica sin tu
             aprobación.
           </p>
+        </article>
+      );
+    case "work_state":
+      return (
+        <article
+          className="dfy-event dfy-event--work-state"
+          data-state={event.state}
+          aria-live="polite"
+        >
+          <span className="dfy-event__pill" aria-hidden="true">
+            <SparkIcon size={14} />
+          </span>
+          <span>{event.message}</span>
         </article>
       );
     case "transcript":

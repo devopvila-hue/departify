@@ -1,0 +1,345 @@
+/**
+ * Connections Domain — Customer Zero 01.
+ *
+ * Departify-owned connection model. Five business-language states,
+ * capability-first discovery, official provider logos. No secrets in
+ * this module — only safe metadata and configuration references.
+ *
+ * The legacy module `connections.ts` keeps the OAuth handshake + the
+ * legacy status enum for backward compatibility; this new module
+ * exposes the authoritative Customer Zero 01 connection surface that
+ * the portal and the API render.
+ */
+
+import { t, type SupportedLocale } from "./locale.js";
+import {
+  type OrganizationToolState,
+  type ToolLifecycleStatus,
+} from "./tool-state.js";
+
+/**
+ * The five business-language states surfaced to the CEO.
+ *
+ *   not_connected     — nothing configured.
+ *   connecting        — handshake in flight.
+ *   connected         — verified; connector is operational.
+ *   needs_attention   — credentials present but not valid; or degraded.
+ *   error             — connector cannot be used right now.
+ */
+export type ConnectionState =
+  | "not_connected"
+  | "connecting"
+  | "connected"
+  | "needs_attention"
+  | "error";
+
+export interface CapabilityDefinition {
+  /** Stable business capability id (e.g. "crm.contacts.read"). */
+  readonly id: string;
+  /** Human label (es + en). */
+  readonly nameEs: string;
+  readonly nameEn: string;
+}
+
+export interface ConnectionDefinition {
+  readonly id: string;
+  readonly name: string;
+  readonly category: "crm" | "email" | "calendar" | "documents" | "marketing" | "team";
+  readonly categoryEs: string;
+  readonly categoryEn: string;
+  /** SVG inline mark or initials used for the brand logo. */
+  readonly logoMark: string;
+  /** Optional brand color (hex) for accents on the card. */
+  readonly brandColor: string;
+  /** Capabilities this connection provides to the CEO's company. */
+  readonly capabilities: readonly CapabilityDefinition[];
+  /** Where configuration originates when present (e.g. "env:mautic"). */
+  readonly configSourceLabel?: string;
+}
+
+export interface ConnectionInstance {
+  readonly organizationId: string;
+  readonly provider: string;
+  readonly state: ConnectionState;
+  /** When state is `connected` / `needs_attention` / `error`. */
+  readonly lastCheckedAt?: string;
+  readonly verifiedAt?: string;
+  readonly detail?: string;
+  readonly configSource?: string;
+  readonly capabilities: readonly string[];
+}
+
+export interface CapabilityAvailability {
+  readonly capability: string;
+  readonly available: boolean;
+  readonly providers: readonly string[];
+}
+
+/**
+ * The canonical catalog of supported connections. Logos are simple
+ * inline SVG marks — no remote URLs, no fake brand assets. Each
+ * mark uses the brand's recognizable accent color.
+ */
+export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
+  {
+    id: "mautic",
+    name: "Mautic",
+    category: "crm",
+    categoryEs: "CRM y automatización",
+    categoryEn: "CRM and automation",
+    logoMark: "M",
+    brandColor: "#f36f21",
+    capabilities: [
+      { id: "crm.contacts.read", nameEs: "Consultar contactos", nameEn: "Read contacts" },
+      { id: "crm.contacts.list", nameEs: "Listar contactos", nameEn: "List contacts" },
+      { id: "crm.contacts.search", nameEs: "Buscar contactos", nameEn: "Search contacts" },
+      { id: "crm.contact.read", nameEs: "Leer un contacto", nameEn: "Read one contact" },
+      { id: "crm.contacts.summary", nameEs: "Resumen de contactos", nameEn: "Contacts summary" },
+      { id: "crm.segments.read", nameEs: "Consultar segmentos", nameEn: "Read segments" },
+      { id: "crm.campaigns.read", nameEs: "Consultar campañas", nameEn: "Read campaigns" },
+      { id: "crm.activity.read", nameEs: "Actividad de un contacto", nameEn: "Contact activity" },
+    ],
+    configSourceLabel: "env:mautic",
+  },
+  {
+    id: "gmail",
+    name: "Gmail",
+    category: "email",
+    categoryEs: "Correo",
+    categoryEn: "Email",
+    logoMark: "G",
+    brandColor: "#ea4335",
+    capabilities: [
+      { id: "email.identity.read", nameEs: "Identidad del buzón", nameEn: "Mailbox identity" },
+      { id: "email.context.read", nameEs: "Contexto del buzón", nameEn: "Mailbox context" },
+      { id: "email.search", nameEs: "Buscar correos", nameEn: "Search emails" },
+      { id: "email.thread.read", nameEs: "Leer hilos", nameEn: "Read threads" },
+      { id: "email.draft", nameEs: "Crear borradores", nameEn: "Create drafts" },
+      { id: "email.send.personal", nameEs: "Enviar correo personal", nameEn: "Send personal email" },
+    ],
+  },
+  {
+    id: "resend",
+    name: "Email Delivery",
+    category: "email",
+    categoryEs: "Entrega de email",
+    categoryEn: "Email Delivery",
+    logoMark: "Re",
+    brandColor: "#000000",
+    capabilities: [
+      { id: "email.send.bulk", nameEs: "Enviar campañas masivas", nameEn: "Send bulk campaigns" },
+      { id: "email.delivery.read", nameEs: "Consultar entregas", nameEn: "Read deliveries" },
+      { id: "email.bounce.read", nameEs: "Consultar rebotes y quejas", nameEn: "Read bounces and complaints" },
+      { id: "email.campaign.read", nameEs: "Consultar campañas", nameEn: "Read campaigns" },
+      { id: "email.campaign.execute", nameEs: "Ejecutar campañas", nameEn: "Execute campaigns" },
+    ],
+    configSourceLabel: "env:resend",
+  },
+  {
+    id: "google_analytics",
+    name: "Google Analytics",
+    category: "marketing",
+    categoryEs: "Analítica",
+    categoryEn: "Analytics",
+    logoMark: "GA",
+    brandColor: "#f9ab00",
+    capabilities: [
+      { id: "analytics.web", nameEs: "Analítica web", nameEn: "Web analytics" },
+    ],
+  },
+  {
+    id: "google_ads",
+    name: "Google Ads",
+    category: "marketing",
+    categoryEs: "Publicidad",
+    categoryEn: "Advertising",
+    logoMark: "Ads",
+    brandColor: "#4285f4",
+    capabilities: [
+      { id: "ads.manage", nameEs: "Gestionar campañas de pago", nameEn: "Manage paid campaigns" },
+    ],
+  },
+  {
+    id: "meta_ads",
+    name: "Meta Ads",
+    category: "marketing",
+    categoryEs: "Publicidad",
+    categoryEn: "Advertising",
+    logoMark: "M",
+    brandColor: "#1877f2",
+    capabilities: [
+      { id: "ads.manage", nameEs: "Gestionar campañas de pago", nameEn: "Manage paid campaigns" },
+    ],
+  },
+  {
+    id: "linkedin_ads",
+    name: "LinkedIn Ads",
+    category: "marketing",
+    categoryEs: "Publicidad",
+    categoryEn: "Advertising",
+    logoMark: "in",
+    brandColor: "#0a66c2",
+    capabilities: [
+      { id: "ads.manage", nameEs: "Gestionar campañas B2B", nameEn: "Manage B2B campaigns" },
+    ],
+  },
+  {
+    id: "hubspot",
+    name: "HubSpot",
+    category: "crm",
+    categoryEs: "CRM",
+    categoryEn: "CRM",
+    logoMark: "H",
+    brandColor: "#ff7a59",
+    capabilities: [
+      { id: "crm.contacts.read", nameEs: "Consultar contactos", nameEn: "Read contacts" },
+      { id: "marketing.campaigns.read", nameEs: "Leer campañas", nameEn: "Read campaigns" },
+    ],
+  },
+  {
+    id: "notion",
+    name: "Notion",
+    category: "documents",
+    categoryEs: "Documentos",
+    categoryEn: "Documents",
+    logoMark: "N",
+    brandColor: "#000000",
+    capabilities: [
+      { id: "workspace.documents", nameEs: "Leer y editar documentos", nameEn: "Read & edit documents" },
+    ],
+  },
+];
+
+const DEFINITIONS_BY_ID: Readonly<Record<string, ConnectionDefinition>> = (() => {
+  const map: Record<string, ConnectionDefinition> = {};
+  for (const def of CONNECTION_DEFINITIONS) {
+    map[def.id] = def;
+  }
+  return map;
+})();
+
+export function getConnectionDefinition(id: string): ConnectionDefinition | null {
+  return DEFINITIONS_BY_ID[id] ?? null;
+}
+
+/** Maps the lifecycle state from `tool-state.ts` to the five business states. */
+export function lifecycleToFiveState(lifecycle: ToolLifecycleStatus): ConnectionState {
+  switch (lifecycle) {
+    case "connected":
+      return "connected";
+    case "degraded":
+    case "unavailable":
+      return lifecycle === "unavailable" ? "error" : "needs_attention";
+    case "needs_connection":
+    case "configured":
+    case "selected":
+    default:
+      return "not_connected";
+  }
+}
+
+export interface ConnectionCardView {
+  readonly id: string;
+  readonly name: string;
+  readonly category: string;
+  readonly logoMark: string;
+  readonly brandColor: string;
+  readonly state: ConnectionState;
+  readonly stateLabel: string;
+  readonly configSource: string | null;
+  readonly verifiedAt: string | null;
+  readonly capabilities: readonly CapabilityDefinition[];
+  readonly actionLabel: string | null;
+}
+
+/** Human label for a state in the CEO's locale. */
+export function connectionStateLabel(state: ConnectionState, locale: SupportedLocale): string {
+  switch (state) {
+    case "not_connected":
+      return t(locale, "No conectado", "Not connected");
+    case "connecting":
+      return t(locale, "Conectando", "Connecting");
+    case "connected":
+      return t(locale, "Conectado", "Connected");
+    case "needs_attention":
+      return t(locale, "Necesita atención", "Needs attention");
+    case "error":
+      return t(locale, "Error de conexión", "Connection error");
+  }
+}
+
+/**
+ * Render a single connection card view from the durable organization
+ * tool state. Falls back to a "not_connected" view when there is no
+ * stored state for this organization+tool.
+ */
+export function renderConnectionCard(
+  state: OrganizationToolState | null,
+  locale: SupportedLocale,
+): ConnectionCardView {
+  const def = getConnectionDefinition(state?.toolId ?? "");
+  if (!def) {
+    return {
+      id: state?.toolId ?? "unknown",
+      name: state?.label ?? state?.toolId ?? "—",
+      category: "",
+      logoMark: "?",
+      brandColor: "#666",
+      state: "not_connected",
+      stateLabel: connectionStateLabel("not_connected", locale),
+      configSource: null,
+      verifiedAt: null,
+      capabilities: [],
+      actionLabel: null,
+    };
+  }
+  const lifecycle: ToolLifecycleStatus = state?.status ?? "needs_connection";
+  const cs: ConnectionState = lifecycleToFiveState(lifecycle);
+  const actionLabel =
+    cs === "connected"
+      ? t(locale, "Comprobar conexión", "Check connection")
+      : cs === "needs_attention" || cs === "error"
+        ? t(locale, "Revisar conexión", "Review connection")
+        : def.configSourceLabel
+          ? t(locale, "Activar", "Activate")
+          : t(locale, "Configurar", "Set up");
+  return {
+    id: def.id,
+    name: def.name,
+    category: locale === "en" ? def.categoryEn : def.categoryEs,
+    logoMark: def.logoMark,
+    brandColor: def.brandColor,
+    state: cs,
+    stateLabel: connectionStateLabel(cs, locale),
+    configSource: state?.configSource ?? null,
+    verifiedAt: state?.verifiedAt ?? null,
+    capabilities: def.capabilities,
+    actionLabel,
+  };
+}
+
+/**
+ * Resolve the capabilities currently available to an organization,
+ * aggregated across all configured connections.
+ */
+export function listAvailableCapabilitiesForOrg(
+  states: readonly OrganizationToolState[],
+): readonly CapabilityAvailability[] {
+  const map = new Map<string, { available: boolean; providers: Set<string> }>();
+  for (const def of CONNECTION_DEFINITIONS) {
+    for (const cap of def.capabilities) {
+      const slot = map.get(cap.id) ?? { available: false, providers: new Set<string>() };
+      const orgState = states.find((s) => s.toolId === def.id);
+      if (orgState && lifecycleToFiveState(orgState.status) === "connected") {
+        slot.available = true;
+        slot.providers.add(def.name);
+      }
+      map.set(cap.id, slot);
+    }
+  }
+  return Array.from(map.entries()).map(([capability, slot]) => ({
+    capability,
+    available: slot.available,
+    providers: Array.from(slot.providers),
+  }));
+}

@@ -280,6 +280,373 @@ export async function searchMauticContacts(
   }
 }
 
+/**
+ * Customer Zero 01 — read-only adapter extensions.
+ *
+ * The Customer Zero 01 brief calls for richer Mautic reads with
+ * normalized Departify-owned types (`CRMContact`, `CRMSegment`, …).
+ * These functions wrap Mautic's REST API, never scrape, and never
+ * invent fields. When Mautic returns an unexpected shape the result
+ * is the safe empty value.
+ */
+import type {
+  CRMActivity,
+  CRMCampaign,
+  CRMContact,
+  CRMContactPage,
+  CRMSegment,
+  CRMSummary,
+} from "./mautic-types.js";
+
+export type {
+  CRMActivity,
+  CRMCampaign,
+  CRMContact,
+  CRMContactPage,
+  CRMSegment,
+  CRMSummary,
+} from "./mautic-types.js";
+
+/** Adapter result envelope — never throws to the caller. */
+export interface MauticResult<T> {
+  readonly success: boolean;
+  readonly value?: T;
+  readonly errorCode?:
+    | "auth"
+    | "timeout"
+    | "unavailable"
+    | "rate_limit"
+    | "invalid_response";
+  readonly message?: string;
+}
+
+export interface MauticListContactsInput {
+  readonly limit?: number;
+  readonly offset?: number;
+  readonly orderBy?: string;
+}
+
+function ok<T>(value: T): MauticResult<T> {
+  return { success: true, value };
+}
+
+function fail<T>(
+  message: string,
+  code: MauticResult<T>["errorCode"] = "invalid_response",
+): MauticResult<T> {
+  return { success: false, errorCode: code, message };
+}
+
+function classifyError(cause: unknown): {
+  message: string;
+  code: MauticResult<unknown>["errorCode"];
+} {
+  if (cause instanceof MauticAuthError) {
+    return {
+      message: "Mautic rejected the credentials.",
+      code: "auth",
+    };
+  }
+  if (cause instanceof MauticApiError) {
+    if (cause.status === 429) {
+      return { message: "Mautic rate-limited the request.", code: "rate_limit" };
+    }
+    if (cause.status >= 500) {
+      return { message: "Mautic is unavailable.", code: "unavailable" };
+    }
+    return {
+      message: `Mautic returned ${cause.status}.`,
+      code: "invalid_response",
+    };
+  }
+  if (cause instanceof Error && cause.name === "AbortError") {
+    return { message: "Mautic request timed out.", code: "timeout" };
+  }
+  return {
+    message: cause instanceof Error ? cause.message : "Unknown Mautic error.",
+    code: "unavailable",
+  };
+}
+
+interface MauticRawContact {
+  readonly id: number;
+  readonly fields?: {
+    readonly all?: Record<string, unknown>;
+    readonly core?: Record<string, unknown>;
+  };
+  readonly dateAdded?: string;
+  readonly lastActive?: string;
+  readonly points?: number;
+  readonly tags?: readonly { tag?: string }[] | readonly string[];
+}
+
+function normalizeContact(raw: MauticRawContact): CRMContact {
+  const all = raw.fields?.all ?? {};
+  const firstname = typeof all["firstname"] === "string" ? (all["firstname"] as string) : "";
+  const lastname = typeof all["lastname"] === "string" ? (all["lastname"] as string) : "";
+  const displayName = [firstname, lastname].filter((p) => p.length > 0).join(" ").trim() ||
+    `Contacto #${raw.id}`;
+  const email = typeof all["email"] === "string" ? (all["email"] as string).toLowerCase() : undefined;
+  const company = typeof all["company"] === "string" ? (all["company"] as string) : undefined;
+  const tags = Array.isArray(raw.tags)
+    ? raw.tags
+        .map((t) => (typeof t === "string" ? t : t?.tag))
+        .filter((t): t is string => typeof t === "string")
+    : undefined;
+  return {
+    id: raw.id,
+    displayName,
+    ...(email ? { email } : {}),
+    ...(company ? { company } : {}),
+    ...(tags && tags.length > 0 ? { tags } : {}),
+    ...(typeof raw.dateAdded === "string" ? { createdAt: raw.dateAdded } : {}),
+    ...(typeof raw.lastActive === "string" ? { lastActivityAt: raw.lastActive } : {}),
+    ...(typeof raw.points === "number" ? { score: raw.points } : {}),
+  };
+}
+
+interface MauticRawSegment {
+  readonly id: number;
+  readonly name?: string;
+  readonly description?: string;
+  readonly leadCount?: number;
+}
+
+function normalizeSegment(raw: MauticRawSegment): CRMSegment {
+  return {
+    id: raw.id,
+    name: typeof raw.name === "string" ? raw.name : `Segmento #${raw.id}`,
+    ...(typeof raw.description === "string" && raw.description.length > 0
+      ? { description: raw.description }
+      : {}),
+    ...(typeof raw.leadCount === "number" ? { contactCount: raw.leadCount } : {}),
+  };
+}
+
+interface MauticRawCampaign {
+  readonly id: number;
+  readonly name?: string;
+  readonly description?: string;
+  readonly isPublished?: boolean;
+  readonly publishStatus?: number;
+}
+
+function normalizeCampaign(raw: MauticRawCampaign): CRMCampaign {
+  const status =
+    raw.publishStatus === 1 || raw.isPublished === true
+      ? "published"
+      : raw.publishStatus === 0
+        ? "unpublished"
+        : undefined;
+  return {
+    id: raw.id,
+    name: typeof raw.name === "string" ? raw.name : `Campaña #${raw.id}`,
+    ...(typeof raw.description === "string" && raw.description.length > 0
+      ? { description: raw.description }
+      : {}),
+    ...(typeof raw.isPublished === "boolean" ? { isPublished: raw.isPublished } : {}),
+    ...(status ? { status } : {}),
+  };
+}
+
+/** Paginated read of contacts. */
+export async function listMauticContacts(
+  creds: MauticCredentials,
+  input: MauticListContactsInput = {},
+  signal: AbortSignal,
+): Promise<MauticResult<CRMContactPage>> {
+  try {
+    const limit = Math.min(Math.max(input.limit ?? 30, 1), 200);
+    const offset = Math.max(input.offset ?? 0, 0);
+    const params = new URLSearchParams({
+      limit: String(limit),
+      start: String(offset),
+      ...(input.orderBy ? { orderBy: input.orderBy } : {}),
+    });
+    const data = await mauticGet<{
+      total?: number;
+      contacts?: Record<string, MauticRawContact>;
+    }>(creds, `/api/contacts?${params.toString()}`, signal);
+    const raw = Object.values(data.contacts ?? {});
+    const contacts = raw.map(normalizeContact);
+    const nextOffset =
+      typeof data.total === "number" && offset + contacts.length < data.total
+        ? offset + contacts.length
+        : undefined;
+    return ok({
+      total: data.total ?? contacts.length,
+      contacts,
+      ...(nextOffset !== undefined ? { nextOffset } : {}),
+    });
+  } catch (cause) {
+    const { message, code } = classifyError(cause);
+    if (signal.aborted) return fail("Mautic request timed out.", "timeout");
+    return fail(message, code);
+  }
+}
+
+/** Fetch a single contact by id. */
+export async function getMauticContact(
+  creds: MauticCredentials,
+  contactId: number,
+  signal: AbortSignal,
+): Promise<MauticResult<CRMContact>> {
+  try {
+    const data = await mauticGet<{ contact?: MauticRawContact }>(
+      creds,
+      `/api/contacts/${encodeURIComponent(String(contactId))}`,
+      signal,
+    );
+    const raw = data.contact;
+    if (!raw) return fail(`Mautic contact ${contactId} not found.`, "invalid_response");
+    return ok(normalizeContact(raw));
+  } catch (cause) {
+    const { message, code } = classifyError(cause);
+    return fail(message, code);
+  }
+}
+
+/** List all segments. */
+export async function listMauticSegments(
+  creds: MauticCredentials,
+  signal: AbortSignal,
+): Promise<MauticResult<readonly CRMSegment[]>> {
+  try {
+    const data = await mauticGet<{
+      lists?: Record<string, MauticRawSegment>;
+    }>(creds, "/api/segments?limit=200", signal);
+    const segments = Object.values(data.lists ?? {}).map(normalizeSegment);
+    return ok(segments);
+  } catch (cause) {
+    const { message, code } = classifyError(cause);
+    return fail(message, code);
+  }
+}
+
+/** List campaigns. */
+export async function listMauticCampaigns(
+  creds: MauticCredentials,
+  signal: AbortSignal,
+): Promise<MauticResult<readonly CRMCampaign[]>> {
+  try {
+    const data = await mauticGet<{
+      campaigns?: Record<string, MauticRawCampaign>;
+    }>(creds, "/api/campaigns?limit=200", signal);
+    const campaigns = Object.values(data.campaigns ?? {}).map(normalizeCampaign);
+    return ok(campaigns);
+  } catch (cause) {
+    const { message, code } = classifyError(cause);
+    return fail(message, code);
+  }
+}
+
+/** Activity for a contact — Mautic's events endpoint, when exposed. */
+export async function getMauticContactActivity(
+  creds: MauticCredentials,
+  contactId: number,
+  signal: AbortSignal,
+): Promise<MauticResult<readonly CRMActivity[]>> {
+  try {
+    const data = await mauticGet<{
+      events?: Array<{
+        id?: number;
+        eventType?: string;
+        eventName?: string;
+        dateAdded?: string;
+        description?: string;
+      }>;
+    }>(
+      creds,
+      `/api/contacts/${encodeURIComponent(String(contactId))}/activity`,
+      signal,
+    );
+    const activities: CRMActivity[] = (data.events ?? [])
+      .filter((e) => typeof e.id === "number")
+      .map((e) => ({
+        id: e.id as number,
+        contactId,
+        type: typeof e.eventType === "string" ? e.eventType : "unknown",
+        name: typeof e.eventName === "string" ? e.eventName : "Actividad",
+        timestamp: typeof e.dateAdded === "string" ? e.dateAdded : "",
+        ...(typeof e.description === "string" && e.description.length > 0
+          ? { details: e.description }
+          : {}),
+      }));
+    return ok(activities);
+  } catch (cause) {
+    // Some Mautic instances do not expose per-contact activity; degrade
+    // gracefully so the UI can show "actividad no disponible".
+    const { code } = classifyError(cause);
+    if (code === "auth" || code === "unavailable") {
+      return fail("Mautic activity is not available right now.", code);
+    }
+    return ok([] as readonly CRMActivity[]);
+  }
+}
+
+/**
+ * Aggregate summary used by Elvira's "look at our contacts" prompts.
+ *
+ * Calls the count + first page of contacts in parallel and then
+ * derives simple aggregates in-memory. Returns normalized counts —
+ * never raw numbers from Mautic without normalization.
+ */
+export async function getMauticSummary(
+  creds: MauticCredentials,
+  signal: AbortSignal,
+  options: { readonly inactivityThresholdDays?: number } = {},
+): Promise<MauticResult<CRMSummary>> {
+  try {
+    const [contactsPage, segments, campaigns] = await Promise.all([
+      mauticGet<{
+        total?: number;
+        contacts?: Record<string, MauticRawContact>;
+      }>(creds, "/api/contacts?limit=100&start=0", signal),
+      mauticGet<{ lists?: Record<string, MauticRawSegment> }>(
+        creds,
+        "/api/segments?limit=200",
+        signal,
+      ),
+      mauticGet<{ campaigns?: Record<string, MauticRawCampaign> }>(
+        creds,
+        "/api/campaigns?limit=200",
+        signal,
+      ),
+    ]);
+    const totalContacts = contactsPage.total ?? 0;
+    const segmentList = Object.values(segments.lists ?? {}).map(normalizeSegment);
+    const campaignList = Object.values(campaigns.campaigns ?? {}).map(normalizeCampaign);
+    const thresholdMs =
+      options.inactivityThresholdDays !== undefined
+        ? options.inactivityThresholdDays * 24 * 60 * 60 * 1000
+        : 60 * 24 * 60 * 60 * 1000;
+    const thresholdIso = new Date(Date.now() - thresholdMs).toISOString();
+    const raws = Object.values(contactsPage.contacts ?? {});
+    const staleCount = raws.filter(
+      (c) =>
+        typeof c.lastActive === "string" &&
+        c.lastActive.length > 0 &&
+        c.lastActive < thresholdIso,
+    ).length;
+    const topSegments = [...segmentList]
+      .filter((s) => typeof s.contactCount === "number")
+      .sort((a, b) => (b.contactCount ?? 0) - (a.contactCount ?? 0))
+      .slice(0, 5)
+      .map((s) => ({ id: s.id, name: s.name, count: s.contactCount ?? 0 }));
+    const value: CRMSummary = {
+      totalContacts,
+      totalSegments: segmentList.length,
+      totalCampaigns: campaignList.length,
+      contactsWithoutRecentActivity: staleCount,
+      ...(topSegments.length > 0 ? { topSegments } : {}),
+    };
+    return ok(value);
+  } catch (cause) {
+    const { message, code } = classifyError(cause);
+    return fail(message, code);
+  }
+}
+
 export function resolveMauticCredentials(): MauticCredentials | null {
   const baseUrl = (process.env["MAUTIC_BASE_URL"] ?? "").trim().replace(
     /\/$/,

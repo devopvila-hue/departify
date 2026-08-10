@@ -17,3 +17,4 @@ coverage/
 # Local dev secrets (engine device keys, ADC, etc.)
 .devkeys/
 .secrets/
+.pnpm-store/

@@ -1571,10 +1571,212 @@ select {
   text-transform: uppercase;
 }
 
-.dfy-bubble p {
+/* Customer Zero 01 — speaker identity colors. */
+.dfy-bubble[data-speaker="elvira"] .dfy-bubble__who {
+  color: var(--dfy-color-accent);
+}
+.dfy-bubble[data-speaker="departify"] .dfy-bubble__who {
+  color: var(--dfy-color-muted);
+}
+
+/* Markdown body inside a chat bubble. */
+.dfy-bubble__body p {
   margin: 6px 0 0;
   line-height: 1.6;
   white-space: pre-wrap;
+}
+.dfy-bubble__body p + p {
+  margin-top: 8px;
+}
+.dfy-bubble__body ul,
+.dfy-bubble__body ol {
+  margin: 6px 0 0 22px;
+  padding: 0;
+  line-height: 1.55;
+}
+.dfy-bubble__body li + li {
+  margin-top: 4px;
+}
+.dfy-bubble__body strong {
+  color: var(--dfy-color-text);
+  font-weight: 600;
+}
+.dfy-bubble__body code {
+  font-family: var(--dfy-font-mono);
+  font-size: 0.85em;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--dfy-color-surface-muted, rgba(0, 0, 0, 0.06));
+}
+.dfy-bubble__body a {
+  color: var(--dfy-color-accent);
+  text-decoration: underline;
+}
+
+/* Customer Zero 01 — work-state strip shown above the assistant bubble. */
+.dfy-event--work-state {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--dfy-color-border);
+  border-radius: 999px;
+  background: var(--dfy-color-surface-soft);
+  font-size: 0.86rem;
+  color: var(--dfy-color-text);
+}
+.dfy-event--work-state[data-state="error"] {
+  border-color: var(--dfy-color-danger, #c33);
+  color: var(--dfy-color-danger, #c33);
+}
+.dfy-event--work-state[data-state="completed"] {
+  border-color: var(--dfy-color-success, #2a7);
+  color: var(--dfy-color-success, #2a7);
+}
+.dfy-event--work-state .dfy-event__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+/* Customer Zero 01 — connection card with brand mark. */
+.dfy-connection-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dfy-connection-card__logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+}
+.dfy-connection-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.dfy-connection-card__config {
+  color: var(--dfy-color-muted);
+  font-style: italic;
+}
+.dfy-connection-card__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.dfy-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dfy-color-muted);
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.dfy-dot--connected {
+  background: var(--dfy-color-success, #2a7);
+}
+.dfy-dot--needs_attention,
+.dfy-dot--error {
+  background: var(--dfy-color-danger, #c33);
+}
+.dfy-dot--connecting {
+  background: var(--dfy-color-warning, #e6a700);
+}
+
+/* Customer Zero 01 P0 — Results page chart + table rendering. */
+.dfy-result__body {
+  margin: 10px 0;
+}
+.dfy-result__table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+}
+.dfy-result__table th,
+.dfy-result__table td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--dfy-color-border, #e5e5e5);
+  font-size: 0.92rem;
+}
+.dfy-result__table th {
+  color: var(--dfy-color-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+}
+.dfy-chart {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--dfy-color-border, #e5e5e5);
+  border-radius: var(--dfy-radius-md, 8px);
+  background: var(--dfy-color-surface-soft, rgba(0, 0, 0, 0.02));
+}
+.dfy-chart__title {
+  font-size: 0.8rem;
+  color: var(--dfy-color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+.dfy-chart__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dfy-chart__row {
+  display: grid;
+  grid-template-columns: minmax(80px, 1fr) 2fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.92rem;
+}
+.dfy-chart__label {
+  color: var(--dfy-color-text);
+}
+.dfy-chart__bar {
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 999px;
+  height: 8px;
+  position: relative;
+  overflow: hidden;
+}
+.dfy-chart__bar-fill {
+  background: var(--dfy-color-accent, #3b82f6);
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+}
+.dfy-chart__value {
+  font-variant-numeric: tabular-nums;
+  color: var(--dfy-color-muted);
+  font-size: 0.85rem;
+}
+.dfy-chart__donut-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+.dfy-chart__big {
+  font-size: 2rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--dfy-color-accent, #3b82f6);
 }
 
 /* Business event cards (results, approvals, connections, work) */

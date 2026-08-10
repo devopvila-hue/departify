@@ -1,44 +1,45 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { api, type ToolConnectionView } from "@/app/api";
+import { api, type ConnectionCardView, type ToolConnectionView } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import { Badge, Card, EmptyState } from "@/components/primitives";
 
 /**
- * Conexiones — the company's capability/tool catalog + durable state
- * (Phase P-B production fix).
+ * Conexiones — Customer Zero 01.
  *
- * The catalog is the permanent surface: tools declared during onboarding,
- * configured/connected tools, AND relevant available tools that can be added
- * later. "Not selected during onboarding" never means "absent forever".
+ * Capability-first surface. Five business-language states:
+ *   No conectado · Conectando · Conectado · Necesita atención · Error
  *
- * Honest by construction: only real actions are offered. Mautic can be
- * verified/connected; everything else can only be prepared (declared) —
- * never a fake OAuth button.
+ * Official brand marks on every card (no fake logos, no remote
+ * assets). The "configSource" indicator surfaces "Conectado mediante
+ * configuración del sistema" when the connection comes from
+ * environment variables (the Customer Zero bootstrap path).
+ *
+ * The detail view lists the capabilities Elvira can use today and
+ * the actions available to the CEO. No raw credentials ever appear
+ * in this UI.
  */
-
-const DOMAIN_LABELS: Record<string, string> = {
-  crm: "CRM",
-  email: "Correo",
-  calendar: "Calendario",
-  documents: "Documentos",
-  marketing: "Marketing",
-  team: "Equipo",
-};
 
 const DOMAIN_ORDER = ["crm", "email", "calendar", "documents", "marketing", "team"];
 
+interface ConnectionsPayload {
+  organizationId: string;
+  connections: ToolConnectionView[];
+  cards: ConnectionCardView[];
+  unmappedTools: string[];
+}
+
 export function ConnectionsRoute() {
   const { organizationId } = useOrg();
-  const [connections, setConnections] = useState<ToolConnectionView[]>([]);
+  const [cards, setCards] = useState<ConnectionCardView[]>([]);
   const [unmapped, setUnmapped] = useState<string[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!organizationId) return;
-    const data = await api.connections(organizationId);
+    const data = (await api.connections(organizationId)) as ConnectionsPayload | null;
     if (data) {
-      setConnections(data.connections ?? []);
+      setCards(data.cards ?? []);
       setUnmapped(data.unmappedTools ?? []);
     }
   }, [organizationId]);
@@ -47,25 +48,21 @@ export function ConnectionsRoute() {
     void load();
   }, [load]);
 
-  async function runAction(tool: ToolConnectionView) {
+  async function runAction(card: ConnectionCardView) {
     if (!organizationId) return;
-    setBusy(tool.toolId);
-    if (tool.action === "prepare") {
-      await api.declareTool(organizationId, tool.toolId);
-    } else {
-      await api.connect(organizationId, tool.toolId);
+    setBusy(card.id);
+    try {
+      await api.testConnection(organizationId, card.id);
+    } finally {
+      setBusy(null);
+      await load();
     }
-    setBusy(null);
-    await load();
   }
-
-  const primaryDomain = (tool: ToolConnectionView): string =>
-    tool.domains[0] ?? "crm";
 
   const groups = DOMAIN_ORDER.map((domain) => ({
     domain,
     label: DOMAIN_LABELS[domain] ?? domain,
-    tools: connections.filter((tool) => primaryDomain(tool) === domain),
+    tools: cards.filter((card) => primaryDomain(card.id) === domain),
   })).filter((group) => group.tools.length > 0);
 
   return (
@@ -74,8 +71,8 @@ export function ConnectionsRoute() {
         <p className="dfy-eyebrow">Conexiones</p>
         <h1>Las herramientas de tu empresa</h1>
         <p className="dfy-hero__lead">
-          Tu catálogo de capacidades. Selecciona las que usa la empresa y
-          conecta las que Departify puede operar.
+          Elvira solo puede usar las herramientas que tu empresa tiene autorizadas. Cuando
+          una conexión está lista, puede trabajar con datos reales sin pedirte credenciales.
         </p>
       </section>
 
@@ -91,12 +88,12 @@ export function ConnectionsRoute() {
           <section key={group.domain} className="dfy-catalog-group">
             <h2 className="dfy-catalog-group__title">{group.label}</h2>
             <div className="dfy-grid">
-              {group.tools.map((connection) => (
-                <ToolCard
-                  key={connection.toolId}
-                  connection={connection}
-                  busy={busy === connection.toolId}
-                  onAction={() => void runAction(connection)}
+              {group.tools.map((card) => (
+                <ConnectionCardItem
+                  key={card.id}
+                  card={card}
+                  busy={busy === card.id}
+                  onAction={() => void runAction(card)}
                 />
               ))}
             </div>
@@ -117,76 +114,96 @@ export function ConnectionsRoute() {
   );
 }
 
-function ToolCard(props: {
-  connection: ToolConnectionView;
+function ConnectionCardItem(props: {
+  card: ConnectionCardView;
   busy: boolean;
   onAction: () => void;
 }) {
-  const { connection } = props;
-  const secondaryDomains = connection.domains.slice(1);
+  const { card, busy, onAction } = props;
   return (
     <Card>
-      <div className="dfy-work__head">
-        <strong>{connection.label}</strong>
-        <Badge tone={toneFor(connection)}>{connection.humanLabel}</Badge>
-      </div>
-      <p className="dfy-muted dfy-muted--small">
-        {connection.category}
-        {secondaryDomains.length > 0 &&
-          ` · También: ${secondaryDomains
-            .map((domain) => DOMAIN_LABELS[domain] ?? domain)
-            .join(", ")}`}
-      </p>
-
-      {connection.action && (
-        <button
-          type="button"
-          className="dfy-button dfy-button--small"
-          disabled={props.busy}
-          onClick={props.onAction}
+      <div className="dfy-connection-card">
+        <div
+          className="dfy-connection-card__logo"
+          style={{ background: card.brandColor }}
+          aria-hidden="true"
         >
-          {props.busy ? "Comprobando…" : actionLabel(connection)}
-        </button>
-      )}
+          <span>{card.logoMark}</span>
+        </div>
+        <div className="dfy-connection-card__head">
+          <strong>{card.name}</strong>
+          <Badge tone={toneFor(card.state)}>
+            <span className={`dfy-dot dfy-dot--${card.state}`} aria-hidden="true" />{" "}
+            {card.stateLabel}
+          </Badge>
+        </div>
+        <p className="dfy-muted dfy-muted--small">{card.category}</p>
 
-      {noteFor(connection)}
+        {card.state === "connected" && card.configSource && (
+          <p className="dfy-muted dfy-muted--small dfy-connection-card__config">
+            Conectado mediante configuración del sistema
+          </p>
+        )}
+
+        <div className="dfy-connection-card__actions">
+          {card.actionLabel && (
+            <button
+              type="button"
+              className="dfy-button dfy-button--small"
+              disabled={busy}
+              onClick={onAction}
+            >
+              {busy ? "Comprobando…" : card.actionLabel}
+            </button>
+          )}
+        </div>
+
+        {card.verifiedAt && card.state === "connected" && (
+          <p className="dfy-muted dfy-muted--small">
+            Verificado por última vez: {fecha(card.verifiedAt)}
+          </p>
+        )}
+      </div>
     </Card>
   );
 }
 
-function noteFor(connection: ToolConnectionView): string {
-  switch (connection.state) {
-    case "connected":
-      return connection.verifiedAt
-        ? `Conexión verificada. Verificado ${fecha(connection.verifiedAt)}.`
-        : "Conexión verificada.";
-    case "configured":
-      return "Credenciales presentes. Falta verificar la conexión.";
-    case "selected":
-      return "Conexión con Departify próximamente.";
-    case "needs_connection":
-      return "Necesita conexión para que Departify pueda operarla.";
-    case "degraded":
-      return "Hay un problema de conexión. Puedes reintentarlo.";
-    case "unavailable":
-      return "No disponible ahora mismo.";
-    case "available":
-    default:
-      return "Disponible para añadir a la empresa. Al seleccionarla la guardamos y podremos preparar el acceso.";
-  }
+const DOMAIN_LABELS: Record<string, string> = {
+  crm: "CRM y automatización",
+  email: "Correo",
+  calendar: "Calendario",
+  documents: "Documentos",
+  marketing: "Marketing y publicidad",
+  team: "Equipo",
+};
+
+const TOOL_DOMAIN: Record<string, string> = {
+  mautic: "crm",
+  hubspot: "crm",
+  gmail: "email",
+  google_analytics: "marketing",
+  google_ads: "marketing",
+  meta_ads: "marketing",
+  linkedin_ads: "marketing",
+  notion: "documents",
+};
+
+function primaryDomain(id: string): string {
+  return TOOL_DOMAIN[id] ?? "crm";
 }
 
-function actionLabel(connection: ToolConnectionView): string {
-  switch (connection.action) {
-    case "prepare":
-      return "La utilizo";
-    case "verify":
-      return "Verificar conexión";
-    case "retry":
-      return "Reintentar";
-    case "connect":
+function toneFor(state: ConnectionCardView["state"]): "neutral" | "success" | "warning" | "danger" {
+  switch (state) {
+    case "connected":
+      return "success";
+    case "needs_attention":
+      return "warning";
+    case "error":
+      return "danger";
+    case "connecting":
+    case "not_connected":
     default:
-      return `Conectar ${connection.label}`;
+      return "neutral";
   }
 }
 
@@ -195,25 +212,5 @@ function fecha(iso: string): string {
     return new Date(iso).toLocaleDateString("es-ES");
   } catch {
     return iso;
-  }
-}
-
-function toneFor(
-  connection: ToolConnectionView,
-): "neutral" | "accent" | "warning" | "danger" | "success" {
-  switch (connection.state) {
-    case "connected":
-      return "success";
-    case "configured":
-      return "accent";
-    case "degraded":
-    case "unavailable":
-      return "danger";
-    case "needs_connection":
-    case "selected":
-      return "warning";
-    case "available":
-    default:
-      return "neutral";
   }
 }

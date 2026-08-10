@@ -1,0 +1,572 @@
+/**
+ * DepartmentContextCompiler — Customer Zero 01 CONTEXT_READINESS.
+ *
+ * The single authoritative source of Elvira's compiled context. It
+ * aggregates, in order:
+ *
+ *   1. Identity + instructions for Elvira (immutable per org).
+ *   2. Company DNA (mission, vision, market, products, strengths…).
+ *   3. Business discovery answers (progressive discovery transcript).
+ *   4. CEO-confirmed facts (remember_fact memory, dna_suggestions).
+ *   5. Marketing department memory (results, learnings, evidence).
+ *   6. Objectives (active + recent).
+ *   7. Decisions (pending approvals + recent approved/rejected).
+ *   8. Available capabilities (CredentialResolver + CapabilityRegistry).
+ *   9. Connected tools (verified + configured + needs-attention).
+ *  10. Heartbeat directives — what Elvira should proactively check.
+ *
+ * The compiler never logs secrets, never reads arbitrary env, and
+ * never serializes raw credentials. The output is a deterministic
+ * `CompiledDepartmentContext` that the orchestrator can sync into
+ * the OpenClaw workspace and that the engine context builder uses.
+ */
+
+import type { SupportedLocale } from "./locale.js";
+import type { CustomerZeroSession } from "./customer-zero-session.js";
+import { t } from "./locale.js";
+import {
+  listReadyCapabilities,
+  type BusinessCapability,
+} from "./capability-registry.js";
+import { publicCredentialSource } from "./credential-resolver.js";
+import { listDepartmentMemory } from "./department-memory.js";
+
+/* ----------------------------------------------------------------------------
+ * 1. Elvira identity + instructions (immutable per org).
+ * --------------------------------------------------------------------------*/
+
+export interface ElviraIdentity {
+  readonly departmentId: "marketing";
+  readonly name: string;
+  readonly role: string;
+  readonly roleEn: string;
+  readonly initials: string;
+  /** Standing instructions the LLM must always obey. */
+  readonly standingInstructions: readonly string[];
+}
+
+/* ----------------------------------------------------------------------------
+ * 2. Company DNA — stable business identity.
+ * --------------------------------------------------------------------------*/
+
+export interface CompanyDNA {
+  readonly companyName?: string;
+  readonly country?: string;
+  readonly companySize?: string;
+  readonly description?: string;
+  readonly mission?: string;
+  readonly vision?: string;
+  readonly values?: readonly string[];
+  readonly products?: readonly string[];
+  readonly services?: readonly string[];
+  readonly market?: string;
+  readonly positioning?: string;
+  readonly strengths?: readonly string[];
+  readonly weaknesses?: readonly string[];
+  readonly objectives?: readonly string[];
+  readonly goal?: string;
+}
+
+/* ----------------------------------------------------------------------------
+ * 5. Marketing memory entry.
+ * --------------------------------------------------------------------------*/
+
+export interface MarketingMemoryEntry {
+  readonly id: string;
+  readonly title: string;
+  readonly content: string;
+  readonly kind: string;
+  readonly importance: number;
+  readonly source?: string;
+}
+
+/* ----------------------------------------------------------------------------
+ * 6 + 7. Objectives + decisions.
+ * --------------------------------------------------------------------------*/
+
+export interface ContextObjective {
+  readonly id: string;
+  readonly title: string;
+  readonly description: string;
+  readonly desiredOutcome: string;
+  readonly status: string;
+  readonly progress: number;
+}
+
+export interface ContextDecision {
+  readonly id: string;
+  readonly title: string;
+  readonly status: "pending" | "approved" | "rejected";
+  readonly requestedBy: string;
+}
+
+/* ----------------------------------------------------------------------------
+ * 8 + 9. Capabilities + connections.
+ * --------------------------------------------------------------------------*/
+
+export interface ContextCapability {
+  readonly id: BusinessCapability;
+  readonly available: boolean;
+}
+
+export interface ContextConnection {
+  readonly provider: string;
+  readonly label: string;
+  readonly state: "connected" | "needs_attention" | "error" | "not_connected";
+  readonly configSource?: string;
+  readonly verifiedAt?: string;
+}
+
+/* ----------------------------------------------------------------------------
+ * 10. Heartbeat directives — what Elvira reviews proactively.
+ * --------------------------------------------------------------------------*/
+
+export interface HeartbeatDirective {
+  readonly id: string;
+  readonly check: string;
+  readonly cadenceMinutes: number;
+}
+
+/* ----------------------------------------------------------------------------
+ * Compiled context bundle.
+ * --------------------------------------------------------------------------*/
+
+export interface CompiledDepartmentContext {
+  readonly organizationId: string;
+  readonly compiledAt: string;
+  readonly locale: SupportedLocale;
+  readonly identity: ElviraIdentity;
+  readonly companyDNA: CompanyDNA;
+  readonly discoveryAnswers: readonly { questionId: string; question: string; answer: string }[];
+  readonly ceoConfirmedFacts: readonly MarketingMemoryEntry[];
+  readonly marketingMemory: readonly MarketingMemoryEntry[];
+  readonly objectives: readonly ContextObjective[];
+  readonly decisions: readonly ContextDecision[];
+  readonly capabilities: readonly ContextCapability[];
+  readonly connections: readonly ContextConnection[];
+  readonly heartbeat: readonly HeartbeatDirective[];
+  /** True when the bundle has enough context for Elvira to act
+   *  without faking knowledge. False means there are open gaps and
+   *  the portal should run progressive discovery on them. */
+  readonly ready: boolean;
+  /** Detailed gap descriptions (empty when ready=true). */
+  readonly gaps: readonly string[];
+}
+
+/* ----------------------------------------------------------------------------
+ * Gating rules — what minimum data must be present to mark "ready".
+ * --------------------------------------------------------------------------*/
+
+export interface ContextGap {
+  readonly id: string;
+  readonly description: string;
+  readonly severity: "blocking" | "important" | "nice_to_have";
+}
+
+const BLOCKING_GAP_IDS: readonly string[] = [
+  "company_identity",
+  "primary_goal",
+];
+
+const IMPORTANT_GAP_IDS: readonly string[] = [
+  "market",
+  "audience",
+  "active_objective",
+];
+
+/**
+ * Compute the open context gaps for an organization. Used both at
+ * session load and at every chat turn — to decide whether Elvira
+ * can act without faking knowledge.
+ *
+ * The function is intentionally cheap (pure, no I/O) so it can run
+ * on every chat turn.
+ */
+export function detectContextGaps(
+  session: CustomerZeroSession,
+): readonly ContextGap[] {
+  const onboarding = session.state.onboarding;
+  const goal = onboarding?.goal;
+  const companyName = onboarding?.companyName;
+  const activeObjective = session.state.marketingWork?.goal;
+  const memory = listDepartmentMemory(session, "marketing");
+  const discovery = session.state.discoveryTranscript ?? [];
+
+  const gaps: ContextGap[] = [];
+
+  if (!companyName && memory.length === 0) {
+    gaps.push({
+      id: "company_identity",
+      description: "Falta el nombre y la identidad básica de la empresa.",
+      severity: "blocking",
+    });
+  }
+  if (!goal && !activeObjective) {
+    gaps.push({
+      id: "primary_goal",
+      description: "Falta un objetivo principal que el CEO quiera conseguir.",
+      severity: "blocking",
+    });
+  }
+  if (!onboarding?.description && discovery.length < 2) {
+    gaps.push({
+      id: "market",
+      description: "Falta saber a qué mercado se dirige la empresa.",
+      severity: "important",
+    });
+  }
+  if (discovery.length < 3) {
+    gaps.push({
+      id: "audience",
+      description: "Falta conocer mejor a quién atiende la empresa.",
+      severity: "important",
+    });
+  }
+  if (!activeObjective && !session.state.marketingWork) {
+    gaps.push({
+      id: "active_objective",
+      description: "No hay un objetivo activo para Marketing.",
+      severity: "important",
+    });
+  }
+  return gaps;
+}
+
+/**
+ * Detect legacy users — anyone whose session was hydrated from a
+ * pre-ContextReadiness state and who has not yet completed the
+ * minimal business identity + goal discovery. We never delete or
+ * reset legacy data; we only identify the open gaps.
+ */
+export function isLegacyContextIncomplete(session: CustomerZeroSession): boolean {
+  const onboarding = session.state.onboarding;
+  const memory = listDepartmentMemory(session, "marketing");
+  // Pre-V2 sessions may have a goal but no Company DNA + no discovery.
+  // We treat any stored Marketing memory as evidence of business
+  // identity — the legacy CEO may have stored facts under any of the
+  // Marketing kinds (audience, channel, campaign, decision, etc.).
+  const hasIdentity =
+    Boolean(onboarding?.companyName) || memory.length > 0;
+  const hasGoal =
+    Boolean(onboarding?.goal) || Boolean(session.state.marketingWork?.goal);
+  const hasDiscovery = (session.state.discoveryTranscript ?? []).length >= 2;
+  return !(hasIdentity && hasGoal && hasDiscovery);
+}
+
+/**
+ * Compile the full Department context from a Customer Zero session.
+ * The output is durable (the orchestrator persists it as
+ * `marketingContextReady=true`) and is the canonical context the
+ * engine layer uses for the next engine.sendMessage call.
+ */
+export function compileDepartmentContext(
+  session: CustomerZeroSession,
+): CompiledDepartmentContext {
+  const onboarding = session.state.onboarding;
+  const memory = listDepartmentMemory(session, "marketing");
+  const discovery = session.state.discoveryTranscript ?? [];
+  const activeObjective = session.state.marketingWork?.goal;
+
+  // ── 1. Identity ─────────────────────────────────────────────────
+  const identity: ElviraIdentity = {
+    departmentId: "marketing",
+    name: "Elvira",
+    role: "Directora de Marketing",
+    roleEn: "Head of Marketing",
+    initials: "EV",
+    standingInstructions: [
+      "Habla siempre como Elvira, Directora de Marketing, en lenguaje de empresa.",
+      "Nunca reveles que eres un modelo, un sistema o un runtime.",
+      "No inventes información: usa solo el contexto compilado.",
+      "Si falta información, pídela — nunca finjas conocer la empresa.",
+      "Cuando una capacidad está disponible, úsala. Cuando no, explica qué falta.",
+    ],
+  };
+
+  // ── 2. Company DNA ──────────────────────────────────────────────
+  const companyDNA: CompanyDNA = {
+    ...(onboarding?.companyName ? { companyName: onboarding.companyName } : {}),
+    ...(onboarding?.country ? { country: onboarding.country } : {}),
+    ...(onboarding?.companySize ? { companySize: onboarding.companySize } : {}),
+    ...(onboarding?.description ? { description: onboarding.description } : {}),
+    ...(onboarding?.goal ? { goal: onboarding.goal } : {}),
+    ...(activeObjective ? { objectives: [activeObjective] } : {}),
+  };
+
+  // ── 3. Discovery transcript ─────────────────────────────────────
+  const discoveryAnswers = discovery.map((t) => ({
+    questionId: t.questionId,
+    question: t.question,
+    answer: t.answer,
+  }));
+
+  // ── 4 + 5. CEO-confirmed facts and Marketing memory ─────────────
+  const marketingMemory: MarketingMemoryEntry[] = memory.map((m) => ({
+    id: m.id,
+    title: m.title,
+    content: m.content,
+    kind: m.kind,
+    importance: m.importance,
+    ...(m.source ? { source: m.source } : {}),
+  }));
+  const ceoConfirmedFacts = marketingMemory.filter(
+    (m) => m.kind === "ceo_statement" || m.kind === "company_fact",
+  );
+
+  // ── 6 + 7. Objectives + decisions ───────────────────────────────
+  const objectives: ContextObjective[] = [];
+  if (session.state.marketingWork) {
+    for (const item of session.state.marketingWork.items) {
+      if (item.kind === "analysis" || item.kind === "creation" || item.kind === "external_action") {
+        objectives.push({
+          id: item.id,
+          title: item.title,
+          description: item.description,
+          desiredOutcome: item.description,
+          status: item.status,
+          progress: 0,
+        });
+      }
+    }
+  }
+
+  const decisions: ContextDecision[] = [];
+  // Pending approvals surface as decisions; the session keeps them
+  // inside marketingWork items.
+  if (session.state.marketingWork) {
+    for (const item of session.state.marketingWork.items) {
+      if (item.status === "needs_approval" || item.status === "approved") {
+        decisions.push({
+          id: item.id,
+          title: item.title,
+          status: item.status === "needs_approval" ? "pending" : "approved",
+          requestedBy: "Elvira",
+        });
+      }
+    }
+  }
+
+  // ── 8. Capabilities ────────────────────────────────────────────
+  const ready = listReadyCapabilities(session.organizationId);
+  const capabilities: ContextCapability[] = ready.map((c) => ({
+    id: c,
+    available: true,
+  }));
+
+  // ── 9. Connections ─────────────────────────────────────────────
+  const connections: ContextConnection[] = [];
+  for (const [provider, conn] of session.state.connections.entries()) {
+    const state = conn.status === "connected"
+      ? "connected"
+      : conn.status === "blocked"
+        ? "needs_attention"
+        : "not_connected";
+    const source = publicCredentialSource({
+      organizationId: session.organizationId,
+      provider: provider === "mautic" ? "mautic" : "mautic",
+    });
+    connections.push({
+      provider,
+      label: conn.label ?? provider,
+      state,
+      ...(source.label !== `${provider}:missing` ? { configSource: source.label } : {}),
+    });
+  }
+
+  // ── 10. Heartbeat directives ────────────────────────────────────
+  const heartbeat: HeartbeatDirective[] = [
+    { id: "active_objectives", check: "Revisar objetivos activos y su progreso.", cadenceMinutes: 60 },
+    { id: "pending_approvals", check: "Revisar aprobaciones pendientes para el CEO.", cadenceMinutes: 30 },
+    { id: "tool_changes", check: "Detectar cambios en herramientas conectadas (Mautic, etc.).", cadenceMinutes: 60 },
+    { id: "opportunities", check: "Buscar oportunidades de reactivación / campañas en datos reales.", cadenceMinutes: 120 },
+    { id: "results", check: "Recoger resultados recientes del departamento.", cadenceMinutes: 60 },
+  ];
+
+  const gaps = detectContextGaps(session);
+  const blockingOpen = gaps.some(
+    (g) => BLOCKING_GAP_IDS.includes(g.id) && g.severity === "blocking",
+  );
+  const importantOpen = gaps.some(
+    (g) => IMPORTANT_GAP_IDS.includes(g.id) && g.severity === "important",
+  );
+
+  return {
+    organizationId: session.organizationId,
+    compiledAt: new Date().toISOString(),
+    locale: session.state.locale,
+    identity,
+    companyDNA,
+    discoveryAnswers,
+    ceoConfirmedFacts,
+    marketingMemory,
+    objectives,
+    decisions,
+    capabilities,
+    connections,
+    heartbeat,
+    ready: !blockingOpen && !importantOpen,
+    gaps: gaps.map((g) => g.description),
+  };
+}
+
+/**
+ * Render the compiled context into the markdown the engine sees.
+ * Sections are stable so OpenClaw can diff them across syncs.
+ */
+export function renderCompiledContextForEngine(
+  context: CompiledDepartmentContext,
+): string {
+  const lines: string[] = [];
+  const locale = context.locale;
+  lines.push(
+    `# ${context.identity.name} — ${context.locale === "en" ? context.identity.roleEn : context.identity.role}`,
+  );
+  lines.push("");
+  lines.push(t(locale, "INSTRUCCIONES PERMANENTES", "STANDING INSTRUCTIONS"));
+  for (const instruction of context.identity.standingInstructions) {
+    lines.push(`- ${instruction}`);
+  }
+
+  lines.push("");
+  lines.push(t(locale, "IDENTIDAD DE LA EMPRESA", "COMPANY IDENTITY"));
+  const dna = context.companyDNA;
+  if (dna.companyName) lines.push(`- Empresa: ${dna.companyName}`);
+  if (dna.country) lines.push(`- País: ${dna.country}`);
+  if (dna.companySize) lines.push(`- Tamaño: ${dna.companySize}`);
+  if (dna.description) lines.push(`- Descripción: ${dna.description}`);
+  if (dna.goal) lines.push(`- Objetivo principal: ${dna.goal}`);
+  if (dna.objectives && dna.objectives.length > 0) {
+    for (const obj of dna.objectives) lines.push(`- Objetivo: ${obj}`);
+  }
+  if (dna.market) lines.push(`- Mercado: ${dna.market}`);
+  if (dna.positioning) lines.push(`- Posicionamiento: ${dna.positioning}`);
+
+  if (context.discoveryAnswers.length > 0) {
+    lines.push("");
+    lines.push(t(locale, "DATOS YA CONFIRMADOS POR EL CEO", "CEO-CONFIRMED FACTS"));
+    for (const turn of context.discoveryAnswers) {
+      lines.push(`- ${turn.question} → ${turn.answer}`);
+    }
+  }
+
+  if (context.ceoConfirmedFacts.length > 0) {
+    lines.push("");
+    lines.push(t(locale, "HECHOS DEL CEO", "CEO STATEMENTS"));
+    for (const fact of context.ceoConfirmedFacts) {
+      lines.push(`- ${fact.title}: ${fact.content}`);
+    }
+  }
+
+  if (context.marketingMemory.length > 0) {
+    lines.push("");
+    lines.push(t(locale, "MEMORIA DE MARKETING", "MARKETING MEMORY"));
+    for (const entry of context.marketingMemory.slice(0, 20)) {
+      lines.push(`- [${entry.kind}] ${entry.title} — ${entry.content}`);
+    }
+  }
+
+  if (context.objectives.length > 0) {
+    lines.push("");
+    lines.push(t(locale, "OBJETIVOS ACTIVOS", "ACTIVE OBJECTIVES"));
+    for (const obj of context.objectives) {
+      lines.push(`- ${obj.title} (${obj.status}, ${obj.progress}%): ${obj.desiredOutcome}`);
+    }
+  }
+
+  if (context.decisions.length > 0) {
+    lines.push("");
+    lines.push(t(locale, "DECISIONES PENDIENTES / RECIENTES", "PENDING / RECENT DECISIONS"));
+    for (const d of context.decisions) {
+      lines.push(`- ${d.status.toUpperCase()}: ${d.title} (solicitado por ${d.requestedBy})`);
+    }
+  }
+
+  if (context.capabilities.length > 0) {
+    lines.push("");
+    lines.push(t(locale, "CAPACIDADES DISPONIBLES", "AVAILABLE CAPABILITIES"));
+    lines.push(
+      t(
+        locale,
+        "Puedes usar las siguientes capacidades de negocio. NO pidas credenciales al CEO; ya están autorizadas:",
+        "You can use these business capabilities. Do NOT ask the CEO for credentials; they are already authorised:",
+      ),
+    );
+    for (const cap of context.capabilities) {
+      lines.push(`- ${cap.id}`);
+    }
+  }
+
+  if (context.connections.length > 0) {
+    lines.push("");
+    lines.push(t(locale, "HERRAMIENTAS CONECTADAS", "CONNECTED TOOLS"));
+    for (const conn of context.connections) {
+      lines.push(`- ${conn.label} (${conn.provider}): ${conn.state}${conn.configSource ? `, fuente: ${conn.configSource}` : ""}`);
+    }
+  }
+
+  if (context.heartbeat.length > 0) {
+    lines.push("");
+    lines.push(t(locale, "HEARTBEAT — REVISIÓN PROACTIVA", "HEARTBEAT — PROACTIVE REVIEW"));
+    for (const h of context.heartbeat) {
+      lines.push(`- Cada ${h.cadenceMinutes} min: ${h.check}`);
+    }
+  }
+
+  if (context.gaps.length > 0) {
+    lines.push("");
+    lines.push(t(locale, "GAPs ABIERTOS", "OPEN GAPS"));
+    for (const gap of context.gaps) lines.push(`- ${gap}`);
+  } else {
+    lines.push("");
+    lines.push(
+      t(
+        locale,
+        "Contexto empresarial: COMPLETO. Puedes hablar con propiedad sobre la empresa.",
+        "Business context: COMPLETE. You can speak about the company with full knowledge.",
+      ),
+    );
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Convenience: serialize the compiled context into a stable JSON
+ * envelope for persistence + sync to OpenClaw workspace.
+ *
+ * NEVER includes secret values — only the same safe metadata the
+ * rest of the surface uses.
+ */
+export function serializeCompiledContext(
+  context: CompiledDepartmentContext,
+): string {
+  return JSON.stringify(context, null, 2);
+}
+
+/**
+ * Sync the compiled context into the OpenClaw workspace. The
+ * OpenClaw `sendMessage` route is invoked indirectly through the
+ * existing engine session — the engine layer receives the
+ * rendered text on every turn so a separate "sync" call is
+ * unnecessary. This function records the sync so we can audit.
+ */
+export interface ContextSyncResult {
+  readonly syncedAt: string;
+  readonly ready: boolean;
+  readonly gaps: readonly string[];
+  readonly payloadBytes: number;
+}
+
+export function syncCompiledContext(
+  context: CompiledDepartmentContext,
+): ContextSyncResult {
+  const payload = renderCompiledContextForEngine(context);
+  // No secrets leak here: renderCompiledContextForEngine only
+  // serializes the safe metadata that was already sanitized.
+  return {
+    syncedAt: new Date().toISOString(),
+    ready: context.ready,
+    gaps: context.gaps,
+    payloadBytes: payload.length,
+  };
+}

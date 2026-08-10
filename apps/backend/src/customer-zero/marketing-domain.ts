@@ -108,12 +108,24 @@ export interface ConnectedTool {
   readonly note?: string;
 }
 
+/**
+ * Customer Zero hotfix — the DepartmentStatusView status is the truth
+ * about the Marketing department's lifecycle. For an organization that
+ * has not been provisioned through Customer Zero, the status is
+ * `not_provisioned` and `employees` is empty.
+ */
+export type DepartmentStatus =
+  | "not_provisioned"
+  | "disponible"
+  | "trabajando"
+  | "bloqueado"
+  | "no_disponible";
+
 export interface DepartmentStatusView {
   readonly id: DepartmentId;
   readonly name: string;
   readonly head: DepartmentHeadBusiness;
-  /** e.g. "trabajando" | "disponible" | "esperando_aprobacion" | "bloqueado" | "necesita_atencion". */
-  readonly status: string;
+  readonly status: DepartmentStatus;
   readonly employees: readonly DigitalEmployee[];
   readonly employeesWorkingNow: number;
   readonly tools: readonly ConnectedTool[];

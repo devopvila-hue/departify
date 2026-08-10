@@ -56,6 +56,39 @@ export interface ToolConnectionView {
   blockedReason?: string;
 }
 
+/** Customer Zero 01 — five-state connection card view. */
+export type ConnectionFiveState =
+  | "not_connected"
+  | "connecting"
+  | "connected"
+  | "needs_attention"
+  | "error";
+
+export interface ConnectionCapabilityView {
+  id: string;
+  nameEs: string;
+  nameEn: string;
+}
+
+export interface ConnectionCardView {
+  id: string;
+  name: string;
+  category: string;
+  logoMark: string;
+  brandColor: string;
+  state: ConnectionFiveState;
+  stateLabel: string;
+  configSource: string | null;
+  verifiedAt: string | null;
+  capabilities: ConnectionCapabilityView[];
+  actionLabel: string | null;
+}
+
+export interface ConnectionCardDetailView extends ConnectionCardView {
+  organizationId: string;
+  provider: string;
+}
+
 export interface DecisionView {
   id: string;
   head: HeadIdentity;
@@ -77,6 +110,71 @@ export interface ResultView {
   head: HeadIdentity;
   title: string;
   summary: string;
+}
+
+/* -------------------------------------------------------------------------
+ * Customer Zero 01 P0 — Department Work + Department Result.
+ * -----------------------------------------------------------------------*/
+
+export type DepartmentWorkStatus =
+  | "queued"
+  | "running"
+  | "waiting_approval"
+  | "completed"
+  | "failed";
+
+export interface DepartmentTask {
+  id: string;
+  organizationId: string;
+  departmentId: string;
+  objectiveId: string | null;
+  requestedBy: string;
+  title: string;
+  summary: string;
+  capability: string;
+  toolId: string;
+  status: DepartmentWorkStatus;
+  statusMessage: string;
+  progress: number;
+  requiredCapabilities: string[];
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  resultId: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  timeoutMs: number;
+}
+
+export type ChartKind = "bar" | "line" | "donut" | "number" | "table";
+
+export interface ChartSeries {
+  name: string;
+  values: number[];
+  labels?: string[];
+}
+
+export interface ChartData {
+  kind: ChartKind;
+  title: string;
+  unit?: string;
+  series: ChartSeries[];
+  rows?: { label: string; value: string | number }[];
+}
+
+export interface DepartmentResult {
+  id: string;
+  organizationId: string;
+  departmentId: string;
+  relatedWorkItemId: string | null;
+  title: string;
+  summary: string;
+  content: string;
+  data?: Record<string, unknown>;
+  chart?: ChartData;
+  source: string;
+  createdAt: string;
+  producedByCapability: string;
 }
 
 export interface CeoOverview {
@@ -132,6 +230,9 @@ export interface CompanyStatus {
   department: { id: string; name: string; status: string; employeeAgentIds: string[] } | null;
   marketingWork?: MarketingWorkState | null;
   conversation: { role: string; content: string }[];
+  /** Customer Zero readiness — backend gate result. */
+  contextReady?: boolean;
+  contextMissing?: readonly string[];
 }
 
 /* -------------------------------------------------------------------------
@@ -164,7 +265,7 @@ export interface CommandCenterConnectionSuggestion {
 }
 
 export type CommandCenterEvent =
-  | { kind: "transcript"; role: "user" | "assistant"; content: string }
+  | { kind: "transcript"; role: "user" | "assistant"; content: string; speaker?: "departify" | "elvira" }
   | { kind: "intent_proactive"; intent: string; title: string; message: string }
   | {
       kind: "department_active";
@@ -211,6 +312,20 @@ export type CommandCenterEvent =
         fromDepartment: string;
         confidence: number;
       };
+    }
+  | {
+      kind: "work_state";
+      state:
+        | "received"
+        | "delegated"
+        | "analyzing"
+        | "tool_started"
+        | "tool_completed"
+        | "preparing_result"
+        | "completed"
+        | "blocked"
+        | "error";
+      message: string;
     };
 
 export interface CommandCenterRouting {
@@ -456,9 +571,42 @@ export const api = {
   overview: (org: string) => getJson<CeoOverview>(`/api/customer-zero/${org}/overview`),
   status: (org: string) => getJson<CompanyStatus>(`/api/customer-zero/${org}`),
   connections: (org: string) =>
-    getJson<{ connections: ToolConnectionView[]; unmappedTools: string[] }>(
-      `/api/customer-zero/${org}/connections`,
+    getJson<{
+      connections: ToolConnectionView[];
+      cards: ConnectionCardView[];
+      unmappedTools: string[];
+    }>(`/api/customer-zero/${org}/connections`),
+  workFeed: (org: string, since?: string) =>
+    getJson<{
+      organizationId: string;
+      tasks: DepartmentTask[];
+      results: DepartmentResult[];
+      newTasks: DepartmentTask[];
+      newResults: DepartmentResult[];
+      serverTime: string;
+    }>(
+      `/api/customer-zero/${org}/work-feed${since ? `?since=${encodeURIComponent(since)}` : ""}`,
     ),
+  results: (org: string) =>
+    getJson<{
+      organizationId: string;
+      results: DepartmentResult[];
+    }>(`/api/customer-zero/${org}/results`),
+  testConnection: (org: string, provider: string) =>
+    postJson<{
+      provider: string;
+      state: ConnectionFiveState;
+      message: string;
+      available: boolean;
+    }>(`/api/customer-zero/${org}/connections/${provider}/test`, {}),
+  capabilities: (org: string) =>
+    getJson<{
+      capabilities: {
+        capability: string;
+        available: boolean;
+        providers: string[];
+      }[];
+    }>(`/api/customer-zero/${org}/capabilities`),
   declareTool: (org: string, toolId: string) =>
     postJson<{ connection: ToolConnectionView }>(
       `/api/customer-zero/${org}/connections/${toolId}/declare`,

@@ -58,7 +58,7 @@ import type {
 
 /** A single transcript event. The portal renders business events as cards. */
 export type CommandCenterEvent =
-  | { kind: "transcript"; role: "user" | "assistant"; content: string }
+  | { kind: "transcript"; role: "user" | "assistant"; content: string; speaker?: "departify" | "elvira" }
   | { kind: "intent_proactive"; intent: string; title: string; message: string }
   | {
       kind: "department_active";
@@ -100,6 +100,11 @@ export type CommandCenterEvent =
   | {
       kind: "dna_suggestion";
       suggestion: { title: string; content: string; fromDepartment: string; confidence: number };
+    }
+  | {
+      kind: "work_state";
+      state: "received" | "delegated" | "analyzing" | "tool_started" | "tool_completed" | "preparing_result" | "completed" | "blocked" | "error";
+      message: string;
     };
 
 /** A work item projected for the CEO. */
@@ -178,7 +183,10 @@ export interface RoutingDecision {
     | "knowledge_query"
     | "remember_fact"
     | "external_tool_query"
-    | "capability_status";
+    | "capability_status"
+    | "meta_product_question"
+    | "department_request"
+    | "system_help_question";
   /** Departments that acted or were considered. Today only `marketing`. */
   readonly departments: readonly string[];
   /** Why this decision was made. */
@@ -215,6 +223,33 @@ const ROUTING_RULES: readonly RoutingRule[] = [
       /^\s*(hola|buenos[ ]?días|buenas|gracias|muchas gracias|hello|hi|thanks|thank you)\s*[.!?]?\s*$/i.test(
         input.message,
       ),
+  },
+  {
+    // Meta questions about Departify itself (model used, how it works,
+    // what departments exist, who Elvira is). They must NOT be
+    // delegated to Marketing — they are answered locally.
+    intent: "meta_product_question",
+    rationale:
+      "The CEO is asking about Departify as a product, not delegating work. Answer locally.",
+    match: (input) =>
+      META_PATTERNS.test(input.message) && !HAS_BUSINESS_CONTEXT(input.message),
+  },
+  {
+    // Help with how to use Departify. Also answered locally.
+    intent: "system_help_question",
+    rationale: "The CEO is asking how to use Departify; help is local.",
+    match: (input) =>
+      SYSTEM_HELP_PATTERNS.test(input.message) && !HAS_BUSINESS_CONTEXT(input.message),
+  },
+  {
+    // "Háblame de Marketing" / "qué puede hacer Marketing" / "tell me
+    // about Marketing" — return a structured department answer, not a
+    // generic delegation to Elvira.
+    intent: "department_request",
+    rationale:
+      "The CEO is asking for a description of an active department; respond locally with the department card.",
+    match: (input) =>
+      DEPARTMENT_REQUEST_PATTERNS.test(input.message) && !HAS_BUSINESS_CONTEXT(input.message),
   },
   {
     intent: "request_approval",
@@ -336,6 +371,40 @@ const STATUS_VERBS =
   /\b(qu[ée] hace|qu[ée] est[áa]n|estado|status|progreso|progress|working on|trabajando|c[óo]mo vamos|c[óo]mo va)\b/i;
 
 /**
+ * Patterns that indicate the CEO is asking about Departify itself
+ * ("qué modelo usas", "cómo funciona", "qué es Departify"). These
+ * must NEVER delegate to Marketing.
+ */
+const META_PATTERNS =
+  /\b(qu[ée]\s+modelo|qu[ée]\s+motor|qu[ée]\s+ia|qu[ée]\s+inteligencia|qu[ée]\s+modelo\s+de\s+lenguaje|qu[ée]\s+llm|qu[ée]\s+gpt|qu[ée]\s+gemini|qu[ée]\s+claude|qu[ée]\s+departamentos?\s+tengo|qu[ée]\s+departamentos?\s+hay|qui[ée]n\s+es\s+elvira|qu[ée]\s+es\s+elvira|qu[ée]\s+es\s+departify|c[óo]mo\s+funciona|c[óo]mo\s+est[áa]\s+hecho|qu[ée]\s+tecnolog[íi]a|what\s+model|what\s+llm|what\s+ai|how\s+does\s+departify\s+work|what\s+is\s+departify|who\s+is\s+elvira|what\s+departments|which\s+departments)\b/i;
+
+/**
+ * Patterns that indicate the CEO is asking how to use the product.
+ * Answered locally with a pointer to the relevant page.
+ */
+const SYSTEM_HELP_PATTERNS =
+  /\b(c[óo]mo\s+(uso|utilizo)|c[óo]mo\s+se\s+usa|c[óo]mo\s+funciona\s+esto|c[óo]mo\s+empezar|c[óo]mo\s+comienzo|por\s+d[óo]nde\s+empiezo|help|ayuda|how\s+(do\s+I|to)\s+use|how\s+do\s+I\s+start|where\s+do\s+I\s+start)\b/i;
+
+/**
+ * "Háblame de X" / "tell me about X" — describe an active department.
+ * Does NOT delegate to Marketing as a request; surfaces structured info.
+ */
+const DEPARTMENT_REQUEST_PATTERNS =
+  /\b(h[áa]blame\s+de|hablame\s+de|h[áa]blame\s+sobre|h[áa]blame\s+acerca\s+de|cu[ée]ntame\s+sobre|cu[ée]ntame\s+de|qu[ée]\s+hace\s+(marketing|ventas|finanzas|operaciones)|tell\s+me\s+about|what\s+does\s+(marketing|sales|finance|operations)\s+do)\b/i;
+
+/**
+ * True when the CEO's message also contains a clear business intent
+ * (analysis, campaign, contact query, Mautic…) — overrides meta
+ * rules. A "qué modelo" within "qué modelo usas para revisar
+ * Mautic" is still a business request.
+ */
+function HAS_BUSINESS_CONTEXT(message: string): boolean {
+  return /\b(revisa|analiza|analizar|contactos?|clientes?|leads?|campañ?a|segmento|crm|mautic|hubspot|salesforce|enviar?|email|publicar?|publicidad|inversion|presupuesto|m[ée]tricas?|analytics|reactivar|reactivaci[óo]n)\b/i.test(
+    message,
+  );
+}
+
+/**
  * Route a CEO message. Pure function. Returns a structured intent that the
  * caller can act on: build a reply, append events, call Marketing when
  * delegating, surface a connection card when needed.
@@ -391,6 +460,12 @@ function buildRuleOutcome(
           "Hello. I'm here. Tell me what you want to achieve and I'll put the team on it.",
         ),
       };
+    case "meta_product_question":
+      return buildMetaProductOutcome(input);
+    case "system_help_question":
+      return buildSystemHelpOutcome(input);
+    case "department_request":
+      return buildDepartmentRequestOutcome(input);
     case "request_approval": {
       const target = input.pendingApprovals[0];
       if (!target) {
@@ -644,6 +719,187 @@ function buildUnknownDepartmentOutcome(input: CommandCenterInput): {
       "Hoy por hoy Departify solo tiene activo Marketing. La parte que describes (finanzas, facturación, cobros o nóminas) aún no está en marcha. Te lo recuerdo en cuanto la habilitemos.",
       "Right now only Marketing is active in Departify. The area you describe (finance, invoicing, payments or payroll) is not yet up. I'll remind you as soon as we enable it.",
     ),
+  };
+}
+
+/**
+ * "Qué modelo usas" / "qué IA hay detrás" / "cómo funciona Departify".
+ * Answered from Departify-owned knowledge — NEVER delegated to
+ * Marketing.
+ */
+function buildMetaProductOutcome(input: CommandCenterInput): {
+  decision: RoutingDecision;
+  reply: string;
+} {
+  const text = input.message.toLowerCase();
+  // Specific common question: "qué modelo usas" / "what model do you use"
+  const isModelQuestion =
+    /\b(qu[ée]\s+modelo|qu[ée]\s+motor|qu[ée]\s+llm|qu[ée]\s+gpt|qu[ée]\s+gemini|qu[ée]\s+claude|what\s+model|which\s+model|what\s+llm)\b/i.test(
+      text,
+    );
+  const isDepartmentsQuestion =
+    /\b(qu[ée]\s+departamentos?\s+(tengo|hay|existen|activos?)|what\s+departments|which\s+departments)\b/i.test(
+      text,
+    );
+  const isElviraQuestion = /\b(qui[ée]n\s+es\s+elvira|qu[ée]\s+es\s+elvira|who\s+is\s+elvira)\b/i.test(
+    text,
+  );
+
+  if (isModelQuestion) {
+    return {
+      decision: {
+        intent: "meta_product_question",
+        departments: [],
+        rationale: "Model question answered locally without delegation.",
+      },
+      reply: t(
+        input.locale,
+        "Trabajo con modelos de IA de primer nivel (Google Vertex AI para el razonamiento del equipo). Lo importante es que tu empresa funciona con datos reales y no inventa respuestas — tú decides qué se ejecuta.",
+        "I work with top-tier AI models (Google Vertex AI for the team's reasoning). The important thing is that your company runs on real data and never invents answers — you decide what gets executed.",
+      ),
+    };
+  }
+
+  if (isDepartmentsQuestion) {
+    return {
+      decision: {
+        intent: "meta_product_question",
+        departments: [],
+        rationale: "Departments list answered locally without delegation.",
+      },
+      reply: t(
+        input.locale,
+        "Hoy Departify tiene un departamento activo: Marketing, con Elvira como Directora. Muy pronto se sumarán Ventas, Finanzas y Operaciones. Cuando estén operativos, los verás aquí mismo.",
+        "Right now Departify has one active department: Marketing, with Elvira as its Director. Sales, Finance and Operations are coming soon. When they're live you'll see them here.",
+      ),
+    };
+  }
+
+  if (isElviraQuestion) {
+    return {
+      decision: {
+        intent: "meta_product_question",
+        departments: [],
+        rationale: "Elvira identity answered locally without delegation.",
+      },
+      reply: t(
+        input.locale,
+        "Elvira es tu Directora de Marketing. Es quien organiza al equipo, prepara planes, solicita aprobaciones y trabaja con las herramientas que la empresa tiene autorizadas (Mautic, Gmail, etc.). No es un chatbot: es una ejecutiva con memoria, contexto y resultados.",
+        "Elvira is your Head of Marketing. She organises the team, prepares plans, requests approvals, and works with the tools the company has authorised (Mautic, Gmail, etc.). She is not a chatbot — she is an executive with memory, context, and results.",
+      ),
+    };
+  }
+
+  // Generic "cómo funciona Departify".
+  return {
+    decision: {
+      intent: "meta_product_question",
+      departments: [],
+      rationale: "Departify overview answered locally without delegation.",
+    },
+    reply: t(
+      input.locale,
+      "Departify funciona como una empresa digital: tú hablas con un Director de área (hoy, Elvira en Marketing), ella prepara un plan, lo ejecuta con las herramientas autorizadas, te pide aprobaciones cuando hace falta y registra la actividad. Tú nunca gestionas claves técnicas ni credenciales: solo pides resultados.",
+      "Departify works like a digital company: you talk to a Department Head (today, Elvira in Marketing), she prepares a plan, executes it with the authorised tools, requests approvals when needed, and records activity. You never manage technical keys or credentials — you just ask for results.",
+    ),
+  };
+}
+
+/**
+ * "Cómo uso Departify" / "ayuda" — short pointer to the relevant
+ * surfaces (chat, conexiones, aprobaciones).
+ */
+function buildSystemHelpOutcome(input: CommandCenterInput): {
+  decision: RoutingDecision;
+  reply: string;
+} {
+  return {
+    decision: {
+      intent: "system_help_question",
+      departments: [],
+      rationale: "Help question answered locally.",
+    },
+    reply: t(
+      input.locale,
+      "Aquí siempre me tienes a mí. Pídeme cosas en lenguaje normal: “revisa los contactos”, “prepara un plan de marketing”, “muéstrame la actividad”. Para conectar herramientas usa Conexiones, y para aprobar lo que Elvira proponga entra en Aprobaciones.",
+      "I'm always here. Just ask in plain language: “review the contacts”, “prepare a marketing plan”, “show me the activity”. Use Connections to connect tools, and Approvals to approve what Elvira proposes.",
+    ),
+  };
+}
+
+/**
+ * "Háblame de Marketing" / "qué puede hacer Marketing". Returns a
+ * structured, business-language description of the active department
+ * without delegating to the engine.
+ */
+function buildDepartmentRequestOutcome(input: CommandCenterInput): {
+  decision: RoutingDecision;
+  reply: string;
+} {
+  // Only Marketing is active today. If the CEO names another department
+  // we fall through to unknown_department.
+  const head = getMarketingHead();
+  const working = input.inflight.length;
+  const pending = input.pendingApprovals.length;
+  const connected = input.connections.filter((c) => c.status === "connected");
+  void head;
+
+  const lines: string[] = [
+    t(
+      input.locale,
+      "Marketing está dirigido por Elvira, tu Directora de Marketing.",
+      "Marketing is led by Elvira, your Head of Marketing.",
+    ),
+    t(
+      input.locale,
+      "Trabaja con los datos reales de tu empresa: analiza contactos, segmentos y campañas de Mautic, prepara planes, propone acciones y registra resultados.",
+      "She works with real company data: she analyses Mautic contacts, segments and campaigns, prepares plans, proposes actions and records results.",
+    ),
+  ];
+  if (working > 0) {
+    lines.push(
+      t(
+        input.locale,
+        `Ahora mismo tiene ${working} ${working === 1 ? "trabajo en curso" : "trabajos en curso"}.`,
+        `She has ${working} ${working === 1 ? "work item in flight" : "work items in flight"} right now.`,
+      ),
+    );
+  }
+  if (pending > 0) {
+    lines.push(
+      t(
+        input.locale,
+        `Y ${pending} ${pending === 1 ? "aprobación pendiente" : "aprobaciones pendientes"} para ti.`,
+        `And ${pending} ${pending === 1 ? "approval waiting for you" : "approvals waiting for you"}.`,
+      ),
+    );
+  }
+  if (connected.length > 0) {
+    const names = connected.map((c) => c.label).join(", ");
+    lines.push(
+      t(
+        input.locale,
+        `Herramientas conectadas: ${names}.`,
+        `Connected tools: ${names}.`,
+      ),
+    );
+  } else {
+    lines.push(
+      t(
+        input.locale,
+        "Aún no hay herramientas externas conectadas. Cuando conectes Mautic u otra, Elvira empezará a usarlas.",
+        "No external tools are connected yet. When you connect Mautic or others, Elvira will start using them.",
+      ),
+    );
+  }
+
+  return {
+    decision: {
+      intent: "department_request",
+      departments: ["marketing"],
+      rationale: "Department description answered locally without engine delegation.",
+    },
+    reply: lines.join(" "),
   };
 }
 

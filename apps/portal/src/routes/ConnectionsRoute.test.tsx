@@ -1,9 +1,10 @@
 /**
- * Phase P-B final correction — /conexiones semantic consistency.
+ * Customer Zero 01 — /conexiones 5-state consistency.
  *
- * A CONNECTED, verified, operational connector must NEVER render copy that
- * claims Departify cannot operate it. Declared tools without a connector show
- * SELECTED semantics, not a fake connection path.
+ * Verified Mautic → "Conectado" + "Conectado mediante configuración
+ * del sistema" + Comprobar acción.
+ * Not connected → "No conectado" + CTA "Activar".
+ * Needs attention → "Necesita atención" + "Revisar conexión".
  */
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -33,7 +34,7 @@ function mockFetch(handler: (url: string) => unknown) {
   );
 }
 
-describe("ConnectionsRoute — semantic consistency", () => {
+describe("ConnectionsRoute — 5-state cards", () => {
   beforeEach(() => {
     window.localStorage.setItem(
       "departify_customer_zero",
@@ -46,20 +47,22 @@ describe("ConnectionsRoute — semantic consistency", () => {
     window.localStorage.clear();
   });
 
-  it("verified CONNECTED Mautic never claims Departify cannot operate it", async () => {
+  it("verified CONNECTED Mautic shows 'Conectado' + config-source + check action", async () => {
     mockFetch(() => ({
-      connections: [
+      connections: [],
+      cards: [
         {
-          toolId: "mautic",
-          label: "Mautic",
-          capability: "crm.contacts",
-          category: "CRM",
-          domains: ["crm", "marketing"],
+          id: "mautic",
+          name: "Mautic",
+          category: "CRM y automatización",
+          logoMark: "M",
+          brandColor: "#f36f21",
           state: "connected",
-          hasState: true,
-          humanLabel: "Conectado",
-          action: null,
+          stateLabel: "Conectado",
+          configSource: "env:mautic",
           verifiedAt: "2026-08-09T00:00:00.000Z",
+          capabilities: [],
+          actionLabel: "Comprobar conexión",
         },
       ],
       unmappedTools: [],
@@ -67,59 +70,67 @@ describe("ConnectionsRoute — semantic consistency", () => {
     mount(<ConnectionsRoute />);
 
     expect(await screen.findByText("Conectado")).toBeInTheDocument();
-    expect(await screen.findByText(/Conexión verificada/i)).toBeInTheDocument();
-    expect(screen.queryByText(/todavía no podemos operar/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/no podemos operar/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/próximamente/i)).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(/Conectado mediante configuración del sistema/i),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /comprobar conexión/i }),
+    ).toBeInTheDocument();
   });
 
-  it("AVAILABLE Gmail offers only a declaration action, never a fake connect", async () => {
+  it("NEEDS_ATTENTION Mautic shows 'Necesita atención' + 'Revisar conexión'", async () => {
     mockFetch(() => ({
-      connections: [
+      connections: [],
+      cards: [
         {
-          toolId: "gmail",
-          label: "Gmail",
-          capability: "email.send",
-          category: "Correo",
-          domains: ["email"],
-          state: "available",
-          hasState: false,
-          humanLabel: "Disponible",
-          action: "prepare",
+          id: "mautic",
+          name: "Mautic",
+          category: "CRM y automatización",
+          logoMark: "M",
+          brandColor: "#f36f21",
+          state: "needs_attention",
+          stateLabel: "Necesita atención",
+          configSource: null,
+          verifiedAt: null,
+          capabilities: [],
+          actionLabel: "Revisar conexión",
         },
       ],
       unmappedTools: [],
     }));
     mount(<ConnectionsRoute />);
 
-    expect(await screen.findByText("Disponible")).toBeInTheDocument();
-    const declare = screen.getByRole("button", { name: /la utilizo/i });
-    expect(declare).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /conectar gmail/i })).not.toBeInTheDocument();
+    expect(await screen.findByText("Necesita atención")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /revisar conexión/i }),
+    ).toBeInTheDocument();
   });
 
-  it("SELECTED Gmail (no connector) shows 'próximamente' and no connection action", async () => {
+  it("NOT_CONNECTED Gmail shows 'No conectado' + 'Activar' (env source present)", async () => {
     mockFetch(() => ({
-      connections: [
+      connections: [],
+      cards: [
         {
-          toolId: "gmail",
-          label: "Gmail",
-          capability: "email.send",
+          id: "gmail",
+          name: "Gmail",
           category: "Correo",
-          domains: ["email"],
-          state: "selected",
-          hasState: true,
-          humanLabel: "Seleccionada",
-          action: null,
+          logoMark: "G",
+          brandColor: "#ea4335",
+          state: "not_connected",
+          stateLabel: "No conectado",
+          configSource: null,
+          verifiedAt: null,
+          capabilities: [],
+          actionLabel: "Configurar",
         },
       ],
       unmappedTools: [],
     }));
     mount(<ConnectionsRoute />);
 
-    expect(await screen.findByText("Seleccionada")).toBeInTheDocument();
-    expect(await screen.findByText(/Conexión con Departify próximamente/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /conectar/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /la utilizo/i })).not.toBeInTheDocument();
+    expect(await screen.findByText("No conectado")).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: /configurar/i }),
+    ).toBeInTheDocument();
   });
 });
