@@ -36,6 +36,7 @@ const PRIMARY: IconEntry[] = [
   { to: "/inicio", label: "Tu empresa", icon: CompanyIcon },
   { to: "/chat", label: "Chat", icon: ChatIcon },
   { to: "/tareas", label: "Tareas", icon: TasksIcon },
+  { to: "/inbox", label: "Inbox", icon: CompanyIcon },
 ];
 
 const SECONDARY: IconEntry[] = [

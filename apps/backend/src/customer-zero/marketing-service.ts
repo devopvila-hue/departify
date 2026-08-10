@@ -969,6 +969,42 @@ function capabilityHumanLabel(
       es: "ejecutar una campaña",
       en: "execute an email campaign",
     },
+    "calendar.read": {
+      es: "leer el calendario",
+      en: "read the calendar",
+    },
+    "calendar.create": {
+      es: "crear un evento en el calendario",
+      en: "create a calendar event",
+    },
+    "calendar.update": {
+      es: "actualizar un evento del calendario",
+      en: "update a calendar event",
+    },
+    "drive.search": {
+      es: "buscar archivos en Drive",
+      en: "search Drive files",
+    },
+    "drive.read": {
+      es: "leer un archivo de Drive",
+      en: "read a Drive file",
+    },
+    "drive.create": {
+      es: "crear un archivo en Drive",
+      en: "create a Drive file",
+    },
+    "inbox.read": {
+      es: "leer el inbox unificado",
+      en: "read the unified inbox",
+    },
+    "inbox.classify": {
+      es: "clasificar un elemento del inbox",
+      en: "classify an inbox item",
+    },
+    "inbox.work.create": {
+      es: "crear trabajo desde el inbox",
+      en: "create work from inbox",
+    },
   };
   const entry = map[capability];
   return locale === "en" ? entry.en : entry.es;

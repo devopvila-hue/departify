@@ -36,6 +36,32 @@ export const GMAIL_SCOPES: readonly string[] = [
   "https://www.googleapis.com/auth/gmail.send",
 ];
 
+/**
+ * Customer Zero 03 — unified Google scopes. The CEO authorizes ONE
+ * Google connection and Departify exposes three business capabilities
+ * (Gmail + Calendar + Drive). Today we still ship the Gmail scopes
+ * only; Calendar + Drive scopes live below for the next round of
+ * Google Cloud verification. They are NEVER requested until the
+ * corresponding capability is required.
+ */
+export const GOOGLE_CALENDAR_SCOPES: readonly string[] = [
+  "https://www.googleapis.com/auth/calendar.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
+];
+
+export const GOOGLE_DRIVE_SCOPES: readonly string[] = [
+  "https://www.googleapis.com/auth/drive.readonly",
+  "https://www.googleapis.com/auth/drive.file",
+];
+
+/** Full scope set the unified Google connection will eventually
+ *  request. Customers Zero 02 / 03 ships only the Gmail subset. */
+export const GOOGLE_FULL_SCOPES: readonly string[] = [
+  ...GMAIL_SCOPES,
+  ...GOOGLE_CALENDAR_SCOPES,
+  ...GOOGLE_DRIVE_SCOPES,
+];
+
 /* ----------------------------------------------------------------------------
  * Normalized types.
  * --------------------------------------------------------------------------*/

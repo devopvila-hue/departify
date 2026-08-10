@@ -25,7 +25,7 @@
  * model context.
  */
 
-export type CredentialProvider = "mautic" | "gmail" | "resend";
+export type CredentialProvider = "mautic" | "gmail" | "resend" | "google";
 
 export interface CredentialSource {
   /** Where the credential ultimately comes from. */
@@ -89,9 +89,10 @@ export function resolveCredentials(
   if (input.provider === "resend") {
     return resolveResendFromEnv();
   }
-  // gmail: tokens come from the durable per-org token store, not env.
-  // Today that store is not implemented; the resolver returns
-  // available=false so callers surface the OAuth connect flow.
+  // gmail + google: tokens come from the durable per-org token
+  // store, not env. Today that store is not implemented; the
+  // resolver returns available=false so callers surface the OAuth
+  // connect flow.
   return { available: false, source: "none", label: `${input.provider}:oauth_required` };
 }
 

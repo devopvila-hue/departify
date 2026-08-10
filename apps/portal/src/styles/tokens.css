@@ -2538,3 +2538,56 @@ select {
   background: var(--dfy-color-accent);
   transition: width 300ms var(--dfy-ease-smooth);
 }
+
+/* Customer Zero 03 — Inbox route */
+.dfy-inbox-actions {
+  margin-top: 14px;
+}
+.dfy-inbox-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 16px;
+}
+.dfy-inbox-filter {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--dfy-color-border, #e5e5e5);
+  background: var(--dfy-color-surface);
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+.dfy-inbox-filter--active {
+  background: var(--dfy-color-accent, #3b82f6);
+  color: #fff;
+  border-color: var(--dfy-color-accent, #3b82f6);
+}
+.dfy-inbox-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.dfy-inbox-item__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.dfy-inbox-item__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dfy-inbox-item__from {
+  margin: 4px 0 8px;
+}
+.dfy-inbox-item__preview {
+  color: var(--dfy-color-text);
+  line-height: 1.5;
+}
+.dfy-inbox-item__hint {
+  margin-top: 10px;
+  color: var(--dfy-color-accent, #3b82f6);
+  font-size: 0.86rem;
+  font-style: italic;
+}

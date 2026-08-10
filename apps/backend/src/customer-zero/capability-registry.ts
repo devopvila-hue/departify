@@ -52,7 +52,16 @@ export type BusinessCapability =
   | "email.delivery.read"
   | "email.bounce.read"
   | "email.campaign.read"
-  | "email.campaign.execute";
+  | "email.campaign.execute"
+  | "calendar.read"
+  | "calendar.create"
+  | "calendar.update"
+  | "drive.search"
+  | "drive.read"
+  | "drive.create"
+  | "inbox.read"
+  | "inbox.classify"
+  | "inbox.work.create";
 
 export interface CapabilityDescriptor {
   readonly id: BusinessCapability;
@@ -267,6 +276,81 @@ export const CAPABILITY_REGISTRY: Readonly<Record<BusinessCapability, Capability
       "Envía una campaña de email aprobada. Estructuralmente requiere campaign.status === 'approved'.",
     provider: "resend",
     toolIds: ["email_delivery.send_bulk"],
+  },
+  "calendar.read": {
+    id: "calendar.read",
+    name: "Read calendar events",
+    nameEs: "Leer eventos del calendario",
+    description: "Lee los eventos próximos del calendario conectado.",
+    provider: "google",
+    toolIds: ["google.calendar.list", "google.calendar.get"],
+  },
+  "calendar.create": {
+    id: "calendar.create",
+    name: "Create calendar event",
+    nameEs: "Crear evento de calendario",
+    description:
+      "Crea un evento en el calendario del CEO con intención de negocio explícita.",
+    provider: "google",
+    toolIds: ["google.calendar.create"],
+  },
+  "calendar.update": {
+    id: "calendar.update",
+    name: "Update calendar event",
+    nameEs: "Actualizar evento de calendario",
+    description: "Actualiza un evento existente del calendario.",
+    provider: "google",
+    toolIds: ["google.calendar.update"],
+  },
+  "drive.search": {
+    id: "drive.search",
+    name: "Search Drive files",
+    nameEs: "Buscar archivos en Drive",
+    description: "Busca archivos por nombre o metadatos en el Drive conectado.",
+    provider: "google",
+    toolIds: ["google.drive.search"],
+  },
+  "drive.read": {
+    id: "drive.read",
+    name: "Read Drive file",
+    nameEs: "Leer archivo de Drive",
+    description: "Lee metadatos + contenido permitido de un archivo.",
+    provider: "google",
+    toolIds: ["google.drive.read"],
+  },
+  "drive.create": {
+    id: "drive.create",
+    name: "Create Drive file",
+    nameEs: "Crear archivo en Drive",
+    description:
+      "Crea un documento en Drive a través de la frontera segura de Departify.",
+    provider: "google",
+    toolIds: ["google.drive.create"],
+  },
+  "inbox.read": {
+    id: "inbox.read",
+    name: "Read unified inbox",
+    nameEs: "Leer inbox unificado",
+    description: "Lee los elementos normalizados del inbox unificado.",
+    provider: "google",
+    toolIds: ["inbox.read"],
+  },
+  "inbox.classify": {
+    id: "inbox.classify",
+    name: "Classify inbox item",
+    nameEs: "Clasificar elemento del inbox",
+    description: "Determina la categoría de negocio de un elemento.",
+    provider: "google",
+    toolIds: ["inbox.classify"],
+  },
+  "inbox.work.create": {
+    id: "inbox.work.create",
+    name: "Create work from inbox",
+    nameEs: "Crear trabajo desde inbox",
+    description:
+      "Convierte un elemento del inbox en un DepartmentTask durable.",
+    provider: "google",
+    toolIds: ["inbox.work.create"],
   },
 };
 
