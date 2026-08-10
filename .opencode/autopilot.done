@@ -1,43 +1,47 @@
-# AUTOPILOT DONE — Post-OAuth Gmail Operational Recovery + Central Chat Reality
+# AUTOPILOT DONE — Gmail stuck in "CONECTANDO…" — root cause found and fixed
 
-## Resumen
+## LAST SUCCESSFUL PRODUCTION CHECKPOINT:
+`POST /api/customer-zero/{org}/connections/gmail/connect 200` (2026-08-10 20:09:45 UTC) —
+the OAuth state nonce was created and persisted durably (2 nonces in `oauth_state`).
 
-El bucle "Google consent OK → vuelta → No conectado" queda roto en su causa raíz y
-el flujo completo de Gmail operativo + chat real queda implementado, testeado y
-desplegado en producción.
+## FIRST FAILED/MISSING PRODUCTION CHECKPOINT:
+`google_oauth_callback_received` — the callback POST `/connections/gmail/callback` NEVER
+reached the backend. Railway HTTP logs show zero callback requests (only two `connect 200`);
+both nonces remain unconsumed; `google_oauth_tokens` is empty; the gmail tool state is
+"selected". The handshake stopped before the first backend callback checkpoint.
 
-## Causa raíz exacta del bucle (con evidencia)
+## ROOT CAUSE:
+1. **Portal (primary)**: `GoogleOAuthCallbackRoute` was nested inside `ShellGate`. When the
+   browser returns from Google consent, ShellGate can redirect the callback page to "/"
+   (auth / org / overview gate) before the route mounts, silently dropping `code+state`.
+   The exchange POST is therefore never fired → the backend never completes the handshake.
+2. **Backend (secondary)**: no path transitioned a connection out of `connecting` when the
+   callback never arrives — the session connection stayed `connecting` forever and the
+   durable state stayed `selected` with no expiry, producing the indefinite
+   "CONECTANDO…" card.
 
-1. **OAuth state store en memoria del proceso** (`gmailOAuthStateStore` = Map). En
-   Railway el callback puede caer en otra réplica/reinicio → nonce no resuelto →
-   `invalid_state` 401 → "no conectado" → bucle silencioso. **FIX**: tabla durable
-   `oauth_state` (Supabase) + `SupabaseOAuthStateStore`, cableado en boot, con
-   fallback in-memory para tests.
-2. **La versión desplegada (52ca47c) guardaba tokens solo en memoria** y marcaba
-   "connected" sin verificar Gmail. **FIX**: pipeline completo desplegado
-   (google-tokens.ts): store durable Supabase, granted scopes, preservación de
-   refresh token, probe operativo real, write→read-back.
-3. **Migraciones no aplicadas**: `google_oauth_tokens` no existía en Supabase de
-   producción (404). **FIX**: `supabase db push` aplicó inbox, compaction,
-   google_oauth_tokens y oauth_state (verificado con 200 y smoke write→read-back OK).
-4. **Chat**: "hola" producía pills "Mensaje recibido"/"Listo" y la tarjeta
-   Elvira-ready tras cada mensaje. **FIX**: pills solo con trabajo real delegado,
-   proactividad solo grounded, pregunta de email → dispatch Gmail → lectura real.
+## FIXES (commit 6ae7bb0, deployed)
+- Portal: callback route moved to a TOP-LEVEL route outside ShellGate (exchange always
+  fires); org id falls back to the stored localStorage value.
+- Backend state machine (invariant: connecting → terminal always):
+  - every callback failure path transitions the connection to blocked/needs_connection
+    with an actionable reason and persists it;
+  - a stale-handshake reaper in `requireSession` verifies the OAuth nonce is alive for
+    any "connecting" Google connection and reaps missing/expired/consumed ones;
+  - bounded 15s timeouts on all outbound Google calls (exchange, userinfo, probe,
+    refresh); probe timeouts classified as `gmail_probe_timeout`;
+  - OAuth validation codes stay 401; other coded failures stay 500.
+- Tests: probe 403 (C), probe timeout (D), readback failure (E), callback exception
+  never leaves connecting (F), Z2 updated to the no-connecting-forever invariant.
 
-## Validaciones
-- Monorepo: lint / typecheck / test / build / check VERDES (36 paquetes; backend 442/442).
-- 27 tests nuevos A–Z (customer-zero-05-post-oauth): granted scopes, capability
-  mapping, refresh preservation, org isolation, summaries sin tokens, state store
-  durable (incl. simulación cross-instancia), N/O/P/Q/R/S/T/U/V/W/X/M.
-- Deploy Railway departify-api SUCCESS (commit 686ebdb); boot logs confirman los dos
-  stores durables; health 200. Netlify portal con el nuevo copy desplegado.
-- Smoke contra Supabase de PRODUCCIÓN: oauth_state y google_oauth_tokens
-  write→read-back OK.
+## VALIDATION
+- Backend 446/446, portal 80/80, lint / typecheck / build / check green (36 packages).
+- Railway deploy SUCCESS (6ae7bb0); durable stores wired; health 200; portal bundle
+  updated (top-level callback route verified in the deployed bundle).
+- Production Supabase verified: founder org gmail state "selected" (terminal/honest),
+  expired nonces — the reaper cleans the stale session on the next request.
 
 ## FINAL STATUS
-**READY FOR FOUNDER HUMAN VALIDATION** — no PASS: la validación real de Gmail
-requiere la cuenta/browser del founder (pasos exactos en WORKLOG, sección INFORME
-FINAL punto 33).
-
-## Commit
-686ebdb fix(customer-zero): complete Gmail operational path and real chat responses
+**READY FOR FOUNDER HUMAN VALIDATION** — the next Google consent attempt must complete
+the exchange (the callback now always fires and the backend always lands on a terminal
+state). Real Gmail read requires the founder's account/browser.

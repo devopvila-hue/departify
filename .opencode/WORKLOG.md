@@ -115,6 +115,51 @@ typecheck OK) y escribir la suite A–Z + arreglar la tarjeta Elvira-ready en el
   oauth_state (verificadas con 200).
 - PENDIENTE: gates del monorepo, commit, push, verificación de deploy, informe final.
 
+## Sesión 4 (2026-08-10) — Gmail atascado en "CONECTANDO…" (validación live del founder)
+
+### Diagnóstico con evidencia de PRODUCCIÓN (sin especulación)
+
+**LAST SUCCESSFUL PRODUCTION CHECKPOINT:**
+`POST /api/customer-zero/{org}/connections/gmail/connect 200` (20:09:45 UTC) — el nonce
+se creó y persistió durablemente (2 nonces en oauth_state: 20:07:48 y 20:09:44).
+
+**FIRST FAILED/MISSING PRODUCTION CHECKPOINT:**
+`google_oauth_callback_received` — el POST `/connections/gmail/callback` **NUNCA llegó**
+al backend. Evidencia: 0 requests de callback en los HTTP logs de Railway (solo 2
+connect 200 en 4h); nonces sin consumir; `google_oauth_tokens` vacío; tool state gmail
+"selected".
+
+**ROOT CAUSE:**
+1. **Portal**: `GoogleOAuthCallbackRoute` estaba DENTRO de `ShellGate`. ShellGate puede
+   redirigir la página del callback a "/" (gate de auth/org/overview) ANTES de montar la
+   ruta → code+state se descartan silenciosamente → el exchange nunca se dispara.
+2. **Backend**: no existía ningún camino que sacara una conexión de status "connecting"
+   cuando el callback no llega (conexión de sesión quedaba "connecting" para siempre;
+   durable quedaba "selected").
+
+### Fixes aplicados (commit 6ae7bb0)
+- **Portal**: callback movido a ruta TOP-LEVEL (fuera de ShellGate) → el exchange SIEMPRE
+  se dispara; fallback de org vía `readStoredOrganizationId()` si el contexto no sincronizó.
+- **Backend state machine** (invariante: connecting → terminal siempre):
+  - Todos los fallos del callback transicionan la conexión a blocked/needs_connection
+    con motivo accionable y persisten (antes: 401/500 sin tocar el estado).
+  - Reaper de handshakes huérfanos en `requireSession`: cualquier conexión Google en
+    "connecting" cuyo nonce no exista/esté caducado/consumido → terminal + persist.
+  - Timeouts acotados (15s) en TODAS las llamadas externas a Google (exchange, userinfo,
+    probe, refresh) — un cuelgue externo ya no puede dejar la conexión en "connecting";
+    timeouts del probe clasificados como `gmail_probe_timeout`.
+  - Códigos de validación OAuth (invalid_state/org/user/replay) → 401; otros códigos
+    (credential_persisted_but_not_readable) → 500.
+- **Tests nuevos**: C (probe 403), D (probe timeout), E (readback falla), F (excepción en
+  callback nunca deja connecting), Z2 actualizado al invariante.
+
+### Validaciones
+- Backend 446/446, portal 80/80, lint/typecheck/build/check verdes (36 paquetes).
+- Deploy Railway SUCCESS (6ae7bb0); stores durables cableados; health 200; bundle portal
+  actualizado (ruta top-level).
+- Estado durable del founder verificado en Supabase prod: gmail "selected" (terminal
+  honesto), nonces caducados → el reaper limpiará la sesión en la próxima request.
+
 ## Sesión 3 (2026-08-10) — CIERRE
 
 - Gates completos del monorepo VERDES (36 paquetes): `pnpm -r lint`, `pnpm -r typecheck`,
