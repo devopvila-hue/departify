@@ -654,6 +654,14 @@ export const api = {
       `/api/customer-zero/${org}/inbox/sync`,
       body ?? {},
     ),
+  inboxToWork: (org: string, itemId: string, capability?: string) =>
+    postJson<{
+      organizationId: string;
+      task: { id: string; title: string; status: string };
+      item: InboxItemView;
+    }>(`/api/customer-zero/${org}/inbox/${itemId}/work`, {
+      ...(capability ? { capability } : {}),
+    }),
   testConnection: (org: string, provider: string) =>
     postJson<{
       provider: string;

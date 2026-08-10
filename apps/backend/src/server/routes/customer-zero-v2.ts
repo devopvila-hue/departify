@@ -108,6 +108,7 @@ import { isCapabilityAvailable } from "../../customer-zero/capability-registry.j
 import {
   InMemoryDepartmentWorkStore,
   checkReplyForUnsupportedPromises,
+  type DepartmentWorkCapability,
   type DepartmentWorkStore,
 } from "../../customer-zero/department-work.js";
 import { DepartmentWorkExecutor } from "../../customer-zero/department-work-executor.js";
@@ -710,6 +711,71 @@ export async function registerCustomerZeroV2Routes(
         return reply.code(404).send({ error: "inbox_item_not_found" });
       }
       return { organizationId, item };
+    },
+  );
+
+  // CZ03 — Inbox → work bridge. Converts a classified InboxItem into a durable
+  // DepartmentTask (reusing the existing work store + status lifecycle). The
+  // item records `relatedWorkItemId` + state `in_work` so the CEO can follow
+  // the work from /tareas and the approval flow continues unchanged. No new
+  // inbox runtime — the existing task/approval/result infrastructure owns the
+  // work once created.
+  server.post<{
+    Params: { organizationId: string; itemId: string };
+    Body: { capability?: string; note?: string };
+  }>(
+    "/api/customer-zero/:organizationId/inbox/:itemId/work",
+    async (request, reply) => {
+      const { organizationId, itemId } = request.params;
+      await requireSession(organizationId, deps);
+      const item = await inboxStore.get(itemId);
+      if (!item || item.organizationId !== organizationId) {
+        return reply.code(404).send({ error: "inbox_item_not_found" });
+      }
+      const categoryLabel: Record<string, string> = {
+        lead: "Oportunidad de cliente",
+        customer_question: "Consulta de cliente",
+        campaign_response: "Respuesta de campaña",
+        support: "Solicitud de soporte",
+        administrative: "Asunto administrativo",
+        unknown: "Mensaje",
+      };
+      const title = `${categoryLabel[item.category] ?? "Mensaje"}: ${item.subject || "(sin asunto)"}`;
+      const summary = `De ${item.sender.email} — ${item.preview || item.subject || "mensaje del inbox unificado"}`;
+      const workStore = getWorkStore();
+      const requestedCapability = request.body?.capability;
+      const capability: DepartmentWorkCapability =
+        requestedCapability &&
+        ["crm.contacts.list", "crm.contacts.summary", "crm.segments.list", "crm.campaigns.list", "results.publish", "memory.remember"].includes(requestedCapability)
+          ? (requestedCapability as DepartmentWorkCapability)
+          : "results.publish";
+      const task = await workStore.createTask({
+        organizationId,
+        departmentId: item.departmentId ?? "marketing",
+        objectiveId: null,
+        requestedBy: "ceo",
+        title,
+        summary,
+        capability,
+        toolId: "inbox_work",
+        status: "queued",
+        statusMessage: "Trabajo creado desde el inbox unificado.",
+        progress: 0,
+        requiredCapabilities: [],
+        startedAt: null,
+        completedAt: null,
+        resultId: null,
+        errorCode: null,
+        errorMessage: null,
+        timeoutMs: 60_000,
+      });
+      await inboxStore.setRelatedWorkItem(item.id, task.id);
+      const updated = await inboxStore.get(item.id);
+      return {
+        organizationId,
+        task,
+        item: updated,
+      };
     },
   );
 
