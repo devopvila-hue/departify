@@ -115,5 +115,107 @@ typecheck OK) y escribir la suite A–Z + arreglar la tarjeta Elvira-ready en el
   oauth_state (verificadas con 200).
 - PENDIENTE: gates del monorepo, commit, push, verificación de deploy, informe final.
 
+## Sesión 3 (2026-08-10) — CIERRE
+
+- Gates completos del monorepo VERDES (36 paquetes): `pnpm -r lint`, `pnpm -r typecheck`,
+  `pnpm test` (backend 442/442), `pnpm -r build`, `pnpm check`.
+- Commit `686ebdb` "fix(customer-zero): complete Gmail operational path and real chat responses"
+  (26 archivos, +3093/−441). Push a origin/main OK.
+- Deploy Railway departify-api SUCCESS (commit 686ebdb); logs de boot confirman:
+  `[google-oauth] durable Supabase token store wired` y
+  `[google-oauth] durable Supabase oauth-state store wired`.
+- Netlify portal: bundle contiene el nuevo copy ("sesión ha caducado") → deploy vivo.
+- Smoke test contra Supabase de PRODUCCIÓN: `oauth_state` write→read-back OK + consume OK;
+  `google_oauth_tokens` write→read-back OK + scopes roundtrip OK.
+- `api.departify.app/health` 200; `/api/.../connections` sin auth → 401 (correcto).
+
+### INFORME FINAL (33 puntos)
+
+1. **RECOVERY CHECKPOINT (lo que dejó Claude)**: working tree con pipeline post-OAuth
+   casi completo sin commitear (google-tokens.ts durable, probe, scopes granted,
+   dispatch email en chat, fix hola/pills, fix Elvira) + migración google_oauth_tokens.
+   Backend 415/415 verde. Faltaban: tests A–Z, state store durable, migraciones aplicadas,
+   deploy, chat reality verificado.
+2. **Root cause "Gmail EN PREPARACIÓN"**: (a) la tarjeta era el evento connection_need
+   del opening/proactividad que se re-emitía tras cada mensaje; (b) el estado real de
+   conexión vivía en memoria y la UI no compartía una única fuente de verdad.
+3. **Punto exacto de fallo post-OAuth (producción)**: el OAuth state store era un `Map`
+   en memoria del proceso; en Railway (replicas/restarts) el callback no resolvía el nonce
+   → `invalid_state` 401 → el portal mostraba error → Gmail "no conectado" → bucle.
+   Además la versión desplegada (52ca47c) persistía tokens SOLO en memoria y la tabla
+   `google_oauth_tokens` no existía en Supabase de producción.
+4. **Granted scopes**: se parsean del token response real (mergeTokenExchange) y
+   mapean a capacidades existentes (GMAIL_SCOPE_TO_CAPABILITY / gmailCapabilitiesFromScopes).
+5. **Credential storage before**: memoria del proceso (gmailTokenStore Map) en 52ca47c.
+6. **Credential storage after**: Supabase `google_oauth_tokens` (org+user+provider),
+   service-role, RLS block-all; fallback in-memory solo para tests/dev.
+7. **Refresh token reconnect**: mergeTokenExchange preserva el token existente si Google
+   omite el nuevo (incl. "" tratado como ausente); nunca sobrescribe con null/undefined/vacío.
+8. **Org/user isolation**: claves (org,user) + listForOrg scoped + tests K/Y + RLS.
+9. **Operational probe**: `gmail.users.getProfile` tras el exchange; operational solo si
+   probe OK + refresh token persistido; write→read-back obligatorio con código
+   credential_persisted_but_not_readable.
+10. **Connection state source of truth**: store durable de tokens (google_oauth_tokens)
+    + tool state durable (SupabaseToolStateStore); /conexiones y chat derivan de ahí.
+11. **/conexiones behavior**: tras callback OK → Gmail Conectado; sobrevive reload/restart;
+    si el probe falla → estado bloqueado con motivo accionable.
+12. **Central Chat connection-state**: pregunta de email sin conexión → "Gmail todavía no
+    está conectado. Ve a Conexiones…" (accionable); con conexión → lee Gmail real.
+13. **Gmail capability mapping**: gmail.readonly → email.identity/context/search/thread.read;
+    gmail.compose → email.draft; gmail.send → email.send.personal.
+14. **Real Gmail read path**: processCeoMessage → isEmailQuestion → hasOperationalGoogleIdentityForOrg
+    → runGmailRead → GmailAdapter.searchMessages → resumen grounded en español.
+15. **"hola" root cause**: routing greeting existía, pero los pills "Mensaje recibido"/"Listo"
+    se emitían siempre (workStatesForTurn) y la proactividad Elvira se re-emitía por turno.
+16. **"hola" fix**: workStatesForTurn → [] si no hay trabajo delegado; respuesta
+    conversacional real del routing; transcript event siempre presente.
+17. **workflow-event fix**: eventos por turno = solo transcript + work states reales;
+    el opening proactivo se sirve SOLO en /command-center/opening.
+18. **Elvira fake-proactivity fix**: buildProactiveOpening solo emite la tarjeta con
+    objetivo/trabajo grounded; nunca "Elvira ya está lista…" tras hablar el CEO.
+19. **Conversation/session regression**: Sessions V1 intactas (tests de 5 activas,
+    archivo, compactación, aislamiento org siguen verdes — customer-zero-04).
+20. **Files changed**: 26 (ver commit 686ebdb). Clave: google-tokens.ts, oauth-state.ts,
+    gmail-adapter.ts, credential-resolver.ts, customer-zero-v2.ts, command-center.ts,
+    chat-response-enrichment.ts, main.ts, portal GoogleOAuthCallbackRoute.tsx + api.ts.
+21. **Migrations**: 20260810150000_google_oauth_tokens.sql + 20260810160000_oauth_state_durable.sql
+    (nuevas); aplicadas a producción junto con inbox+compaction pendientes.
+22. **Tests added/modified**: customer-zero-05-post-oauth.test.ts (27 nuevos); modificados
+    oauth-routes, canonical-redirect, customer-zero-01/02/03, context-readiness (timeouts).
+23. **Test totals**: backend 442/442 (35 ficheros); monorepo completo verde.
+24. **lint**: `pnpm -r lint` VERDE.
+25. **typecheck**: `pnpm -r typecheck` VERDE.
+26. **build**: `pnpm -r build` VERDE.
+27. **pnpm check**: VERDE (36/36 paquetes).
+28. **commit**: 686ebdb en main.
+29. **push/deployment**: push origin/main OK; Railway departify-api SUCCESS (686ebdb);
+    Netlify portal bundle con el nuevo copy; health 200.
+30. **VALIDATED**: autenticación/arranque en producción (stores durables cableados),
+    health, deploy, smoke Supabase (write→read-back de ambas tablas), tests A–Z,
+    bundle portal. NO validado Gmail real (requiere cuenta/browser del founder).
+31. **NOT VALIDATED**: flujo real de consentimiento de Google de extremo a extremo
+    (requiere el browser/Google del founder), lectura real de su bandeja, continuidad
+    conversacional real.
+32. **BLOCKED**: nada bloqueante. Nota: el tab del founder mostraba 401 en work-feed
+    (token Supabase caducado) — el portal ahora sugiere re-login en el callback.
+33. **EXACT FOUNDER MANUAL TEST**: (abajo)
+
+### FINAL STATUS: READY FOR FOUNDER HUMAN VALIDATION
+(Nunca PASS: la validación real de Gmail requiere la cuenta/browser del founder.)
+
+#### EXACT FOUNDER MANUAL TEST
+1. Abre https://app.departify.app y entra (si ves 401 repetidos, cierra sesión y vuelve a entrar).
+2. Ve a /conexiones.
+3. Gmail → Configurar.
+4. Completa el consentimiento de Google.
+5. Al volver: Gmail debe mostrar **Conectado** (si falla, verás un mensaje con la fase exacta).
+6. Recarga el navegador: Gmail sigue **Conectado**.
+7. Abre /chat y escribe: **¿Tengo algún correo importante?**
+8. Departify debe responder con correos reales de la bandeja (remitente/asunto).
+9. Escribe: **¿Cuáles debería contestar primero?** → continuidad conversacional.
+10. Escribe: **hola** → respuesta conversacional (no solo tarjetas "Mensaje recibido"/"Listo").
+11. Reinicio del backend (deploy) → Gmail sigue conectado.
+
+
 
 

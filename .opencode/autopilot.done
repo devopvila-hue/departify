@@ -1,0 +1,43 @@
+# AUTOPILOT DONE — Post-OAuth Gmail Operational Recovery + Central Chat Reality
+
+## Resumen
+
+El bucle "Google consent OK → vuelta → No conectado" queda roto en su causa raíz y
+el flujo completo de Gmail operativo + chat real queda implementado, testeado y
+desplegado en producción.
+
+## Causa raíz exacta del bucle (con evidencia)
+
+1. **OAuth state store en memoria del proceso** (`gmailOAuthStateStore` = Map). En
+   Railway el callback puede caer en otra réplica/reinicio → nonce no resuelto →
+   `invalid_state` 401 → "no conectado" → bucle silencioso. **FIX**: tabla durable
+   `oauth_state` (Supabase) + `SupabaseOAuthStateStore`, cableado en boot, con
+   fallback in-memory para tests.
+2. **La versión desplegada (52ca47c) guardaba tokens solo en memoria** y marcaba
+   "connected" sin verificar Gmail. **FIX**: pipeline completo desplegado
+   (google-tokens.ts): store durable Supabase, granted scopes, preservación de
+   refresh token, probe operativo real, write→read-back.
+3. **Migraciones no aplicadas**: `google_oauth_tokens` no existía en Supabase de
+   producción (404). **FIX**: `supabase db push` aplicó inbox, compaction,
+   google_oauth_tokens y oauth_state (verificado con 200 y smoke write→read-back OK).
+4. **Chat**: "hola" producía pills "Mensaje recibido"/"Listo" y la tarjeta
+   Elvira-ready tras cada mensaje. **FIX**: pills solo con trabajo real delegado,
+   proactividad solo grounded, pregunta de email → dispatch Gmail → lectura real.
+
+## Validaciones
+- Monorepo: lint / typecheck / test / build / check VERDES (36 paquetes; backend 442/442).
+- 27 tests nuevos A–Z (customer-zero-05-post-oauth): granted scopes, capability
+  mapping, refresh preservation, org isolation, summaries sin tokens, state store
+  durable (incl. simulación cross-instancia), N/O/P/Q/R/S/T/U/V/W/X/M.
+- Deploy Railway departify-api SUCCESS (commit 686ebdb); boot logs confirman los dos
+  stores durables; health 200. Netlify portal con el nuevo copy desplegado.
+- Smoke contra Supabase de PRODUCCIÓN: oauth_state y google_oauth_tokens
+  write→read-back OK.
+
+## FINAL STATUS
+**READY FOR FOUNDER HUMAN VALIDATION** — no PASS: la validación real de Gmail
+requiere la cuenta/browser del founder (pasos exactos en WORKLOG, sección INFORME
+FINAL punto 33).
+
+## Commit
+686ebdb fix(customer-zero): complete Gmail operational path and real chat responses
