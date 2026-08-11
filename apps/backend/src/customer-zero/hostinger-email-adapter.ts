@@ -71,6 +71,11 @@ interface HostingerMailbox {
   readonly address: string;
 }
 
+interface HostingerFolder {
+  readonly name: string;
+  readonly path: string;
+}
+
 interface HostingerApiOperation {
   readonly name: string;
   readonly method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -135,6 +140,7 @@ export class HostingerEmailAdapter {
   private sessionId: string | null = null;
   private mapping: HostingerToolMapping | null = null;
   private mailboxes: readonly HostingerMailbox[] | null = null;
+  private readonly foldersByMailbox = new Map<string, readonly HostingerFolder[]>();
   private operations: readonly HostingerApiOperation[] | null = null;
 
   constructor(options?: Partial<HostingerTransportOptions>) {
@@ -292,6 +298,9 @@ export class HostingerEmailAdapter {
     readonly bodyText: string;
     readonly to?: string;
     readonly subject?: string;
+    /** Hostinger's sendEmail operation uses the source UID for native replies. */
+    readonly messageUid?: string;
+    readonly sourceFolder?: string;
   }): Promise<{ readonly providerMessageId: string; readonly sentAt: string }> {
     const mapping = this.mapping ?? (await this.discover());
     const tool = mapping.capabilities["email.reply"]
@@ -300,6 +309,8 @@ export class HostingerEmailAdapter {
     if (tool?.name === "email_call_api_write" || (!tool && mapping.tools.some((candidate) => candidate.name === "email_call_api_write"))) {
       return this.sendViaApiProxy({
         messageId: input.messageId,
+        ...(input.messageUid ? { messageUid: input.messageUid } : {}),
+        ...(input.sourceFolder ? { sourceFolder: input.sourceFolder } : {}),
         to: input.to ? [input.to] : [],
         subject: input.subject ?? "",
         bodyText: input.bodyText,
@@ -328,6 +339,8 @@ export class HostingerEmailAdapter {
     readonly subject: string;
     readonly bodyText: string;
     readonly messageId?: string;
+    readonly messageUid?: string;
+    readonly sourceFolder?: string;
   }): Promise<{ readonly providerMessageId: string; readonly sentAt: string }> {
     const mapping = this.mapping ?? (await this.discover());
     const writeTool = mapping.tools.find((tool) => tool.name === "email_call_api_write");
@@ -337,6 +350,12 @@ export class HostingerEmailAdapter {
     const mailbox = (await this.listMailboxRecords())[0];
     if (!mailbox) throw new HostingerEmailError("MCP_TOOL_CALL_FAILED", "Hostinger no tiene un buzón disponible.");
     const pathParams = buildOperationPathParams(operation.path, mailbox.resourceId, input.messageId);
+    if (input.messageId && !input.messageUid) {
+      throw new HostingerEmailError(
+        "INVALID_REQUEST",
+        "Hostinger necesita el UID del correo original para responder sin perder el hilo.",
+      );
+    }
     const response = await this.callApi(
       writeTool,
       operation.method,
@@ -350,15 +369,26 @@ export class HostingerEmailAdapter {
         body: input.bodyText,
         bodyText: input.bodyText,
         text: input.bodyText,
-        messageId: input.messageId,
-        id: input.messageId,
+        ...(input.messageId ? { messageId: input.messageId, id: input.messageId } : {}),
+        ...(input.messageUid
+          ? {
+              inReplyTo: {
+                folder: input.sourceFolder ?? "INBOX",
+                uid: toNumericUid(input.messageUid),
+              },
+            }
+          : {}),
       },
     );
     assertSuccessfulApiResponse(response);
     const sentAt = new Date(this.now()).toISOString();
     const directId = extractString(apiBody(response), ["messageId", "message_id", "messageID", "id", "uid"]);
     if (directId) return { providerMessageId: directId, sentAt };
-    const verified = await this.findSentMessage(input.to, input.subject, this.now() - 30_000);
+    const verified = await this.verifySentMessage({
+      recipients: input.to,
+      subject: input.subject,
+      afterMs: this.now() - 60_000,
+    });
     if (!verified) {
       throw new HostingerEmailError("PROVIDER_ACCEPTED_UNVERIFIED", "Hostinger aceptó el envío, pero no se pudo verificar en Enviados.");
     }
@@ -375,24 +405,70 @@ export class HostingerEmailAdapter {
     if (!readTool || readTool.name !== "email_call_api_read") return null;
     const wantedRecipients = recipients.map((value) => value.toLowerCase());
     for (const mailbox of await this.listMailboxRecords()) {
+      const sentFolder = await this.findSentFolder(mailbox);
+      if (!sentFolder) continue;
       const response = await this.callApi(
         readTool,
         "GET",
         "/api/v1/mailboxes/{mailboxResourceId}/folders/{folder}/messages",
-        { mailboxResourceId: mailbox.resourceId, folder: "SENT" },
+        { mailboxResourceId: mailbox.resourceId, folder: sentFolder.path },
         { page: 1, perPage: 20, sort: "-uid" },
       );
       assertSuccessfulApiResponse(response);
       const candidates = normalizeMessages(apiBody(response)).filter((message) => {
         const timestamp = Date.parse(message.sentAt ?? message.receivedAt);
         if (!Number.isFinite(timestamp) || timestamp < afterMs) return false;
-        if (subject && message.subject !== subject) return false;
+        if (subject && normalizeSubject(message.subject) !== normalizeSubject(subject)) return false;
         const messageRecipients = message.to.map((address) => address.email.toLowerCase());
         return wantedRecipients.length === 0 || wantedRecipients.some((recipient) => messageRecipients.includes(recipient));
       });
       if (candidates[0]) return candidates[0];
     }
     return null;
+  }
+
+  /**
+   * Re-checks an accepted send without issuing another provider mutation.
+   * The bounded poll is deliberately small: an ambiguous operation is never
+   * converted into a second send attempt.
+   */
+  async verifySentMessage(input: {
+    readonly recipients: readonly string[];
+    readonly subject: string;
+    readonly afterMs: number;
+  }): Promise<NormalizedEmailMessage | null> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const found = await this.findSentMessage(input.recipients, input.subject, input.afterMs);
+      if (found) return found;
+      if (attempt < 2) await delay(250);
+    }
+    return null;
+  }
+
+  private async findSentFolder(mailbox: HostingerMailbox): Promise<HostingerFolder | null> {
+    const cached = this.foldersByMailbox.get(mailbox.resourceId);
+    const folders = cached ?? await this.listFolderRecords(mailbox);
+    return folders.find((folder) => {
+      const name = folder.name.toLocaleLowerCase("en-US");
+      const path = folder.path.toLocaleLowerCase("en-US");
+      return name === "sent" || path.endsWith(".sent") || path === "sent";
+    }) ?? null;
+  }
+
+  private async listFolderRecords(mailbox: HostingerMailbox): Promise<readonly HostingerFolder[]> {
+    const tool = await this.toolFor("email.folders.list");
+    if (tool.name !== "email_call_api_read") return [];
+    const response = await this.callApi(
+      tool,
+      "GET",
+      "/api/v1/mailboxes/{mailboxResourceId}/folders",
+      { mailboxResourceId: mailbox.resourceId },
+      {},
+    );
+    assertSuccessfulApiResponse(response);
+    const folders = extractFolders(apiBody(response));
+    this.foldersByMailbox.set(mailbox.resourceId, folders);
+    return folders;
   }
 
   private async findApiOperation(kind: "send" | "reply"): Promise<HostingerApiOperation | null> {
@@ -420,8 +496,23 @@ export class HostingerEmailAdapter {
         this.operations = discovered;
       }
     }
-    const terms = kind === "send" ? /send|compose|outgoing/i : /reply|respond/i;
-    return this.operations.find((operation) => terms.test(`${operation.name} ${operation.path}`)) ?? null;
+    const sendOperation = this.operations.find((operation) => /send|compose|outgoing/i.test(`${operation.name} ${operation.path}`));
+    if (kind === "send") return sendOperation ?? null;
+    const nativeReply = this.operations.find((operation) => /reply|respond/i.test(`${operation.name} ${operation.path}`));
+    if (nativeReply) return nativeReply;
+    if (sendOperation && await this.operationSupportsNativeReply(sendOperation)) return sendOperation;
+    return null;
+  }
+
+  private async operationSupportsNativeReply(operation: HostingerApiOperation): Promise<boolean> {
+    const mapping = this.mapping ?? (await this.discover());
+    const describeTool = mapping.tools.find((tool) => tool.name === "email_describe_operation");
+    if (!describeTool) return false;
+    const described = await this.callTool(describeTool, buildArguments(describeTool, {
+      method: operation.method,
+      path: operation.path,
+    }));
+    return hasObjectKey(described, "inReplyTo");
   }
 
   private async toolFor(...capabilities: HostingerCapability[]): Promise<HostingerMcpTool> {
@@ -774,6 +865,15 @@ function extractApiOperations(value: unknown): readonly HostingerApiOperation[] 
   return records;
 }
 
+function hasObjectKey(value: unknown, wantedKey: string): boolean {
+  if (Array.isArray(value)) return value.some((entry) => hasObjectKey(entry, wantedKey));
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return Object.entries(record).some(([key, child]) =>
+    key.toLocaleLowerCase("en-US") === wantedKey.toLocaleLowerCase("en-US") || hasObjectKey(child, wantedKey),
+  );
+}
+
 function extractOperationNames(value: unknown): readonly string[] {
   const names: string[] = [];
   const visit = (candidate: unknown): void => {
@@ -858,6 +958,34 @@ function normalizeAttachments(value: unknown): readonly { filename?: string; mim
       ...(extractDirectString(entry, ["mimeType", "mime_type", "contentType"]) ? { mimeType: extractDirectString(entry, ["mimeType", "mime_type", "contentType"])! } : {}),
       ...(typeof entry.size === "number" && Number.isFinite(entry.size) ? { size: entry.size } : {}),
     }));
+}
+
+function extractFolders(value: unknown): readonly HostingerFolder[] {
+  const array = findArray(value) ?? [];
+  return array
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === "object"))
+    .map((entry) => {
+      const name = extractDirectString(entry, ["name", "folderName", "folder_name"]) ?? "";
+      const path = extractDirectString(entry, ["path", "fullName", "full_name", "name"]) ?? name;
+      return { name, path };
+    })
+    .filter((folder) => folder.name.length > 0 || folder.path.length > 0);
+}
+
+function normalizeSubject(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLocaleLowerCase("en-US");
+}
+
+function toNumericUid(value: string): number {
+  const uid = Number(value);
+  if (!Number.isSafeInteger(uid) || uid < 1) {
+    throw new HostingerEmailError("INVALID_REQUEST", "Hostinger necesita un UID numérico para responder al correo.");
+  }
+  return uid;
+}
+
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function buildMessagePreview(value: string, maxChars = 240): string {

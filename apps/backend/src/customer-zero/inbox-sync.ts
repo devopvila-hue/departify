@@ -164,7 +164,13 @@ export class InboxSync {
       isLead: classification.isLead,
       relatedWorkItemId: null,
       relatedConversationId: null,
-      provenance: { provider: source, rawEventId: resolvedSourceMessageId },
+      provenance: {
+        provider: source,
+        rawEventId: resolvedSourceMessageId,
+        ...(hostingerMessage?.providerMessageUid
+          ? { providerMessageUid: hostingerMessage.providerMessageUid }
+          : {}),
+      },
       state: "classified",
     });
     return item;

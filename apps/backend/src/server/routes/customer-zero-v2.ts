@@ -163,6 +163,7 @@ import {
 import {
   isEmailCapabilityOperational,
   sendEmail,
+  verifyAcceptedEmailSend,
   resolveOperationalEmailProvider,
   type EmailProvider,
 } from "../../customer-zero/email-capability.js";
@@ -998,6 +999,8 @@ export async function registerCustomerZeroV2Routes(
       work.objective = body;
       work.replyToProviderMessageId = item.sourceMessageId;
       work.replyToProviderThreadId = item.sourceThreadId ?? null;
+      work.replyToProviderMessageUid = item.provenance.providerMessageUid ?? null;
+      work.replyToProviderFolder = item.folder ?? "INBOX";
       work.draft = {
         to: item.sender.email,
         subject: replySubject(item.subject),
@@ -4438,6 +4441,47 @@ async function sendPendingEmail(
       connectionSuggestion: null,
     };
   }
+  if (work.status === "accepted_unverified") {
+    const verification = await verifyAcceptedEmailSend({
+      provider: work.provider ?? work.requestedProvider ?? "hostinger",
+      to: work.draft.to,
+      subject: work.draft.subject,
+      afterMs: Math.max(0, Date.parse(work.acceptedAt ?? work.updatedAt) - 60_000),
+    });
+    if (verification.ok && verification.providerMessageId) {
+      work.status = "sent";
+      work.sendResult = {
+        provider: verification.provider ?? "hostinger",
+        recipient: work.draft.to,
+        sentAt: verification.sentAt ?? new Date().toISOString(),
+        providerMessageId: verification.providerMessageId,
+      };
+      work.sendError = null;
+      work.acceptedAt = null;
+      const previousReceipt = session.state.lastExecutionReceipt;
+      if (previousReceipt) {
+        session.state.lastExecutionReceipt = completeExecutionReceipt(previousReceipt, {
+          provider: verification.provider ?? "hostinger",
+          providerResourceId: verification.providerMessageId,
+          safeMetadata: {
+            recipient: work.draft.to,
+            sentAt: verification.sentAt ?? new Date().toISOString(),
+          },
+        });
+      }
+      delete session.state.pendingEmailWork;
+      return {
+        reply: isEs ? "Correo enviado y verificado." : "Email sent and verified.",
+        connectionSuggestion: null,
+      };
+    }
+    return {
+      reply: isEs
+        ? "Hostinger ha aceptado el envío, pero todavía no he podido verificar la copia en Enviados. No lo volveré a enviar automáticamente."
+        : "Hostinger accepted the send, but I still cannot verify the copy in Sent. I will not retry automatically.",
+      connectionSuggestion: null,
+    };
+  }
   // Set the state before the first awaited operation. A repeated approval
   // arriving concurrently therefore cannot start a second provider call.
   work.status = "sending";
@@ -4479,6 +4523,8 @@ async function sendPendingEmail(
       ...(work.requestedProvider ? { provider: work.requestedProvider } : {}),
       ...(work.replyToProviderMessageId ? { replyToMessageId: work.replyToProviderMessageId } : {}),
       ...(work.replyToProviderThreadId ? { replyToThreadId: work.replyToProviderThreadId } : {}),
+      ...(work.replyToProviderMessageUid ? { replyToMessageUid: work.replyToProviderMessageUid } : {}),
+      ...(work.replyToProviderFolder ? { replyToFolder: work.replyToProviderFolder } : {}),
     });
   } catch {
     // No adapter/store exception may escape as a blank HTTP 500 after the CEO
@@ -4502,6 +4548,7 @@ async function sendPendingEmail(
       providerMessageId: outcome.providerMessageId,
     };
     work.sendError = null;
+    work.acceptedAt = null;
     session.state.lastExecutionReceipt = completeExecutionReceipt(receipt, {
       provider: outcome.provider ?? "email",
       providerResourceId: outcome.providerMessageId,
@@ -4515,6 +4562,24 @@ async function sendPendingEmail(
       reply: isEs
         ? `Enviado a ${work.draft.to}.`
         : `Sent to ${work.draft.to}.`,
+      connectionSuggestion: null,
+    };
+  }
+  if (outcome.accepted || outcome.error === "PROVIDER_ACCEPTED_UNVERIFIED") {
+    work.status = "accepted_unverified";
+    work.provider = outcome.provider ?? work.requestedProvider ?? "hostinger";
+    work.sendError = "PROVIDER_ACCEPTED_UNVERIFIED";
+    work.acceptedAt = new Date().toISOString();
+    session.state.lastExecutionReceipt = failExecutionReceipt(
+      receipt,
+      "PROVIDER_ACCEPTED_UNVERIFIED",
+      "ambiguous",
+      work.provider,
+    );
+    return {
+      reply: isEs
+        ? "Hostinger ha aceptado el envío. Estoy verificando la copia en Enviados. No lo volveré a enviar automáticamente."
+        : "Hostinger accepted the send. I am verifying the copy in Sent. I will not retry automatically.",
       connectionSuggestion: null,
     };
   }
@@ -4534,6 +4599,11 @@ async function sendPendingEmail(
 }
 
 function explainEmailSendFailure(error: string | null, isEs: boolean): string {
+  if (error === "PROVIDER_ACCEPTED_UNVERIFIED") {
+    return isEs
+      ? "Hostinger ha aceptado el envío, pero todavía no he podido verificar la copia en Enviados. No se reintentará automáticamente."
+      : "Hostinger accepted the send, but I still cannot verify the copy in Sent. It will not be retried automatically.";
+  }
   return isEs
     ? `${describeEmailSendFailure(error, true)} El borrador sigue preparado para reintentarlo.`
     : `${describeEmailSendFailure(error, false)} The draft is still ready to retry.`;

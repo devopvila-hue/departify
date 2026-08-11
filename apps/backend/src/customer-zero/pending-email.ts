@@ -22,6 +22,7 @@ export type PendingEmailStatus =
   | "draft_ready" // draft built, waiting for approval (or direct send)
   | "awaiting_approval" // CEO must approve before send
   | "sending"
+  | "accepted_unverified"
   | "failed"
   | "editing"
   | "sent"
@@ -51,6 +52,8 @@ export interface PendingEmailWork {
   /** Provider message being answered when this is an explicit reply. */
   replyToProviderMessageId: string | null;
   replyToProviderThreadId: string | null;
+  replyToProviderMessageUid: string | null;
+  replyToProviderFolder: string | null;
   /** Durable send evidence (never credentials). */
   sendResult: {
     readonly provider: string;
@@ -60,6 +63,8 @@ export interface PendingEmailWork {
   } | null;
   /** Safe provider failure category retained for diagnosis/retry. */
   sendError: string | null;
+  /** Provider accepted the operation; retained for safe verification without resend. */
+  acceptedAt: string | null;
   /** When the pending work was last touched. */
   updatedAt: string;
 }
@@ -76,8 +81,11 @@ export function createPendingEmailWork(nowMs = Date.now()): PendingEmailWork {
     requestedProvider: null,
     replyToProviderMessageId: null,
     replyToProviderThreadId: null,
+    replyToProviderMessageUid: null,
+    replyToProviderFolder: null,
     sendResult: null,
     sendError: null,
+    acceptedAt: null,
     updatedAt: new Date(nowMs).toISOString(),
   };
 }

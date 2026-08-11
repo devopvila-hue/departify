@@ -80,7 +80,7 @@ export function InboxRoute() {
 
   function openNewEmail(): void {
     setError(null);
-    setComposer({ mode: "new", to: "", subject: "", body: "", draftId: null, result: null });
+    setComposer({ mode: "new", to: "", subject: "", body: "", draftId: null, result: null, resultTone: null });
   }
 
   function openReply(item: InboxItemView): void {
@@ -93,6 +93,7 @@ export function InboxRoute() {
       body: "",
       draftId: null,
       result: null,
+      resultTone: null,
     });
   }
 
@@ -121,7 +122,12 @@ export function InboxRoute() {
       setError("No he podido ejecutar el envío. El borrador se conserva para reintentarlo.");
       return;
     }
-    setComposer({ ...composer, result: result.reply, draftId: result.status === "succeeded" ? null : composer.draftId });
+    setComposer({
+      ...composer,
+      result: result.reply,
+      resultTone: result.status === "succeeded" ? "success" : result.status === "ambiguous" ? "warning" : "danger",
+      draftId: result.status === "succeeded" ? null : composer.draftId,
+    });
   }
 
   async function openItem(item: InboxItemView) {
@@ -321,6 +327,7 @@ interface EmailComposer {
   body: string;
   draftId: string | null;
   result: string | null;
+  resultTone: "success" | "warning" | "danger" | null;
 }
 
 function EmailComposerView(props: {
@@ -358,7 +365,7 @@ function EmailComposerView(props: {
           </button>
         </div>
       )}
-      {composer.result && <p className="dfy-alert" role="status">{composer.result}</p>}
+      {composer.result && <p className={`dfy-alert dfy-alert--${composer.resultTone ?? "danger"}`} role="status">{composer.result}</p>}
     </div>
   );
 }

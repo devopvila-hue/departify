@@ -35,6 +35,8 @@ export interface EmailSendInput {
   readonly provider?: EmailProvider;
   readonly replyToMessageId?: string;
   readonly replyToThreadId?: string;
+  readonly replyToMessageUid?: string;
+  readonly replyToFolder?: string;
 }
 
 export interface EmailSendOutcome {
@@ -44,6 +46,8 @@ export interface EmailSendOutcome {
   readonly sentAt: string | null;
   /** Business-language failure reason; never a raw stack/token. */
   readonly error: string | null;
+  /** Provider accepted the request but independent verification is pending. */
+  readonly accepted?: boolean;
 }
 
 /** True when at least one email provider is operationally connected. */
@@ -173,6 +177,8 @@ export async function sendEmail(
             bodyText: input.bodyText,
             to: input.to,
             subject: input.subject,
+            ...(input.replyToMessageUid ? { messageUid: input.replyToMessageUid } : {}),
+            ...(input.replyToFolder ? { sourceFolder: input.replyToFolder } : {}),
           })
         : await adapter.sendMessage({ to: [input.to], subject: input.subject, bodyText: input.bodyText });
       console.info(`[email-capability] ${JSON.stringify({
@@ -199,6 +205,7 @@ export async function sendEmail(
         providerMessageId: null,
         sentAt: null,
         error,
+        ...(error === "PROVIDER_ACCEPTED_UNVERIFIED" ? { accepted: true } : {}),
       };
     }
   }
@@ -301,6 +308,56 @@ export async function sendEmail(
     providerMessageId: null,
     sentAt: null,
     error,
+  };
+}
+
+/**
+ * Re-check an accepted-but-unverified operation without sending again. This
+ * is intentionally provider-affine: an accepted Hostinger operation must
+ * never be re-routed to Gmail or retried through another provider.
+ */
+export async function verifyAcceptedEmailSend(input: {
+  readonly provider: string;
+  readonly to: string;
+  readonly subject: string;
+  readonly afterMs: number;
+}): Promise<EmailSendOutcome> {
+  if (input.provider !== "hostinger") {
+    return {
+      ok: false,
+      provider: input.provider,
+      providerMessageId: null,
+      sentAt: null,
+      error: "provider_confirmation_missing",
+      accepted: true,
+    };
+  }
+  try {
+    const result = await new HostingerEmailAdapter().verifySentMessage({
+      recipients: [input.to],
+      subject: input.subject,
+      afterMs: input.afterMs,
+    });
+    if (result) {
+      return {
+        ok: true,
+        provider: "hostinger",
+        providerMessageId: result.providerMessageId,
+        sentAt: result.sentAt ?? result.receivedAt,
+        error: null,
+      };
+    }
+  } catch {
+    // An accepted operation remains accepted when verification is temporarily
+    // unavailable. Do not turn an observability problem into a retry signal.
+  }
+  return {
+    ok: false,
+    provider: "hostinger",
+    providerMessageId: null,
+    sentAt: null,
+    error: "PROVIDER_ACCEPTED_UNVERIFIED",
+    accepted: true,
   };
 }
 

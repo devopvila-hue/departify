@@ -84,6 +84,8 @@ export interface InboxItem {
   readonly provenance: {
     readonly provider: string;
     readonly rawEventId?: string;
+    /** Provider UID needed by native reply APIs (never a credential). */
+    readonly providerMessageUid?: string;
   };
   readonly state: InboxItemState;
   readonly createdAt: string;

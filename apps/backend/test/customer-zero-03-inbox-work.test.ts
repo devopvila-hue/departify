@@ -6,7 +6,7 @@ import type { InjectOptions } from "light-my-request";
 import { makeFakeTenant } from "./helpers/fake-tenant.js";
 import { InMemoryInboxStore } from "../src/customer-zero/inbox-domain.js";
 import { resetCustomerZeroSessionsForTest } from "../src/customer-zero/customer-zero-session.js";
-import { HostingerEmailAdapter } from "../src/customer-zero/hostinger-email-adapter.js";
+import { HostingerEmailAdapter, HostingerEmailError } from "../src/customer-zero/hostinger-email-adapter.js";
 
 /**
  * CZ03 — Inbox → work bridge.
@@ -157,7 +157,7 @@ describe("CZ03 — Inbox → work bridge", () => {
       isLead: false,
       relatedWorkItemId: null,
       relatedConversationId: null,
-      provenance: { provider: "hostinger", rawEventId: "host-incoming-1" },
+      provenance: { provider: "hostinger", rawEventId: "host-incoming-1", providerMessageUid: "42" },
       state: "classified",
     });
     const verify = vi.spyOn(HostingerEmailAdapter.prototype, "verifyCapability").mockResolvedValue(true);
@@ -179,7 +179,64 @@ describe("CZ03 — Inbox → work bridge", () => {
     expect(approved.statusCode).toBe(200);
     expect(approved.json()).toMatchObject({ status: "succeeded", receipt: { providerResourceId: "host-reply-1" } });
     expect(reply).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledWith(expect.objectContaining({ messageId: "host-incoming-1", to: "cliente@empresa.com" }));
+    expect(reply).toHaveBeenCalledWith(expect.objectContaining({ messageId: "host-incoming-1", messageUid: "42", sourceFolder: "INBOX", to: "cliente@empresa.com" }));
     expect(verify).toHaveBeenCalled();
+  });
+
+  it("keeps an accepted Hostinger send ambiguous without retrying, then verifies without resending", async () => {
+    const org = await startOrg();
+    const verifyCapability = vi.spyOn(HostingerEmailAdapter.prototype, "verifyCapability").mockResolvedValue(true);
+    const send = vi.spyOn(HostingerEmailAdapter.prototype, "sendMessage").mockRejectedValue(
+      new HostingerEmailError("PROVIDER_ACCEPTED_UNVERIFIED", "accepted"),
+    );
+    const verifySent = vi.spyOn(HostingerEmailAdapter.prototype, "verifySentMessage").mockResolvedValue(null);
+    const draft = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/inbox/email/draft`,
+      payload: { provider: "hostinger", to: "controlled@example.com", subject: "Prueba", body: "Hola" },
+    });
+    const draftId = draft.json().draftId as string;
+
+    const accepted = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/inbox/email/approve`,
+      payload: { draftId },
+    });
+    expect(accepted.json()).toMatchObject({ status: "ambiguous", receipt: { status: "ambiguous", errorCategory: "PROVIDER_ACCEPTED_UNVERIFIED" } });
+    expect(accepted.json().reply).toContain("Hostinger ha aceptado el envío");
+    expect(accepted.json().reply).not.toContain("reintent");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(verifyCapability).toHaveBeenCalled();
+
+    const stillAccepted = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/inbox/email/approve`,
+      payload: { draftId },
+    });
+    expect(stillAccepted.json().status).toBe("ambiguous");
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(verifySent).toHaveBeenCalled();
+
+    verifySent.mockResolvedValue({
+      provider: "hostinger",
+      providerMessageId: "verified-later",
+      from: { email: "hello@departify.app" },
+      to: [{ email: "controlled@example.com" }],
+      cc: [],
+      subject: "Prueba",
+      preview: "Hola",
+      receivedAt: new Date().toISOString(),
+      sentAt: new Date().toISOString(),
+      unread: false,
+      flagged: false,
+    });
+    const verified = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/inbox/email/approve`,
+      payload: { draftId },
+    });
+    expect(verified.json()).toMatchObject({ status: "succeeded", receipt: { providerResourceId: "verified-later" } });
+    expect(verified.json().reply).toBe("Correo enviado y verificado.");
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });

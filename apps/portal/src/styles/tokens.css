@@ -1238,6 +1238,18 @@ select {
   color: #ffd4d1;
 }
 
+.dfy-alert--warning {
+  border-color: var(--dfy-color-warning);
+  background: rgba(246, 190, 74, 0.12);
+  color: var(--dfy-color-warning);
+}
+
+.dfy-alert--success {
+  border-color: var(--dfy-color-success);
+  background: rgba(102, 214, 158, 0.12);
+  color: var(--dfy-color-success);
+}
+
 .dfy-muted {
   color: var(--dfy-color-muted);
   line-height: 1.6;
