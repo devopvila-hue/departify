@@ -284,11 +284,53 @@ export function compileDepartmentContext(
   };
 
   // ── 2. Company DNA ──────────────────────────────────────────────
+  //
+  // Customer Zero P0 — the business understanding (products, customers,
+  // geography, positioning) is now carried through to the department.
+  // These fields were declared on `CompanyDNA` from the beginning but
+  // never populated, so everything research learned about the company
+  // was dropped on the floor before it ever reached Elvira. `understood`
+  // is populated by the research pipeline and rehydrated from the
+  // durable Company DNA after a restart.
+  const understood = session.state.understood as
+    | {
+        products?: readonly string[];
+        services?: readonly string[];
+        targetAudience?: readonly string[];
+        locations?: readonly string[];
+        positioning?: string;
+        market?: string;
+        activity?: string;
+      }
+    | undefined;
+  const understoodProducts = [
+    ...(understood?.products ?? []),
+    ...(understood?.services ?? []),
+  ];
+  const geography = understood?.locations?.[0];
+
   const companyDNA: CompanyDNA = {
     ...(onboarding?.companyName ? { companyName: onboarding.companyName } : {}),
-    ...(onboarding?.country ? { country: onboarding.country } : {}),
+    // Geography the research established wins over the intake country:
+    // "Valencia" is more operationally useful than "España".
+    ...(geography
+      ? { country: geography }
+      : onboarding?.country
+        ? { country: onboarding.country }
+        : {}),
     ...(onboarding?.companySize ? { companySize: onboarding.companySize } : {}),
-    ...(onboarding?.description ? { description: onboarding.description } : {}),
+    ...(onboarding?.description
+      ? { description: onboarding.description }
+      : understood?.activity
+        ? { description: understood.activity }
+        : {}),
+    ...(understoodProducts.length > 0 ? { products: understoodProducts } : {}),
+    ...(understood?.targetAudience && understood.targetAudience.length > 0
+      ? { market: understood.targetAudience.join(", ") }
+      : understood?.market
+        ? { market: understood.market }
+        : {}),
+    ...(understood?.positioning ? { positioning: understood.positioning } : {}),
     ...(onboarding?.goal ? { goal: onboarding.goal } : {}),
     ...(activeObjective ? { objectives: [activeObjective] } : {}),
   };

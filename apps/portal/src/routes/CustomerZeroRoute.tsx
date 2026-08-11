@@ -3,10 +3,12 @@ import { useNavigate } from "react-router-dom";
 
 import {
   api,
+  type CompanyCorrections,
   type ProgressiveDiscoveryView,
   type ProgressView,
   type ProgressiveQuestionView,
   type ResearchStageView,
+  type UnderstandingView,
 } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 
@@ -40,7 +42,8 @@ export interface ConnectionCard {
 type Step =
   | { name: "intake" }
   | { name: "researching"; org: string }
-  | { name: "conversation"; org: string };
+  | { name: "conversation"; org: string }
+  | { name: "confirmation"; org: string };
 
 const GOAL_OPTIONS = [
   "Conseguir clientes",
@@ -61,6 +64,9 @@ export function CustomerZeroRoute() {
   const [conversation, setConversation] = useState<ConversationResponse | null>(null);
   const [handoff, setHandoff] = useState<string>("");
   const [entering, setEntering] = useState(false);
+  const [understanding, setUnderstanding] = useState<UnderstandingView | null>(
+    null,
+  );
 
   // Resume after a reload: DNA, objetivo, respuestas, herramientas y Marketing.
   useEffect(() => {
@@ -82,8 +88,13 @@ export function CustomerZeroRoute() {
         return;
       }
       if (result.status === 404) {
-        // The org has no session on the backend (in-memory slice). Treat it
-        // as a stale local reference and start fresh — no error.
+        // The org has no session AND no durable company. Treat it as a
+        // stale local reference and start fresh — no error.
+        //
+        // NOTE: the backend no longer 404s merely because the in-memory
+        // session died. A company that exists durably returns 200 with
+        // its real readiness, so a Railway restart can never drag the
+        // CEO back through onboarding.
         window.localStorage.removeItem("departify_customer_zero");
         setOrganizationId(null);
         return;
@@ -95,11 +106,32 @@ export function CustomerZeroRoute() {
         setError("No hemos podido conectar con Departify. Inténtalo de nuevo.");
         return;
       }
-      if (status.department) {
-        // The company already has its department: go straight to the chat.
+      // Customer Zero P0 — READINESS decides, not the presence of a
+      // department row.
+      //
+      // This used to read `status.department`, which meant a company that
+      // had merely been provisioned was walked into the operational chat
+      // even though Departify had never completed its research, never
+      // persisted a complete Company DNA and never asked the CEO to
+      // confirm anything. `contextReady` is the backend's durable verdict
+      // on whether we actually understand this company.
+      if (status.contextReady) {
         setOrganizationId(status.organizationId);
         navigate("/chat", { replace: true });
         return;
+      }
+      // Not ready: resume onboarding at the correct incomplete stage.
+      // When the understanding exists but has not been confirmed, the
+      // CEO resumes at confirmation rather than being asked questions
+      // again.
+      const missing = status.contextMissing ?? [];
+      if (missing.length === 1 && missing[0] === "confirmation") {
+        const understanding = await api.understanding(parsed.organizationId);
+        if (understanding && !cancelled) {
+          setUnderstanding(understanding);
+          setStep({ name: "confirmation", org: parsed.organizationId });
+          return;
+        }
       }
       const conversation = await api.nextQuestion(parsed.organizationId);
       if (conversation && !cancelled) {
@@ -130,6 +162,51 @@ export function CustomerZeroRoute() {
     if (body.handoff) setHandoff(body.handoff);
     setStep({ name: "conversation", org });
   }, []);
+
+  /**
+   * Customer Zero P0 — the CEO reviews what we understood BEFORE we
+   * start working. This step did not exist: the CEO went straight from
+   * the last question into the operational chat.
+   */
+  const openConfirmation = useCallback(async (org: string) => {
+    setError(null);
+    const body = await api.understanding(org);
+    if (!body) {
+      setError("No hemos podido preparar el resumen de tu empresa.");
+      return;
+    }
+    setUnderstanding(body);
+    setStep({ name: "confirmation", org });
+  }, []);
+
+  /**
+   * Handover: the company gets its Marketing department and the CEO
+   * enters the central chat.
+   *
+   * The backend refuses this with CONTEXT_NOT_READY unless the durable
+   * readiness contract is satisfied. The portal surfaces that honestly
+   * instead of navigating anyway.
+   */
+  async function confirmAndEnter(org: string, corrections: CompanyCorrections) {
+    if (entering) return;
+    setEntering(true);
+    setError(null);
+    try {
+      const confirmed = await api.confirmCompany(org, corrections);
+      if (!confirmed || confirmed.error || !confirmed.confirmed) {
+        setError(
+          confirmed?.error?.message ??
+            "No hemos podido guardar la confirmación. Inténtalo de nuevo.",
+        );
+        setEntering(false);
+        return;
+      }
+      await enterCompany(org);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setEntering(false);
+    }
+  }
 
   async function startOnboarding(payload: Record<string, unknown>) {
     setError(null);
@@ -194,13 +271,25 @@ export function CustomerZeroRoute() {
    * the central chat, where Elvira and her team are already working.
    */
   async function enterCompany(org: string) {
-    if (entering) return;
-    setEntering(true);
+    if (!entering) setEntering(true);
     setError(null);
     try {
       const body = await api.enterMarketing(org);
       if (!body || body.error) {
+        // CONTEXT_NOT_READY lands here: Departify does not understand the
+        // company well enough yet. We NEVER navigate to the operational
+        // chat on a refusal — that was the P0 defect.
         setError(body?.error?.message ?? "No hemos podido preparar Marketing.");
+        setEntering(false);
+        return;
+      }
+      // Confirm with the backend that readiness is genuinely satisfied
+      // before handing the CEO to the operational product.
+      const status = await api.statusDetailed(org);
+      if (status?.data && status.data.contextReady === false) {
+        setError(
+          "Todavía estamos terminando de entender tu empresa. Un momento.",
+        );
         setEntering(false);
         return;
       }
@@ -217,13 +306,13 @@ export function CustomerZeroRoute() {
       <section className="customer-zero__panel">
         <p className="customer-zero__label">Departify</p>
         <ol className="customer-zero__steps" aria-label="Progreso">
-          {(["intake", "researching", "conversation"] as const).map((name, index) => (
+          {STEP_ORDER.map((name, index) => (
             <li
               key={name}
               className={
                 name === step.name
                   ? "customer-zero__step customer-zero__step--active"
-                  : index < ["intake", "researching", "conversation"].indexOf(step.name)
+                  : index < STEP_ORDER.indexOf(step.name)
                     ? "customer-zero__step customer-zero__step--done"
                     : "customer-zero__step"
               }
@@ -234,6 +323,8 @@ export function CustomerZeroRoute() {
           {step.name === "intake" && "Cuéntame lo mínimo sobre tu empresa"}
           {step.name === "researching" && "Conociendo tu negocio…"}
           {step.name === "conversation" && "Solo un par de cosas más"}
+          {step.name === "confirmation" &&
+            "Esto es lo que he entendido de tu empresa"}
         </h1>
 
         {error && (
@@ -264,12 +355,131 @@ export function CustomerZeroRoute() {
             }
             onConnect={(toolId) => connectTool(step.org, toolId)}
             entering={entering}
-            onStartMarketing={() => enterCompany(step.org)}
+            onStartMarketing={() => openConfirmation(step.org)}
+          />
+        )}
+
+        {step.name === "confirmation" && understanding && (
+          <ConfirmationStep
+            understanding={understanding}
+            entering={entering}
+            onConfirm={(corrections) => confirmAndEnter(step.org, corrections)}
           />
         )}
 
       </section>
     </main>
+  );
+}
+
+const STEP_ORDER = [
+  "intake",
+  "researching",
+  "conversation",
+  "confirmation",
+] as const;
+
+/**
+ * Customer Zero P0 — CEO CONFIRMATION.
+ *
+ * The CEO sees, in plain business language, what Departify understood —
+ * and can correct it before anyone starts working. The step that was
+ * missing entirely.
+ *
+ * The CEO never sees Company DNA internals, JSON, provenance labels,
+ * readiness facts, "context compiler" or any other plumbing. They see
+ * their company.
+ */
+function ConfirmationStep(props: {
+  understanding: UnderstandingView;
+  entering: boolean;
+  onConfirm: (corrections: CompanyCorrections) => void;
+}) {
+  const { understanding, entering, onConfirm } = props;
+  const [companyName, setCompanyName] = useState(understanding.companyName);
+  const [description, setDescription] = useState(
+    understanding.description ?? "",
+  );
+  const [objective, setObjective] = useState(understanding.objective ?? "");
+  const [geography, setGeography] = useState(understanding.geography ?? "");
+
+  function submit() {
+    // Only send what the CEO actually changed — an untouched field must
+    // not overwrite a researched fact with the same value under a
+    // different provenance.
+    const corrections: CompanyCorrections = {
+      ...(companyName !== understanding.companyName ? { companyName } : {}),
+      ...(description !== (understanding.description ?? "")
+        ? { description }
+        : {}),
+      ...(objective !== (understanding.objective ?? "") ? { objective } : {}),
+      ...(geography !== (understanding.geography ?? "") ? { geography } : {}),
+    };
+    onConfirm(corrections);
+  }
+
+  return (
+    <div className="customer-zero__confirm">
+      <p className="customer-zero__muted">
+        Revísalo y corrige lo que no encaje. Trabajaré con esto.
+      </p>
+
+      <label className="customer-zero__field">
+        <span>Tu empresa</span>
+        <input
+          type="text"
+          value={companyName}
+          onChange={(event) => setCompanyName(event.target.value)}
+        />
+      </label>
+
+      <label className="customer-zero__field">
+        <span>A qué os dedicáis</span>
+        <textarea
+          rows={3}
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+        />
+      </label>
+
+      <label className="customer-zero__field">
+        <span>Dónde trabajáis</span>
+        <input
+          type="text"
+          value={geography}
+          onChange={(event) => setGeography(event.target.value)}
+        />
+      </label>
+
+      <label className="customer-zero__field">
+        <span>Tu objetivo ahora</span>
+        <input
+          type="text"
+          value={objective}
+          onChange={(event) => setObjective(event.target.value)}
+        />
+      </label>
+
+      {understanding.products.length > 0 && (
+        <p className="customer-zero__muted">
+          Lo que ofrecéis: {understanding.products.join(", ")}
+        </p>
+      )}
+      {understanding.customers.length > 0 && (
+        <p className="customer-zero__muted">
+          Vuestros clientes: {understanding.customers.join(", ")}
+        </p>
+      )}
+
+      <button
+        type="button"
+        className="customer-zero__submit"
+        disabled={entering || companyName.trim().length === 0}
+        onClick={submit}
+      >
+        {entering ? "Preparando tu empresa…" : "Sí, es correcto. Vamos a trabajar"}
+      </button>
+    </div>
   );
 }
 

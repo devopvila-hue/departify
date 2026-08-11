@@ -281,6 +281,38 @@ export interface CompanyStatus {
   contextMissing?: readonly string[];
 }
 
+/**
+ * What Departify understood about the company, for CEO review.
+ *
+ * Business language only — this view never exposes DNA internals,
+ * schemas, provenance jargon or readiness plumbing to the CEO.
+ */
+export interface UnderstandingView {
+  organizationId: string;
+  companyName: string;
+  description?: string;
+  objective?: string;
+  geography?: string;
+  products: readonly string[];
+  customers: readonly string[];
+  positioning?: string;
+  businessModel?: string;
+  declaredTools: readonly string[];
+  uncertainties: readonly string[];
+  confirmed: boolean;
+  missing: readonly string[];
+}
+
+/** The CEO's corrections to the understood company. */
+export interface CompanyCorrections {
+  companyName?: string;
+  description?: string;
+  objective?: string;
+  geography?: string;
+  products?: readonly string[];
+  customers?: readonly string[];
+}
+
 /* -------------------------------------------------------------------------
  * Command Center — Sprint 58.
  *
@@ -666,6 +698,18 @@ export const api = {
     postJson<{ organizationId: string; error?: { message?: string } }>(
       `/api/customer-zero/${org}/marketing`,
     ),
+  /** What Departify understood about the company (CEO review screen). */
+  understanding: (org: string) =>
+    getJson<UnderstandingView>(`/api/customer-zero/${org}/understanding`),
+  /** The CEO corrects and confirms the understanding. */
+  confirmCompany: (org: string, corrections: CompanyCorrections) =>
+    postJson<{
+      organizationId: string;
+      confirmed: boolean;
+      contextReady: boolean;
+      contextMissing: readonly string[];
+      error?: { message?: string };
+    }>(`/api/customer-zero/${org}/confirm`, corrections),
   /** Resume helper: distinguishes a stale session (404) from a server error. */
   statusDetailed: async (
     org: string,
