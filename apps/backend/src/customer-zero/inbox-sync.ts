@@ -18,6 +18,8 @@
 import { GmailAdapter, gmailTokenStore } from "./gmail-adapter.js";
 import { HostingerEmailAdapter, probeHostingerEmail, type NormalizedEmailMessage } from "./hostinger-email-adapter.js";
 import { hasOperationalGoogleCapabilityForOrg } from "./credential-resolver.js";
+import { getCorporateEmailStore } from "./corporate-email-store.js";
+import { readCorporateInbox, type CorporateEmailMessage } from "./corporate-email-adapter.js";
 import {
   buildPreview,
   classifyInboxItem,
@@ -57,12 +59,13 @@ export class InboxSync {
     const providerReads = await Promise.allSettled([
       this.readHostinger(maxResults),
       this.readGmailIfOperational(input, sinceIso, maxResults),
+      this.readCorporateIfOperational(input, maxResults),
     ]);
     const messages: readonly {
-      readonly provider: "gmail" | "hostinger";
-      readonly message: import("./gmail-adapter.js").EmailMessage | NormalizedEmailMessage;
+      readonly provider: "gmail" | "hostinger" | "corporate";
+      readonly message: import("./gmail-adapter.js").EmailMessage | NormalizedEmailMessage | CorporateEmailMessage;
     }[] = providerReads.flatMap((result, index) => {
-      const provider = index === 0 ? "hostinger" : "gmail";
+      const provider = index === 0 ? "hostinger" : index === 1 ? "gmail" : "corporate";
       if (result.status === "fulfilled") {
         return result.value.map((message) => ({ provider, message }));
       }
@@ -96,8 +99,8 @@ export class InboxSync {
 
   private async normalizeAndPersist(
     organizationId: string,
-    message: import("./gmail-adapter.js").EmailMessage | NormalizedEmailMessage,
-    source: "gmail" | "hostinger",
+    message: import("./gmail-adapter.js").EmailMessage | NormalizedEmailMessage | CorporateEmailMessage,
+    source: "gmail" | "hostinger" | "corporate",
   ): Promise<InboxItem | null> {
     const gmailMessage = source === "gmail"
       ? message as import("./gmail-adapter.js").EmailMessage
@@ -105,21 +108,33 @@ export class InboxSync {
     const hostingerMessage = source === "hostinger"
       ? message as NormalizedEmailMessage
       : null;
+    const corporateMessage = source === "corporate"
+      ? message as CorporateEmailMessage
+      : null;
     const sourceMessageId = gmailMessage?.id ?? hostingerMessage?.providerMessageId ?? "";
-    const sourceThreadId = gmailMessage?.threadId ?? hostingerMessage?.providerThreadId;
-    const receivedAt = gmailMessage?.date ?? hostingerMessage?.receivedAt ?? "";
-    const snippet = gmailMessage?.snippet ?? hostingerMessage?.preview ?? "";
-    const unread = gmailMessage?.isUnread ?? hostingerMessage?.unread ?? false;
+    const resolvedSourceMessageId = source === "corporate"
+      ? corporateMessage?.id ?? ""
+      : sourceMessageId;
+    const sourceThreadId = gmailMessage?.threadId ?? hostingerMessage?.providerThreadId ?? corporateMessage?.threadId;
+    const receivedAt = gmailMessage?.date ?? hostingerMessage?.receivedAt ?? corporateMessage?.date ?? "";
+    const snippet = gmailMessage?.snippet ?? hostingerMessage?.preview ?? corporateMessage?.snippet ?? "";
+    const unread = gmailMessage?.isUnread ?? hostingerMessage?.unread ?? corporateMessage?.isUnread ?? false;
+    const recipients: readonly { email: string; displayName?: string }[] = source === "corporate"
+      ? []
+      : (message as import("./gmail-adapter.js").EmailMessage | NormalizedEmailMessage).to.map((a) => ({
+        email: a.email,
+        ...(a.displayName ? { displayName: a.displayName } : {}),
+      }));
     const classification = classifyInboxItem({
       subject: message.subject,
       plainText: snippet,
       fromEmail: message.from.email,
-      toEmails: message.to.map((a) => a.email),
+      toEmails: recipients.map((a) => a.email),
     });
     const item = await this.store.upsert({
       organizationId,
       source,
-      sourceMessageId,
+      sourceMessageId: resolvedSourceMessageId,
       ...(sourceThreadId ? { sourceThreadId } : {}),
       channel: "email",
       category: classification.category,
@@ -128,10 +143,7 @@ export class InboxSync {
         email: message.from.email,
         ...(message.from.displayName ? { displayName: message.from.displayName } : {}),
       },
-      recipients: message.to.map((a) => ({
-        email: a.email,
-        ...(a.displayName ? { displayName: a.displayName } : {}),
-      })),
+      recipients,
       plainText: snippet || "",
       preview: buildPreview(snippet || message.subject),
       receivedAt: receivedAt || new Date().toISOString(),
@@ -141,7 +153,7 @@ export class InboxSync {
       isLead: classification.isLead,
       relatedWorkItemId: null,
       relatedConversationId: null,
-      provenance: { provider: source, rawEventId: sourceMessageId },
+      provenance: { provider: source, rawEventId: resolvedSourceMessageId },
       state: "classified",
     });
     return item;
@@ -181,5 +193,22 @@ export class InboxSync {
     const status = await probeHostingerEmail();
     if (status.state !== "connected" || !status.capabilities.includes("email.read")) return [];
     return new HostingerEmailAdapter().readRecentMessages(maxResults);
+  }
+
+  private async readCorporateIfOperational(
+    input: InboxSyncInput,
+    maxResults: number,
+  ): Promise<readonly CorporateEmailMessage[]> {
+    const store = getCorporateEmailStore();
+    const summaries = await store.listForOrg(input.organizationId);
+    const messages: CorporateEmailMessage[] = [];
+    for (const summary of summaries) {
+      if (!summary.operationalVerifiedAt) continue;
+      const account = await store.get(input.organizationId, summary.userId);
+      if (!account) continue;
+      messages.push(...await readCorporateInbox(account, maxResults));
+      if (messages.length >= maxResults) break;
+    }
+    return messages.slice(0, maxResults);
   }
 }
