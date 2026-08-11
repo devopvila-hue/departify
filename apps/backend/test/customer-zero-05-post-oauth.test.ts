@@ -536,6 +536,52 @@ describe("P0 — post-OAuth HTTP: connect → callback → /conexiones", () => {
     // The reply uses the presenter and references the mocked Gmail data.
     expect(reply).toContain("cliente@acme.com");
     expect(reply).toContain("Asunto");
+
+    // The same durable capability must be visible from a genuinely new
+    // conversation, not only from the session that completed OAuth.
+    const created = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/conversations`,
+      payload: {},
+    });
+    expect(created.statusCode).toBe(201);
+    mockGoogleFetch({});
+    const newConversation = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: {
+        conversationId: created.json().conversation.id,
+        message: "¿Cuál es mi último correo?",
+      },
+    });
+    expect(newConversation.statusCode).toBe(200);
+    expect(newConversation.json().reply).toContain("cliente@acme.com");
+  });
+
+  it("OAuth return context is durably carried through callback and is bounded", async () => {
+    const org = await startOrg();
+    const connect = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/gmail/connect`,
+      payload: { returnPath: "/" },
+    });
+    expect(connect.statusCode).toBe(200);
+    const state = connect.json().connection.oauthState as string;
+    mockGoogleFetch({});
+    const callback = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/gmail/callback`,
+      payload: { code: "auth-code-1", state },
+    });
+    expect(callback.statusCode).toBe(200);
+    expect(callback.json().returnPath).toBe("/");
+
+    const rejected = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/gmail/connect`,
+      payload: { returnPath: "https://evil.example" },
+    });
+    expect(rejected.statusCode).toBe(400);
   });
 
   it("O: failed probe → NOT falsely connected; blocked with recovery reason", async () => {

@@ -1028,7 +1028,7 @@ export function isEmailReadQuestion(message: string): boolean {
     // intent. The reading/intent verbs now include "leer" (infinitive)
     // and "recibido" so messages like "¿puedes leer mi último mail
     // recibido?" route here instead of falling through.
-    return /\b(important|importantes?|unread|pendientes?|no\s+le[ií]dos?|le[ií]dos?|leer|lee|leeme|le[íi]me|recibido|recibidos|nuevo|nuevos?|ver|mu[eé]strame|ense[ñn]ame|dime|revisar|revisa|tengo|hay|alguno|contestar|responder|respuestas?|respu[eé]stame|busca|search|find)\b/i.test(
+    return /\b(important|importantes?|unread|pendientes?|no\s+le[ií]dos?|le[ií]dos?|leer|lee|leeme|le[íi]me|recibido|recibidos?|nuevo|nuevos?|[úu]ltim[oa]s?|ver|mu[eé]strame|ense[ñn]ame|dime|cu[áa]l|revisar|revisa|tengo|hay|alguno|contestar|responder|respuestas?|respu[eé]stame|busca|search|find)\b/i.test(
       lower,
     );
   }

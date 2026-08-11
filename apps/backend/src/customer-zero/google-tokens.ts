@@ -687,7 +687,7 @@ export interface CompleteGoogleOAuthInput {
   readonly identityProvider: "gmail";
   readonly stateNonceLookup: (
     nonce: string,
-  ) => Promise<{ organizationId: string; userId: string } | null>;
+  ) => Promise<{ organizationId: string; userId: string; returnPath?: string } | null>;
   readonly stateNonceConsume: (nonce: string) => Promise<void>;
   readonly nowMs?: number;
   readonly probeFetcher?: typeof fetch;
@@ -711,6 +711,7 @@ export interface CompleteGoogleOAuthResult {
   readonly grantedScopes: readonly string[];
   /** True when the probe succeeded AND a refresh token is persisted. */
   readonly operational: boolean;
+  readonly returnPath?: string;
 }
 
 /**
@@ -722,10 +723,10 @@ export interface CompleteGoogleOAuthResult {
 export async function validateOAuthState(
   stateLookup: (
     nonce: string,
-  ) => Promise<{ organizationId: string; userId: string } | null>,
+  ) => Promise<{ organizationId: string; userId: string; returnPath?: string } | null>,
   stateConsume: (nonce: string) => Promise<void>,
   input: { code: string; state: string; organizationId: string; userId: string },
-): Promise<void> {
+): Promise<{ returnPath?: string }> {
   const existing = await stateLookup(input.state);
   if (!existing) {
     const err = new Error("OAuth state missing or expired");
@@ -745,6 +746,7 @@ export async function validateOAuthState(
     (err as Error & { code?: string }).code = "user_mismatch";
     throw err;
   }
+  return existing.returnPath ? { returnPath: existing.returnPath } : {};
 }
 
 /** Fetch Google's userinfo for a freshly exchanged access token. */
@@ -788,7 +790,7 @@ export async function completeGoogleOAuthCallback(
     input.onCheckpoint?.(name, data);
   };
 
-  await validateOAuthState(
+  const stateBinding = await validateOAuthState(
     input.stateNonceLookup,
     input.stateNonceConsume,
     input,
@@ -976,6 +978,7 @@ export async function completeGoogleOAuthCallback(
     hasRefreshToken: Boolean(merged.refreshToken),
     grantedScopes: merged.scopes,
     operational: probe.operational && Boolean(merged.refreshToken),
+    ...(stateBinding.returnPath ? { returnPath: stateBinding.returnPath } : {}),
   };
 }
 

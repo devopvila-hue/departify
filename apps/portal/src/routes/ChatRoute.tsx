@@ -297,7 +297,9 @@ export function ChatRoute() {
       : await api.commandCenterMessage(organizationId, value);
     setBusy(false);
     setProcessStatus(null);
-    if (!result) {
+    // A parsed error payload is still a failed primary turn. Do not append an
+    // empty assistant message or treat a backend error envelope as success.
+    if (!result || typeof result.reply !== "string" || result.reply.trim().length === 0) {
       setError(
         "Departify no ha podido responderte ahora mismo. Vuelve a intentarlo en un momento.",
       );
@@ -708,7 +710,7 @@ function EventCard(props: {
           <button
             type="button"
             className="dfy-button dfy-button--ghost dfy-button--small"
-            onClick={() => onNavigate("/conexiones")}
+            onClick={() => onNavigate("/conexiones?return=chat")}
           >
             Gestionar conexiones
           </button>

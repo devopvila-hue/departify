@@ -147,7 +147,11 @@ export function GoogleOAuthCallbackRoute() {
         // Success — land on /conexiones (replace: true so the callback
         // URL does not become a browser-history entry that re-executes
         // on back-navigation).
-        navigate("/conexiones", { replace: true });
+        const returnPath =
+          out.returnPath === "/" || out.returnPath === "/conexiones" || out.returnPath === "/chat"
+            ? out.returnPath
+            : "/conexiones";
+        navigate(returnPath, { replace: true });
         return;
       }
       // Failure — show the exact safe stage that failed, never a bare

@@ -174,6 +174,11 @@ describe("CustomerZeroRoute — UX v2", () => {
     fireEvent.click(screen.getByRole("button", { name: /^empezar$/i }));
 
     expect(
+      await screen.findByRole("button", { name: /revisar lo que hemos entendido/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("¿Quién es tu cliente ideal?")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /revisar lo que hemos entendido/i }));
+    expect(
       await screen.findByText("¿Quién es tu cliente ideal?"),
     ).toBeInTheDocument();
     // A single question, no "14 puntos necesitan confirmación".

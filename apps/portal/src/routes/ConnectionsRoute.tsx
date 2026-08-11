@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 
 import { api, type ConnectionCardView, type ToolConnectionView } from "@/app/api";
 import { useOrg } from "@/app/org-context";
@@ -41,6 +42,7 @@ interface ConnectionsPayload {
 
 export function ConnectionsRoute() {
   const { organizationId } = useOrg();
+  const location = useLocation();
   const [cards, setCards] = useState<ConnectionCardView[]>([]);
   const [unmapped, setUnmapped] = useState<string[]>([]);
   const [google, setGoogle] = useState<ConnectionsPayload["google"]>(null);
@@ -68,7 +70,10 @@ export function ConnectionsRoute() {
       // api.connect returns the provider authorization URL; the browser is
       // redirected to Google. After the user authorizes, Google redirects
       // back to the portal callback which completes the handshake server-side.
-      const out = await api.connect(organizationId, card.id);
+      const returnPath = new URLSearchParams(location.search).get("return") === "chat"
+        ? "/chat"
+        : "/conexiones";
+      const out = await api.connect(organizationId, card.id, returnPath);
       const authorizationUrl = out?.connection?.authorizationUrl;
       if (authorizationUrl) {
         window.location.href = authorizationUrl;

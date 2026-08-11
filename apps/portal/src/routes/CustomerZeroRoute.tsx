@@ -207,8 +207,12 @@ export function CustomerZeroRoute() {
     if (!body) return;
     setConversation(body);
 
+    if (body.question === null) {
+      await openConfirmation(org);
+      return;
+    }
     setStep({ name: "conversation", org });
-  }, []);
+  }, [openConfirmation]);
 
   /**
    * Handover: the company gets its Marketing department and the CEO
@@ -268,6 +272,9 @@ export function CustomerZeroRoute() {
         return;
       }
       setConversation(body);
+      if (body.question === null) {
+        await openConfirmation(org);
+      }
   
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -277,7 +284,7 @@ export function CustomerZeroRoute() {
   async function connectTool(org: string, toolId: string) {
     setError(null);
     try {
-      const body = await api.connect(org, toolId);
+      const body = await api.connect(org, toolId, "/");
       if (!body?.connection) return;
       setConversation((prev) =>
         prev
@@ -290,7 +297,7 @@ export function CustomerZeroRoute() {
           : prev,
       );
       if (body.connection.authorizationUrl) {
-        window.open(body.connection.authorizationUrl, "_blank", "noopener");
+        window.location.href = body.connection.authorizationUrl;
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -692,6 +699,7 @@ function ResearchStep(props: {
 }) {
   const [progress, setProgress] = useState<ProgressResponse | null>(null);
   const [failed, setFailed] = useState(false);
+  const [completed, setCompleted] = useState(false);
   const done = useRef(false);
   const [runKey, setRunKey] = useState(0);
 
@@ -702,6 +710,7 @@ function ResearchStep(props: {
     let cancelled = false;
     done.current = false;
     setFailed(false);
+    setCompleted(false);
     setProgress(null);
     void (async () => {
       await api.research(props.org);
@@ -723,7 +732,9 @@ function ResearchStep(props: {
         setProgress(body);
         if (body.status === "completed" && !done.current) {
           done.current = true;
-          props.onDone();
+          // Findings are a CEO checkpoint, not a transient loading state.
+          // Keep the report visible until the CEO explicitly continues.
+          setCompleted(true);
         }
         if (body.status === "failed" && !done.current) {
           done.current = true;
@@ -744,7 +755,11 @@ function ResearchStep(props: {
 
   return (
     <div className="customer-zero__state" role="status" aria-live="polite">
-      <p>Departify está trabajando en tu negocio.</p>
+      <p>
+        {completed
+          ? "Esto es lo que Departify ha entendido de tu empresa."
+          : "Departify está trabajando en tu negocio."}
+      </p>
       {estimate !== null && !failed && (
         <p className="customer-zero__state-hint">
           Normalmente tarda menos de {Math.max(1, Math.round(estimate / 1000))}{" "}
@@ -779,6 +794,15 @@ function ResearchStep(props: {
           }}
         >
           Reintentar
+        </button>
+      )}
+      {completed && !failed && (
+        <button
+          type="button"
+          className="customer-zero__submit"
+          onClick={props.onDone}
+        >
+          Revisar lo que hemos entendido
         </button>
       )}
     </div>

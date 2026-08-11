@@ -1015,7 +1015,10 @@ export async function registerCustomerZeroV2Routes(
     },
   );
 
-  server.post(
+  server.post<{
+    Params: { organizationId: string; toolId: string };
+    Body: { returnPath?: "/" | "/conexiones" | "/chat" };
+  }>(
     "/api/customer-zero/:organizationId/connections/:toolId/connect",
     {
       schema: {
@@ -1040,6 +1043,12 @@ export async function registerCustomerZeroV2Routes(
         organizationId: string;
         toolId: string;
       };
+      const requestedReturnPath = request.body?.returnPath;
+      const allowedReturnPaths = new Set(["/", "/conexiones", "/chat"]);
+      if (requestedReturnPath !== undefined && !allowedReturnPaths.has(requestedReturnPath)) {
+        return reply.code(400).send({ error: "Invalid OAuth return context." });
+      }
+      const returnPath = requestedReturnPath ?? "/conexiones";
       const session = await requireSession(organizationId, deps);
       const tool = TOOL_CATALOG.find((entry) => entry.id === toolId);
       if (!tool) {
@@ -1168,7 +1177,7 @@ export async function registerCustomerZeroV2Routes(
         const out = await startGoogleOAuth({
           organizationId,
           userId: oauthUserId,
-          returnPath: "/connections/google/callback",
+          returnPath,
           locale: session.state.locale,
           redirectUri: googleOAuthRedirectUri(deps.publicBaseUrl),
           clientId: clientId as string,
@@ -1328,7 +1337,11 @@ export async function registerCustomerZeroV2Routes(
             stateNonceLookup: async (nonce) => {
               const s = await getGoogleOAuthStateStore().get(nonce);
               return s
-                ? { organizationId: s.organizationId, userId: s.userId }
+                ? {
+                    organizationId: s.organizationId,
+                    userId: s.userId,
+                    ...(s.returnPath ? { returnPath: s.returnPath } : {}),
+                  }
                 : null;
             },
             stateNonceConsume: async (nonce) => {
@@ -1389,6 +1402,7 @@ export async function registerCustomerZeroV2Routes(
             operational: tokenResult.operational,
             probe: tokenResult.probe,
             email: tokenResult.identity.email,
+            ...(tokenResult.returnPath ? { returnPath: tokenResult.returnPath } : {}),
           });
         } catch (cause) {
           // STATE-MACHINE INVARIANT: every callback outcome must leave
@@ -2900,11 +2914,22 @@ export async function processCeoMessage(
     }
   }
 
-  await session.conversations.addMessage(
-    conversation.id,
-    "assistant",
-    marketingTurn?.content ?? assistantReply,
-  );
+  // The business response is already complete at this point. Persisting the
+  // transcript is important, but a transient secondary write failure must
+  // not turn a valid Gmail/tool answer into a whole-turn 500.
+  try {
+    await session.conversations.addMessage(
+      conversation.id,
+      "assistant",
+      marketingTurn?.content ?? assistantReply,
+    );
+  } catch (cause) {
+    console.error("[conversation] assistant_persist_failed", {
+      organizationId,
+      conversationId: conversation.id,
+      error: cause instanceof Error ? cause.message : String(cause),
+    });
+  }
 
   // Legacy in-memory transcript (kept for back-compat; NOT the source of
   // truth — durable conversations are).
@@ -3235,7 +3260,7 @@ const EMAIL_QUESTION_PATTERN = new RegExp(
   "i",
 );
 
-function isEmailQuestion(message: string): boolean {
+export function isEmailQuestion(message: string): boolean {
   return EMAIL_QUESTION_PATTERN.test(message);
 }
 

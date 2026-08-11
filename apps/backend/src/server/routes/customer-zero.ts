@@ -22,6 +22,7 @@ import {
 } from "../../customer-zero/company-readiness.js";
 import { checkpoint } from "../../customer-zero/onboarding-checkpoints.js";
 import type { ServerDeps } from "../deps.js";
+import { isEmailQuestion, processCeoMessage, requireSession } from "./customer-zero-v2.js";
 import { curateMandatoryQuestions } from "../../customer-zero/questions.js";
 import { buildAnswersRawData } from "../../customer-zero/answers.js";
 import type { FastifyInstance } from "fastify";
@@ -489,6 +490,12 @@ export async function registerCustomerZeroRoutes(
       const session = getCustomerZeroSession(organizationId);
       if (!session) {
         return reply.code(404).send({ error: "Session not found." });
+      }
+
+      if (isEmailQuestion(message)) {
+        const durableSession = await requireSession(organizationId, deps);
+        const result = await processCeoMessage(durableSession, message);
+        return reply.code(200).send({ organizationId, reply: result.reply });
       }
 
       try {

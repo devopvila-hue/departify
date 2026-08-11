@@ -806,15 +806,17 @@ export const api = {
     postJson<{ connection: ToolConnectionView }>(
       `/api/customer-zero/${org}/connections/${toolId}/declare`,
     ),
-  connect: (org: string, toolId: string) =>
+  connect: (org: string, toolId: string, returnPath?: "/" | "/conexiones" | "/chat") =>
     postJson<{ connection: ConnectionCard }>(
       `/api/customer-zero/${org}/connections/${toolId}/connect`,
+      returnPath ? { returnPath } : undefined,
     ),
   finishGoogleConnect: (org: string, code: string, state: string) =>
     postJson<
       { connection: ConnectionCard } & {
         identity?: { email: string };
         operational?: boolean;
+        returnPath?: "/" | "/conexiones" | "/chat";
         error?: { code?: string; message?: string };
       }
     >(`/api/customer-zero/${org}/connections/gmail/callback`, {

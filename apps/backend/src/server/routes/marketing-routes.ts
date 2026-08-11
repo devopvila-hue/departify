@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { ServerDeps } from "../deps.js";
 import { getCustomerZeroSession } from "../../customer-zero/customer-zero-session.js";
+import { isEmailQuestion, processCeoMessage, requireSession } from "./customer-zero-v2.js";
 import { resolveLocale, t, type SupportedLocale } from "../../customer-zero/locale.js";
 
 /**
@@ -92,6 +93,15 @@ export async function registerMarketingRoutes(
           message: t(locale, "Escribe un mensaje para Elvira.", "Write a message to Elvira."),
         },
       });
+    }
+    // All Gmail reads use the canonical durable capability pipeline, even
+    // when the request arrives from the legacy Marketing surface. This keeps
+    // that surface from disagreeing with central chat after a new session or
+    // backend restart.
+    if (isEmailQuestion(body.message)) {
+      const session = await requireSession(organizationId, deps);
+      const result = await processCeoMessage(session, body.message);
+      return { reply: result.reply, activity: [], approvals: [] };
     }
     const outcome = await marketing.talkToElvira({
       organizationId,
