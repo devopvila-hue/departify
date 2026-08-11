@@ -27,8 +27,10 @@ export function ResultsRoute() {
     });
   }, [organizationId]);
 
-  const overviewResults = overview?.results ?? [];
-  const totalResults = overviewResults.length + departmentResults.length;
+  const overviewResults = overview?.company?.results ?? overview?.results ?? [];
+  const canonicalResults = overview?.company ? overviewResults : departmentResults;
+  const resultDetails = new Map(departmentResults.map((result) => [result.id, result]));
+  const totalResults = canonicalResults.length;
 
   return (
     <div className="dfy-page">
@@ -51,24 +53,21 @@ export function ResultsRoute() {
         </Card>
       ) : (
         <div className="dfy-grid dfy-grid--single">
-          {departmentResults.map((result) => (
-            <Card key={result.id} title={result.title}>
-              <p className="dfy-muted dfy-muted--small">
-                {result.source} ·{" "}
-                {new Date(result.createdAt).toLocaleDateString("es-ES")}
-              </p>
-              <p className="dfy-result">{readable(result.summary)}</p>
-              <div
-                className="dfy-result__body"
-                dangerouslySetInnerHTML={{ __html: renderMarkdown(result.content) }}
-              />
-              {result.chart && <ChartRenderer chart={result.chart} />}
-            </Card>
-          ))}
           {overviewResults.map((result) => (
             <Card key={result.id} title={result.title}>
               <HeadBadge head={result.head} compact />
               <p className="dfy-result">{readable(result.summary)}</p>
+              {resultDetails.get(result.id)?.content && (
+                <div
+                  className="dfy-result__body"
+                  dangerouslySetInnerHTML={{
+                    __html: renderMarkdown(resultDetails.get(result.id)?.content ?? ""),
+                  }}
+                />
+              )}
+              {resultDetails.get(result.id)?.chart && (
+                <ChartRenderer chart={resultDetails.get(result.id)!.chart!} />
+              )}
             </Card>
           ))}
         </div>

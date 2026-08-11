@@ -262,5 +262,9 @@ describe("Customer Zero UX v2 routes", () => {
     });
     expect(overview.statusCode).toBe(200);
     expect(overview.json().companyName).toBe("Panaderia Sol");
+    expect(overview.json().company.dataStatus).toBe("available");
+    expect(overview.json().company.summary.connectedTools).toBe(0);
+    expect(overview.json().company.summary.workingNow).toBe(0);
+    expect(overview.json().company.activity).toEqual([]);
   });
 });

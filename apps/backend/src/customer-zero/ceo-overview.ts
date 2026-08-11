@@ -13,6 +13,10 @@
  * entries at all (Fase 19).
  */
 import type { CustomerZeroSession } from "./customer-zero-session.js";
+import type { CompanyDnaRecord } from "./company-dna.js";
+import type { DepartmentStatusView, ApprovalRequest } from "./marketing-domain.js";
+import type { DepartmentResult, DepartmentTask } from "./department-work.js";
+import type { InboxItem } from "./inbox-domain.js";
 import {
   buildHeadView,
   getMarketingHead,
@@ -36,6 +40,7 @@ export interface ActivityView {
   readonly head: DepartmentHeadView;
   readonly message: string;
   readonly tone: "working" | "done" | "waiting" | "blocked";
+  readonly createdAt?: string;
 }
 
 export interface ResultView {
@@ -43,6 +48,7 @@ export interface ResultView {
   readonly head: DepartmentHeadView;
   readonly title: string;
   readonly summary: string;
+  readonly createdAt?: string;
 }
 
 export interface CeoOverview {
@@ -68,6 +74,215 @@ export interface CeoOverview {
       readonly role: string;
       readonly status: string;
     }[];
+  };
+}
+
+export interface CompanyOperatingState {
+  readonly dataStatus: "available" | "partial";
+  readonly summary: {
+    readonly digitalEmployees: number;
+    readonly workingNow: number;
+    readonly connectedTools: number;
+    readonly pendingApprovals: number;
+    readonly activeObjective: { readonly id: string | null; readonly title: string } | null;
+  };
+  readonly departments: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly status: string;
+    readonly head: DepartmentHeadView;
+    readonly employees: readonly {
+      readonly id: string;
+      readonly name: string;
+      readonly role: string;
+      readonly status: string;
+      readonly currentWork?: string;
+    }[];
+    readonly employeesWorkingNow: number;
+    readonly tools: readonly { readonly toolId: string; readonly label: string; readonly capability: string }[];
+    readonly toolsConnected: number;
+    readonly activeObjective: { readonly id: string | null; readonly title: string; readonly progress?: number } | null;
+  }[];
+  readonly employees: readonly {
+    readonly id: string;
+    readonly name: string;
+    readonly role: string;
+    readonly departmentId: string;
+    readonly status: string;
+    readonly currentWork?: string;
+  }[];
+  readonly tools: readonly {
+    readonly toolId: string;
+    readonly label: string;
+    readonly capability: string;
+    readonly status: "connected";
+  }[];
+  readonly pendingApprovals: readonly {
+    readonly id: string;
+    readonly from: string;
+    readonly title: string;
+    readonly detail: string;
+    readonly cost?: string;
+    readonly status: "pending";
+    readonly createdAt: string;
+  }[];
+  readonly activity: readonly ActivityView[];
+  readonly results: readonly ResultView[];
+}
+
+interface OperationalConnectionView {
+  readonly toolId: string;
+  readonly label: string;
+  readonly capability: string;
+  readonly state: string;
+}
+
+/**
+ * Builds the CEO operating cockpit from durable business records. The old
+ * session overview remains available for chat compatibility, but this
+ * projection deliberately never uses session-local marketing work as proof
+ * that something happened.
+ */
+export function buildCompanyOperatingState(input: {
+  readonly base: CeoOverview;
+  readonly head: DepartmentHeadView;
+  readonly tasks: readonly DepartmentTask[];
+  readonly results: readonly DepartmentResult[];
+  readonly inboxItems: readonly InboxItem[];
+  readonly connections: readonly OperationalConnectionView[];
+  readonly dna: CompanyDnaRecord | null;
+  readonly marketing: DepartmentStatusView | null;
+  readonly marketingApprovals: readonly ApprovalRequest[];
+}): CompanyOperatingState {
+  const activeTasks = input.tasks.filter((task) =>
+    task.status === "queued" || task.status === "running" || task.status === "waiting_approval",
+  );
+  const connectedTools = input.connections
+    .filter((connection) => connection.state === "connected")
+    .map((connection) => ({
+      toolId: connection.toolId,
+      label: connection.label,
+      capability: connection.capability,
+      status: "connected" as const,
+    }));
+  const marketingTasks = activeTasks.filter((task) => task.departmentId === "marketing");
+  const marketingObjective = input.marketing?.activeObjective
+    ? {
+        id: input.marketing.activeObjective.id,
+        title: input.marketing.activeObjective.title,
+        progress: input.marketing.activeObjective.progress,
+      }
+    : input.dna?.objective
+      ? { id: null, title: input.dna.objective }
+      : null;
+  const activeObjective = marketingObjective
+    ? { id: marketingObjective.id, title: marketingObjective.title }
+    : null;
+  const marketingEmployees = (input.marketing?.employees ?? []).map((employee) => ({
+    id: employee.id,
+    name: employee.label,
+    role: employee.role,
+    departmentId: "marketing",
+    status: employee.status,
+    ...(employee.currentWork ? { currentWork: employee.currentWork } : {}),
+  }));
+  const marketingTools = (input.marketing?.tools ?? [])
+    .filter((tool) => tool.status === "connected")
+    .map((tool) => ({ toolId: tool.toolId, label: tool.label, capability: tool.capability }));
+  const marketingStatus = marketingTasks.length > 0
+    ? marketingTasks.some((task) => task.status === "waiting_approval")
+      ? "esperando_aprobacion"
+      : "trabajando"
+    : input.marketing?.status === "not_provisioned"
+      ? "no_disponible"
+      : input.marketingApprovals.some((approval) => approval.status === "pending")
+        ? "esperando_aprobacion"
+        : "disponible";
+  const pendingApprovals = input.base.decisions.filter((decision) => decision.status === "pending").length
+    + input.marketingApprovals.filter((approval) => approval.status === "pending").length;
+
+  const activity: ActivityView[] = [
+    ...input.inboxItems.map((item) => ({
+      id: `inbox_${item.id}`,
+      head: input.head,
+      message: `Correo recibido: ${item.subject}`,
+      tone: "done" as const,
+      createdAt: item.receivedAt,
+    })),
+    ...input.tasks.map((task) => ({
+      id: `task_${task.id}`,
+      head: input.head,
+      message: task.source?.type === "inbox_email"
+        ? `Correo convertido en tarea: ${task.title}`
+        : `Tarea creada: ${task.title}`,
+      tone: task.status === "failed"
+        ? "blocked" as const
+        : task.status === "waiting_approval"
+          ? "waiting" as const
+          : task.status === "completed"
+            ? "done" as const
+            : "working" as const,
+      createdAt: task.createdAt,
+    })),
+    ...input.results.map((result) => ({
+      id: `result_${result.id}`,
+      head: input.head,
+      message: `Resultado disponible: ${result.title}`,
+      tone: "done" as const,
+      createdAt: result.createdAt,
+    })),
+    ...(input.marketing?.recentActivity ?? []).map((entry) => ({
+      id: `marketing_${entry.id}`,
+      head: input.head,
+      message: entry.message,
+      tone: "done" as const,
+      createdAt: entry.createdAt,
+    })),
+  ]
+    .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))
+    .slice(0, 20);
+
+  return {
+    dataStatus: "available",
+    summary: {
+      digitalEmployees: marketingEmployees.length,
+      workingNow: activeTasks.length,
+      connectedTools: connectedTools.length,
+      pendingApprovals,
+      activeObjective,
+    },
+    departments: [{
+      id: "marketing",
+      name: input.marketing?.name ?? "Marketing",
+      status: marketingStatus,
+      head: input.head,
+      employees: marketingEmployees,
+      employeesWorkingNow: marketingTasks.length,
+      tools: marketingTools,
+      toolsConnected: marketingTools.length,
+      activeObjective: marketingObjective,
+    }],
+    employees: marketingEmployees,
+    tools: connectedTools,
+    pendingApprovals: input.marketingApprovals
+      .filter((approval) => approval.status === "pending")
+      .map((approval) => ({
+        id: approval.id,
+        from: approval.from,
+        title: approval.title,
+        detail: approval.detail,
+        ...(approval.cost ? { cost: approval.cost } : {}),
+        status: "pending" as const,
+        createdAt: approval.createdAt,
+      })),
+    activity,
+    results: input.results.map((result) => ({
+      id: result.id,
+      head: input.head,
+      title: result.title,
+      summary: result.summary,
+      createdAt: result.createdAt,
+    })),
   };
 }
 

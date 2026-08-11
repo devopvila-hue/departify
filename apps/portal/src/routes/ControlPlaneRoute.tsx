@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { api, type MarketingDepartmentStatus } from "@/app/api";
+import { api, type CompanyOperatingState } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import { Badge, Card, EmptyState } from "@/components/primitives";
 import { readable } from "@/app/readable";
@@ -25,7 +25,8 @@ import { readable } from "@/app/readable";
 export function ControlPlaneRoute() {
   const { organizationId } = useOrg();
   const navigate = useNavigate();
-  const [department, setDepartment] = useState<MarketingDepartmentStatus | null>(null);
+  const [company, setCompany] = useState<CompanyOperatingState | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<CompanyApproval[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedEmployee, setSelectedEmployee] = useState<string | null>(null);
@@ -34,9 +35,10 @@ export function ControlPlaneRoute() {
 
   const load = useCallback(async () => {
     if (!organizationId) return;
-    const data = await api.marketingDepartment(organizationId);
-    if (data) {
-      setDepartment(data);
+    const overview = await api.overview(organizationId);
+    if (overview?.company) {
+      setCompany(overview.company);
+      setPendingApprovals(overview.company.pendingApprovals);
       setLoadFailed(false);
     } else {
       setLoadFailed(true);
@@ -124,12 +126,25 @@ export function ControlPlaneRoute() {
     );
   }
 
-  if (!department) {
+  if (!company) {
     return (
       <div className="dfy-page">
         <section className="dfy-hero">
           <p className="dfy-eyebrow">Tu empresa</p>
           <h1>Cargando tu empresa…</h1>
+        </section>
+      </div>
+    );
+  }
+
+  const department = company.departments[0];
+  if (!department) {
+    return (
+      <div className="dfy-page">
+        <section className="dfy-hero">
+          <p className="dfy-eyebrow">Tu empresa</p>
+          <h1>Sin departamentos operativos</h1>
+          <p className="dfy-hero__lead">Todavía no hay un equipo activado para esta empresa.</p>
         </section>
       </div>
     );
@@ -149,23 +164,23 @@ export function ControlPlaneRoute() {
       {/* Company status summary — real backend data */}
       <section className="dfy-company-summary" aria-label="Resumen de la empresa">
         <div className="dfy-company-summary__stat">
-          <strong>{department.employees.length}</strong>
+          <strong>{company.summary.digitalEmployees}</strong>
           <span>empleados digitales</span>
         </div>
         <div className="dfy-company-summary__stat">
-          <strong>{department.employeesWorkingNow}</strong>
+          <strong>{company.summary.workingNow}</strong>
           <span>trabajando ahora</span>
         </div>
         <div className="dfy-company-summary__stat">
-          <strong>{department.toolsConnected}</strong>
+          <strong>{company.summary.connectedTools}</strong>
           <span>herramientas conectadas</span>
         </div>
         <div className="dfy-company-summary__stat">
-          <strong>{department.pendingApprovals.length}</strong>
+          <strong>{company.summary.pendingApprovals}</strong>
           <span>aprobaciones pendientes</span>
         </div>
         <div className="dfy-company-summary__stat">
-          <strong>{department.activeObjective ? 1 : 0}</strong>
+          <strong>{company.summary.activeObjective ? 1 : 0}</strong>
           <span>objetivo activo</span>
         </div>
       </section>
@@ -253,11 +268,11 @@ export function ControlPlaneRoute() {
       <div className="dfy-grid">
         {/* Digital employees */}
         <Card title="Empleados digitales">
-          {(department.employees.length ?? 0) === 0 ? (
+          {(company.employees.length ?? 0) === 0 ? (
             <EmptyState title="Sin empleados" description="El equipo se está formando." />
           ) : (
             <ul className="dfy-list">
-              {department.employees.map((employee) => (
+              {company.employees.map((employee) => (
                 <li
                   key={employee.id}
                   className="dfy-digital-employee"
@@ -266,7 +281,7 @@ export function ControlPlaneRoute() {
                   }
                 >
                   <div className="dfy-digital-employee__main">
-                    <strong>{employee.label}</strong>
+                    <strong>{employee.name}</strong>
                     <span className="dfy-muted dfy-muted--small">{employee.role}</span>
                   </div>
                   <Badge tone={employee.status === "trabajando" ? "accent" : "neutral"}>
@@ -289,17 +304,17 @@ export function ControlPlaneRoute() {
 
         {/* Connected tools */}
         <Card title="Herramientas">
-          {(department.tools.length ?? 0) === 0 ? (
+          {(company.tools.length ?? 0) === 0 ? (
             <EmptyState title="Sin herramientas" description="Conecta una herramienta para que el equipo haga más." />
           ) : (
             <ul className="dfy-list">
-              {department.tools.map((tool) => (
+              {company.tools.map((tool) => (
                 <li key={tool.toolId}>
                   <span className="dfy-tool__label">
                     <strong>{tool.label}</strong>
                     <span className="dfy-muted dfy-muted--small"> · {tool.capability}</span>
                   </span>
-                  <Badge tone={tool.status === "connected" ? "success" : "neutral"}>
+                  <Badge tone="success">
                     {toolStatusLabel(tool.status)}
                   </Badge>
                 </li>
@@ -310,14 +325,14 @@ export function ControlPlaneRoute() {
 
         {/* Approvals */}
         <Card title="Aprobaciones">
-          {(department.pendingApprovals.length ?? 0) === 0 ? (
+          {(pendingApprovals.length ?? 0) === 0 ? (
             <EmptyState
               title="Nada pendiente"
               description="Cuando Elvira necesite tu decisión aparecerá aquí."
             />
           ) : (
             <ul className="dfy-list">
-              {department.pendingApprovals.map((approval) => (
+              {pendingApprovals.map((approval) => (
                 <li key={approval.id}>
                   <p className="dfy-approval__title">
                     <strong>{approval.title}</strong>
@@ -350,11 +365,11 @@ export function ControlPlaneRoute() {
 
         {/* Activity */}
         <Card title="Actividad">
-          {(department.recentActivity.length ?? 0) === 0 ? (
+          {(company.activity.length ?? 0) === 0 ? (
             <EmptyState title="Todavía no hay actividad" description="En cuanto Elvira empiece a mover algo, lo verás aquí." />
           ) : (
             <ul className="dfy-activity">
-              {department.recentActivity.map((entry) => (
+              {company.activity.map((entry) => (
                 <li key={entry.id} className="dfy-activity__item dfy-activity__item--working">
                   <span className="dfy-activity__dot" aria-hidden="true" />
                   <span>{readable(entry.message)}</span>
@@ -367,14 +382,14 @@ export function ControlPlaneRoute() {
 
       {/* Results */}
       <Card title="Resultados">
-        {(department.results.length ?? 0) === 0 ? (
+        {(company.results.length ?? 0) === 0 ? (
           <EmptyState
             title="Aún sin entregables"
             description="Cuando el equipo termine algo, aparecerá aquí."
           />
         ) : (
           <ul className="dfy-list">
-            {department.results.map((result) => (
+          {company.results.map((result) => (
               <li key={result.id}>
                 <strong>{result.title}</strong>
                 <p className="dfy-muted">{readable(result.summary)}</p>
@@ -385,4 +400,14 @@ export function ControlPlaneRoute() {
       </Card>
     </div>
   );
+}
+
+interface CompanyApproval {
+  id: string;
+  from: string;
+  title: string;
+  detail: string;
+  cost?: string;
+  status: string;
+  createdAt: string;
 }

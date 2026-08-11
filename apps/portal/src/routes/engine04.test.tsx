@@ -59,6 +59,70 @@ const departmentStatus = {
   results: [],
 };
 
+const companyOverview = {
+  organizationId: "org_moon",
+  goal: "Conseguir 20 leads cualificados",
+  companyName: "MOON",
+  heads: [head],
+  decisions: [],
+  activity: departmentStatus.recentActivity.map((entry) => ({
+    id: entry.id,
+    head,
+    message: entry.message,
+    tone: "done",
+    createdAt: entry.createdAt,
+  })),
+  results: [],
+  connections: [],
+  working: 1,
+  done: 0,
+  company: {
+    dataStatus: "available",
+    summary: {
+      digitalEmployees: 3,
+      workingNow: 1,
+      connectedTools: 0,
+      pendingApprovals: 1,
+      activeObjective: { id: "obj_1", title: "Conseguir 20 leads cualificados" },
+    },
+    departments: [{
+      id: "marketing",
+      name: "Marketing",
+      status: "trabajando",
+      head,
+      employees: departmentStatus.employees.map((employee) => ({
+        id: employee.id,
+        name: employee.label,
+        role: employee.role,
+        status: employee.status,
+        ...(employee.currentWork ? { currentWork: employee.currentWork } : {}),
+      })),
+      employeesWorkingNow: 1,
+      tools: [],
+      toolsConnected: 0,
+      activeObjective: { id: "obj_1", title: "Conseguir 20 leads cualificados", progress: 35 },
+    }],
+    employees: departmentStatus.employees.map((employee) => ({
+      id: employee.id,
+      name: employee.label,
+      role: employee.role,
+      departmentId: "marketing",
+      status: employee.status,
+      ...(employee.currentWork ? { currentWork: employee.currentWork } : {}),
+    })),
+    tools: [],
+    pendingApprovals: departmentStatus.pendingApprovals,
+    activity: departmentStatus.recentActivity.map((entry) => ({
+      id: entry.id,
+      head,
+      message: entry.message,
+      tone: "done",
+      createdAt: entry.createdAt,
+    })),
+    results: [],
+  },
+};
+
 function mount(ui: ReactElement, route = "/inicio") {
   window.localStorage.setItem(
     "departify_customer_zero",
@@ -78,7 +142,13 @@ function mockFetch(handler: (url: string, init?: RequestInit) => unknown) {
       Promise.resolve({
         ok: true,
         status: 200,
-        json: async () => handler(url, init),
+        json: async () => {
+          if (url.includes("/overview")) return companyOverview;
+          if (url.includes("/departments/marketing/") && url.endsWith("/approvals")) {
+            return { approvals: departmentStatus.pendingApprovals };
+          }
+          return handler(url, init);
+        },
       } as Response),
     ),
   );
@@ -152,8 +222,8 @@ describe("ENGINE 04 — Control Plane", () => {
   it("09 connected tools truthful", async () => {
     mockFetch(() => departmentStatus);
     mount(<ControlPlaneRoute />);
-    await waitFor(() => expect(screen.getAllByText("No conectado").length).toBeGreaterThan(0));
-    expect(screen.getByText("Google Ads")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Sin herramientas")).toBeInTheDocument());
+    expect(screen.queryByText("Google Ads")).not.toBeInTheDocument();
   });
 
   it("10 approval displayed", async () => {

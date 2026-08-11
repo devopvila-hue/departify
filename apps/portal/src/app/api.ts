@@ -275,6 +275,55 @@ export interface CeoOverview {
     director: { name: string; role: string; initials: string };
     specialists: { id: string; name: string; role: string; status: string }[];
   };
+  company?: CompanyOperatingState;
+}
+
+export interface CompanyOperatingState {
+  dataStatus: "available" | "partial";
+  summary: {
+    digitalEmployees: number;
+    workingNow: number;
+    connectedTools: number;
+    pendingApprovals: number;
+    activeObjective: { id: string | null; title: string } | null;
+  };
+  departments: {
+    id: string;
+    name: string;
+    status: string;
+    head: HeadIdentity;
+    employees: {
+      id: string;
+      name: string;
+      role: string;
+      status: string;
+      currentWork?: string;
+    }[];
+    employeesWorkingNow: number;
+    tools: { toolId: string; label: string; capability: string }[];
+    toolsConnected: number;
+    activeObjective: { id: string | null; title: string; progress?: number } | null;
+  }[];
+  employees: {
+    id: string;
+    name: string;
+    role: string;
+    departmentId: string;
+    status: string;
+    currentWork?: string;
+  }[];
+  tools: { toolId: string; label: string; capability: string; status: "connected" }[];
+  pendingApprovals: {
+    id: string;
+    from: string;
+    title: string;
+    detail: string;
+    cost?: string;
+    status: "pending";
+    createdAt: string;
+  }[];
+  activity: (ActivityView & { createdAt?: string })[];
+  results: (ResultView & { createdAt?: string })[];
 }
 
 export interface MarketingWorkItem {
@@ -340,6 +389,7 @@ export interface UnderstandingView {
   uncertainties: readonly string[];
   confirmed: boolean;
   missing: readonly string[];
+  provenance?: Record<string, "research" | "ceo" | "inferred">;
 }
 
 /** The CEO's corrections to the understood company. */

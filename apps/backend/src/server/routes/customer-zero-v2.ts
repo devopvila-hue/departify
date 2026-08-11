@@ -68,7 +68,10 @@ import {
   selectNextQuestion,
   type ProgressiveQuestion,
 } from "../../customer-zero/progressive-discovery.js";
-import { buildCeoOverview } from "../../customer-zero/ceo-overview.js";
+import {
+  buildCeoOverview,
+  buildCompanyOperatingState,
+} from "../../customer-zero/ceo-overview.js";
 import {
   buildHeadView,
   getMarketingHead,
@@ -695,20 +698,13 @@ export async function registerCustomerZeroV2Routes(
         const orgState = toolStates.find((s) => s.toolId === def.id) ?? null;
         return renderConnectionCard(orgState, session.state.locale);
       });
+      const catalog = await buildCanonicalConnectionViews(session, session.state.locale);
       const hostinger = await probeHostingerEmail();
       const hostingerCardIndex = cards.findIndex((card) => card.id === "hostinger_email");
       if (hostingerCardIndex >= 0) {
         cards[hostingerCardIndex] = buildHostingerCard(hostinger, session.state.locale);
       } else {
-        // Environment-backed providers have no durable tool-state row until
-        // the first explicit connection action. They still belong in the
-        // canonical portal catalog, with live status from the provider probe.
         cards.push(buildHostingerCard(hostinger, session.state.locale));
-      }
-      const catalog = await buildCatalogConnectionViews(session, session.state.locale);
-      const hostingerCatalogIndex = catalog.findIndex((entry) => entry.toolId === "hostinger_email");
-      if (hostingerCatalogIndex >= 0) {
-        catalog[hostingerCatalogIndex] = buildHostingerCatalogView(hostinger, session.state.locale);
       }
       return reply.code(200).send({
         organizationId,
@@ -2110,9 +2106,41 @@ export async function registerCustomerZeroV2Routes(
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
       const session = await requireSession(organizationId, deps);
+      const base = buildCeoOverview(session);
+      const connections = await buildCanonicalConnectionViews(session, session.state.locale);
+      const workStore = workStoreForRoutes();
+      const [tasks, results, inboxItems, dna, marketingApprovals] = await Promise.all([
+        workStore.listTasksForOrg(organizationId, 100),
+        workStore.listResultsForOrg(organizationId, 50),
+        inboxStore.list({ organizationId, limit: 20 }),
+        resolveCompanyDnaStore(deps).get(organizationId),
+        deps.marketing?.listApprovals(organizationId) ?? Promise.resolve([]),
+      ]);
+      const connectedToolIds = connections
+        .filter((connection) => connection.state === "connected")
+        .map((connection) => connection.toolId);
+      const marketing = deps.marketing
+        ? await deps.marketing.getDepartmentStatus(
+            organizationId,
+            connectedToolIds,
+            session.state.locale,
+          )
+        : null;
+      const company = buildCompanyOperatingState({
+        base,
+        head: buildHeadView(getMarketingHead(), session.state.locale),
+        tasks,
+        results,
+        inboxItems,
+        connections,
+        dna,
+        marketing,
+        marketingApprovals,
+      });
       return reply.code(200).send({
         organizationId,
-        ...buildCeoOverview(session),
+        ...base,
+        company,
       });
     },
   );
@@ -4917,9 +4945,20 @@ async function buildCatalogConnectionViews(
   session: CustomerZeroSession,
   locale: SupportedLocale,
 ): Promise<ToolConnectionView[]> {
-  const connected = session.state.connections;
+  const durableStates = await listToolStatesForSession(session);
+  const durableByTool = new Map(durableStates.map((state) => [state.toolId, state]));
   return TOOL_CATALOG.map((tool) => {
-    const connection = connected.get(tool.id);
+    const durable = durableByTool.get(tool.id);
+    const connection = durable
+      ? {
+          toolId: durable.toolId,
+          label: durable.label,
+          capability: durable.capability,
+          lifecycle: durable.status,
+          verifiedAt: durable.verifiedAt,
+          blockedReason: durable.health === "down" ? "La conexión no está operativa." : undefined,
+        }
+      : undefined;
     const category = locale === "en" ? tool.categoryEn : tool.categoryEs;
     if (!connection) {
       return {
@@ -4934,9 +4973,7 @@ async function buildCatalogConnectionViews(
         action: "prepare",
       };
     }
-    const lifecycle: ToolLifecycleStatus =
-      connection.lifecycle ??
-      (connection.status === "connected" ? "connected" : "needs_connection");
+    const lifecycle: ToolLifecycleStatus = connection.lifecycle;
     // Semantic consistency: a tool with no implemented connector can never be
     // "needs_connection" (the CEO has no mechanism to connect it). It is
     // SELECTED. CONNECTED/CONFIGURED are kept as-is defensively.
@@ -4959,6 +4996,23 @@ async function buildCatalogConnectionViews(
       ...(connection.blockedReason ? { blockedReason: connection.blockedReason } : {}),
     };
   });
+}
+
+/** Canonical operational connection projection shared by /conexiones and the CEO cockpit. */
+async function buildCanonicalConnectionViews(
+  session: CustomerZeroSession,
+  locale: SupportedLocale,
+): Promise<ToolConnectionView[]> {
+  const catalog = await buildCatalogConnectionViews(session, locale);
+  const hostinger = await probeHostingerEmail();
+  const index = catalog.findIndex((entry) => entry.toolId === "hostinger_email");
+  const hostingerView = buildHostingerCatalogView(hostinger, locale);
+  if (index >= 0) {
+    catalog[index] = hostingerView;
+  } else {
+    catalog.push(hostingerView);
+  }
+  return catalog;
 }
 
 /** Test support: clears the operational-state cache between cases. */

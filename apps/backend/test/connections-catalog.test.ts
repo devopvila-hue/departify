@@ -98,6 +98,17 @@ describe("P-B production fix — connections catalog", () => {
         verifiedAt: "2026-08-09T00:00:00.000Z",
       }),
     );
+    await toolState.upsert({
+      organizationId: org,
+      toolId: "mautic",
+      label: "Mautic",
+      capability: "crm.contacts.read",
+      declared: true,
+      status: "connected",
+      configSource: "env:mautic",
+      verifiedAt: "2026-08-09T00:00:00.000Z",
+      health: "operational",
+    });
     const views = await connections(org);
     const mautic = views.find((view) => view.toolId === "mautic");
     expect(mautic?.state).toBe("connected");
