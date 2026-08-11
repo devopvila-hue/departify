@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
 import { buildServer } from "../src/server/server.js";
 import { loadBackendConfig } from "@departify/config";
 import type { FastifyInstance } from "fastify";
@@ -6,6 +6,7 @@ import type { InjectOptions } from "light-my-request";
 import { makeFakeTenant } from "./helpers/fake-tenant.js";
 import { InMemoryInboxStore } from "../src/customer-zero/inbox-domain.js";
 import { resetCustomerZeroSessionsForTest } from "../src/customer-zero/customer-zero-session.js";
+import { HostingerEmailAdapter } from "../src/customer-zero/hostinger-email-adapter.js";
 
 /**
  * CZ03 — Inbox → work bridge.
@@ -34,6 +35,7 @@ describe("CZ03 — Inbox → work bridge", () => {
 
   afterEach(() => {
     resetCustomerZeroSessionsForTest();
+    vi.restoreAllMocks();
   });
 
   function authedInject(options: InjectOptions) {
@@ -119,5 +121,65 @@ describe("CZ03 — Inbox → work bridge", () => {
       url: `/api/customer-zero/${org}/inbox/missing-item/work`,
     });
     expect(response.statusCode).toBe(404);
+  });
+
+  it("is idempotent and exposes the same task through the work feed", async () => {
+    const org = await startOrg();
+    const itemId = await seedLeadItem(org);
+    const first = await authedInject({ method: "POST", url: `/api/customer-zero/${org}/inbox/${itemId}/work` });
+    const second = await authedInject({ method: "POST", url: `/api/customer-zero/${org}/inbox/${itemId}/work` });
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().task.id).toBe(first.json().task.id);
+    const feed = await authedInject({ method: "GET", url: `/api/customer-zero/${org}/work-feed` });
+    expect(feed.statusCode).toBe(200);
+    expect(feed.json().tasks).toEqual([expect.objectContaining({ id: first.json().task.id, organizationId: org })]);
+  });
+
+  it("keeps reply approval provider-affine and returns a terminal receipt", async () => {
+    const org = await startOrg();
+    const item = await inboxStore.upsert({
+      organizationId: org,
+      source: "hostinger",
+      sourceMessageId: "host-incoming-1",
+      sourceThreadId: "host-thread-1",
+      channel: "email",
+      category: "unknown",
+      subject: "Consulta",
+      sender: { email: "cliente@empresa.com" },
+      recipients: [{ email: "ventas@empresa.com" }],
+      plainText: "Hola",
+      preview: "Hola",
+      receivedAt: new Date().toISOString(),
+      unread: true,
+      importance: 0.4,
+      departmentId: "marketing",
+      isLead: false,
+      relatedWorkItemId: null,
+      relatedConversationId: null,
+      provenance: { provider: "hostinger", rawEventId: "host-incoming-1" },
+      state: "classified",
+    });
+    const verify = vi.spyOn(HostingerEmailAdapter.prototype, "verifyCapability").mockResolvedValue(true);
+    const reply = vi.spyOn(HostingerEmailAdapter.prototype, "replyMessage").mockResolvedValue({
+      providerMessageId: "host-reply-1",
+      sentAt: new Date().toISOString(),
+    });
+    const draft = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/inbox/${item.id}/reply/draft`,
+      payload: { body: "Prueba respuesta desde Departify" },
+    });
+    expect(draft.statusCode).toBe(200);
+    const approved = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/inbox/email/approve`,
+      payload: { draftId: draft.json().draftId },
+    });
+    expect(approved.statusCode).toBe(200);
+    expect(approved.json()).toMatchObject({ status: "succeeded", receipt: { providerResourceId: "host-reply-1" } });
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenCalledWith(expect.objectContaining({ messageId: "host-incoming-1", to: "cliente@empresa.com" }));
+    expect(verify).toHaveBeenCalled();
   });
 });

@@ -181,4 +181,56 @@ describe("InboxRoute — provider-neutral email sync", () => {
       expect(new Headers(request.init?.headers).get("authorization")).toBe("Bearer session-token");
     }
   });
+
+  it("prepares and approves a provider-affine reply from message detail", async () => {
+    const calls: string[] = [];
+    const item = {
+      id: "reply-item",
+      organizationId: "org-inbox",
+      source: "hostinger",
+      sourceMessageId: "provider-message-1",
+      sourceThreadId: "provider-thread-1",
+      channel: "email",
+      category: "unknown",
+      subject: "Consulta",
+      sender: { email: "cliente@example.com" },
+      senderEmail: "cliente@example.com",
+      preview: "¿Puedes revisarlo?",
+      plainText: "¿Puedes revisarlo?",
+      receivedAt: "2026-08-11T10:00:00.000Z",
+      unread: true,
+      importance: 0,
+      departmentId: null,
+      isLead: false,
+      state: "classified",
+      relatedWorkItemId: null,
+      relatedConversationId: null,
+    };
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      calls.push(url);
+      const json = url.includes("reply/draft")
+        ? { draftId: "draft-1", provider: "hostinger", draft: { to: "cliente@example.com", subject: "Re: Consulta", body: "Lo reviso." }, status: "awaiting_approval" }
+        : url.includes("email/approve")
+          ? { draftId: "draft-1", reply: "Enviado a cliente@example.com.", status: "succeeded", receipt: { status: "succeeded", providerResourceId: "sent-1" } }
+          : url.includes("/inbox/reply-item")
+            ? { organizationId: "org-inbox", item }
+            : { organizationId: "org-inbox", items: [item] };
+      return Promise.resolve({ ok: true, status: 200, json: async () => json } as Response);
+    }));
+    render(
+      <MemoryRouter>
+        <OrgProvider><InboxRoute /></OrgProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Consulta" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Responder" }));
+    fireEvent.change(screen.getByLabelText("Mensaje"), { target: { value: "Lo reviso." } });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar envío" }));
+    expect(await screen.findByRole("button", { name: "Confirmar y enviar" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Confirmar y enviar" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Enviado a cliente@example.com.");
+    expect(calls.some((url) => url.includes("/reply/draft"))).toBe(true);
+    expect(calls.some((url) => url.includes("/inbox/email/approve"))).toBe(true);
+  });
 });

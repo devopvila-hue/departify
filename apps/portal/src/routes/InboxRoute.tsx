@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { JSX } from "react";
 
 import { api, type InboxItemView, type InboxCategory } from "@/app/api";
 import { useOrg } from "@/app/org-context";
@@ -36,6 +37,7 @@ export function InboxRoute() {
   const [selected, setSelected] = useState<InboxItemView | null>(null);
   const [openingId, setOpeningId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [composer, setComposer] = useState<EmailComposer | null>(null);
 
   const load = useCallback(async () => {
     if (!organizationId) return;
@@ -66,13 +68,60 @@ export function InboxRoute() {
     setWorkingId(item.id);
     setError(null);
     try {
-      await api.inboxToWork(organizationId, item.id);
+      const result = await api.inboxToWork(organizationId, item.id);
+      if (result?.item && selected?.id === item.id) setSelected(result.item);
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "No hemos podido crear la tarea.");
     } finally {
       setWorkingId(null);
     }
+  }
+
+  function openNewEmail(): void {
+    setError(null);
+    setComposer({ mode: "new", to: "", subject: "", body: "", draftId: null, result: null });
+  }
+
+  function openReply(item: InboxItemView): void {
+    setError(null);
+    setComposer({
+      mode: "reply",
+      itemId: item.id,
+      to: item.sender?.email ?? item.senderEmail ?? "",
+      subject: /^re\s*:/i.test(item.subject) ? item.subject : `Re: ${item.subject || "Tu correo"}`,
+      body: "",
+      draftId: null,
+      result: null,
+    });
+  }
+
+  async function prepareEmail(): Promise<void> {
+    if (!organizationId || !composer || composer.draftId) return;
+    setError(null);
+    const result = composer.mode === "reply" && composer.itemId
+      ? await api.inboxReplyDraft(organizationId, composer.itemId, composer.body)
+      : await api.inboxEmailDraft(organizationId, {
+          to: composer.to,
+          subject: composer.subject,
+          body: composer.body,
+        });
+    if (!result || result.error) {
+      setError("No he podido preparar el correo. Revisa los campos e inténtalo de nuevo.");
+      return;
+    }
+    setComposer({ ...composer, draftId: result.draftId, to: result.draft.to, subject: result.draft.subject, body: result.draft.body });
+  }
+
+  async function approveEmail(): Promise<void> {
+    if (!organizationId || !composer?.draftId || composer.result) return;
+    setError(null);
+    const result = await api.inboxEmailApprove(organizationId, composer.draftId);
+    if (!result || result.error) {
+      setError("No he podido ejecutar el envío. El borrador se conserva para reintentarlo.");
+      return;
+    }
+    setComposer({ ...composer, result: result.reply, draftId: result.status === "succeeded" ? null : composer.draftId });
   }
 
   async function openItem(item: InboxItemView) {
@@ -111,6 +160,9 @@ export function InboxRoute() {
           >
             {syncing ? "Sincronizando…" : "Sincronizar correo"}
           </button>
+          <button type="button" className="dfy-button dfy-button--ghost" onClick={openNewEmail}>
+            Nuevo correo
+          </button>
         </div>
       </section>
 
@@ -139,6 +191,16 @@ export function InboxRoute() {
             <button type="button" className="dfy-button dfy-button--small" onClick={() => setSelected(null)}>
               Volver al inbox
             </button>
+            <button type="button" className="dfy-button dfy-button--small" onClick={() => openReply(selected)}>
+              Responder
+            </button>
+            {selected.state === "in_work" ? (
+              <Badge tone="accent">Convertido en tarea</Badge>
+            ) : (
+              <button type="button" className="dfy-button dfy-button--small" onClick={() => void toWork(selected)} disabled={workingId !== null}>
+                {workingId === selected.id ? "Creando…" : "Convertir en tarea"}
+              </button>
+            )}
           </div>
           <p className="dfy-muted dfy-muted--small">
             {selected.source === "hostinger" ? "Correo empresarial" : selected.source}
@@ -177,6 +239,16 @@ export function InboxRoute() {
               </ul>
             </div>
           )}
+          {composer?.mode === "reply" && composer.itemId === selected.id && (
+            <EmailComposerView composer={composer} onChange={setComposer} onPrepare={() => void prepareEmail()} onApprove={() => void approveEmail()} />
+          )}
+        </Card>
+      )}
+
+      {!selected && composer?.mode === "new" && (
+        <Card className="dfy-inbox-composer">
+          <h2>Nuevo correo</h2>
+          <EmailComposerView composer={composer} onChange={setComposer} onPrepare={() => void prepareEmail()} onApprove={() => void approveEmail()} />
         </Card>
       )}
 
@@ -237,6 +309,56 @@ export function InboxRoute() {
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+interface EmailComposer {
+  mode: "reply" | "new";
+  itemId?: string;
+  to: string;
+  subject: string;
+  body: string;
+  draftId: string | null;
+  result: string | null;
+}
+
+function EmailComposerView(props: {
+  composer: EmailComposer;
+  onChange: (composer: EmailComposer) => void;
+  onPrepare: () => void;
+  onApprove: () => void;
+}): JSX.Element {
+  const { composer } = props;
+  const approved = Boolean(composer.result);
+  return (
+    <div className="dfy-inbox-composer__fields">
+      <label>
+        Para
+        <input value={composer.to} disabled={composer.mode === "reply" || Boolean(composer.draftId)} onChange={(event) => props.onChange({ ...composer, to: event.target.value })} />
+      </label>
+      <label>
+        Asunto
+        <input value={composer.subject} disabled={Boolean(composer.draftId)} onChange={(event) => props.onChange({ ...composer, subject: event.target.value })} />
+      </label>
+      <label>
+        Mensaje
+        <textarea value={composer.body} disabled={Boolean(composer.draftId)} rows={6} onChange={(event) => props.onChange({ ...composer, body: event.target.value })} />
+      </label>
+      {!composer.draftId && !approved && (
+        <button type="button" className="dfy-button dfy-button--small" onClick={props.onPrepare} disabled={!composer.to || !composer.subject || !composer.body}>
+          Preparar envío
+        </button>
+      )}
+      {composer.draftId && !approved && (
+        <div className="dfy-inbox-composer__approval">
+          <p className="dfy-muted">Borrador preparado. Confirma para enviarlo una sola vez.</p>
+          <button type="button" className="dfy-button dfy-button--small" onClick={props.onApprove}>
+            Confirmar y enviar
+          </button>
+        </div>
+      )}
+      {composer.result && <p className="dfy-alert" role="status">{composer.result}</p>}
     </div>
   );
 }

@@ -71,6 +71,13 @@ interface HostingerMailbox {
   readonly address: string;
 }
 
+interface HostingerApiOperation {
+  readonly name: string;
+  readonly method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  readonly path: string;
+  readonly inputSchema?: unknown;
+}
+
 interface HostingerApiProxyResult {
   readonly status?: number;
   readonly body?: unknown;
@@ -93,6 +100,7 @@ export type HostingerErrorCategory =
   | "PROVIDER_RATE_LIMITED"
   | "TIMEOUT"
   | "INVALID_REQUEST"
+  | "PROVIDER_ACCEPTED_UNVERIFIED"
   | "UNKNOWN_PROVIDER_FAILURE";
 
 export class HostingerEmailError extends Error {
@@ -127,6 +135,7 @@ export class HostingerEmailAdapter {
   private sessionId: string | null = null;
   private mapping: HostingerToolMapping | null = null;
   private mailboxes: readonly HostingerMailbox[] | null = null;
+  private operations: readonly HostingerApiOperation[] | null = null;
 
   constructor(options?: Partial<HostingerTransportOptions>) {
     const credentials = resolveHostingerCredentials();
@@ -156,7 +165,21 @@ export class HostingerEmailAdapter {
     if (!Object.keys(mapping.capabilities).some((capability) => capability.startsWith("email."))) {
       throw new HostingerEmailError("MCP_TOOL_NOT_FOUND", "Hostinger no ofrece una capacidad de correo compatible.");
     }
-    return mapping;
+    const capabilities = { ...mapping.capabilities };
+    const apiWrite = mapping.tools.find((tool) => tool.name === "email_call_api_write");
+    if (apiWrite) {
+      if (await this.findApiOperation("send")) capabilities["email.send"] = apiWrite.name;
+      if (await this.findApiOperation("reply")) capabilities["email.reply"] = apiWrite.name;
+    }
+    this.mapping = { ...mapping, capabilities };
+    return this.mapping;
+  }
+
+  async verifyCapability(capability: "email.send" | "email.reply"): Promise<boolean> {
+    const mapping = this.mapping ?? (await this.discover());
+    if (mapping.capabilities[capability]) return true;
+    if (!mapping.tools.some((tool) => tool.name === "email_call_api_write")) return false;
+    return Boolean(await this.findApiOperation(capability === "email.send" ? "send" : "reply"));
   }
 
   async listMailboxes(): Promise<readonly string[]> {
@@ -234,7 +257,18 @@ export class HostingerEmailAdapter {
     readonly subject: string;
     readonly bodyText: string;
   }): Promise<{ readonly providerMessageId: string; readonly sentAt: string }> {
-    const tool = await this.toolFor("email.send");
+    const mapping = this.mapping ?? (await this.discover());
+    const tool = mapping.capabilities["email.send"]
+      ? mapping.tools.find((candidate) => candidate.name === mapping.capabilities["email.send"])
+      : null;
+    if (tool?.name === "email_call_api_write" || (!tool && mapping.tools.some((candidate) => candidate.name === "email_call_api_write"))) {
+      return this.sendViaApiProxy({
+        to: input.to,
+        subject: input.subject,
+        bodyText: input.bodyText,
+      });
+    }
+    if (!tool) throw new HostingerEmailError("MCP_TOOL_NOT_FOUND", "Hostinger no permite enviar correo.");
     const result = await this.callTool(
       tool,
       buildArguments(tool, {
@@ -256,8 +290,22 @@ export class HostingerEmailAdapter {
   async replyMessage(input: {
     readonly messageId: string;
     readonly bodyText: string;
+    readonly to?: string;
+    readonly subject?: string;
   }): Promise<{ readonly providerMessageId: string; readonly sentAt: string }> {
-    const tool = await this.toolFor("email.reply");
+    const mapping = this.mapping ?? (await this.discover());
+    const tool = mapping.capabilities["email.reply"]
+      ? mapping.tools.find((candidate) => candidate.name === mapping.capabilities["email.reply"])
+      : null;
+    if (tool?.name === "email_call_api_write" || (!tool && mapping.tools.some((candidate) => candidate.name === "email_call_api_write"))) {
+      return this.sendViaApiProxy({
+        messageId: input.messageId,
+        to: input.to ? [input.to] : [],
+        subject: input.subject ?? "",
+        bodyText: input.bodyText,
+      });
+    }
+    if (!tool) throw new HostingerEmailError("MCP_TOOL_NOT_FOUND", "Hostinger no permite responder a este correo.");
     const result = await this.callTool(
       tool,
       buildArguments(tool, {
@@ -273,6 +321,107 @@ export class HostingerEmailAdapter {
       throw new HostingerEmailError("MCP_TOOL_CALL_FAILED", "Hostinger no ha confirmado la respuesta.");
     }
     return { providerMessageId: messageId, sentAt: new Date(this.now()).toISOString() };
+  }
+
+  private async sendViaApiProxy(input: {
+    readonly to: readonly string[];
+    readonly subject: string;
+    readonly bodyText: string;
+    readonly messageId?: string;
+  }): Promise<{ readonly providerMessageId: string; readonly sentAt: string }> {
+    const mapping = this.mapping ?? (await this.discover());
+    const writeTool = mapping.tools.find((tool) => tool.name === "email_call_api_write");
+    if (!writeTool) throw new HostingerEmailError("MCP_TOOL_NOT_FOUND", "Hostinger no permite escribir correo.");
+    const operation = await this.findApiOperation(input.messageId ? "reply" : "send");
+    if (!operation) throw new HostingerEmailError("MCP_TOOL_NOT_FOUND", "Hostinger no ha publicado la operación de correo.");
+    const mailbox = (await this.listMailboxRecords())[0];
+    if (!mailbox) throw new HostingerEmailError("MCP_TOOL_CALL_FAILED", "Hostinger no tiene un buzón disponible.");
+    const pathParams = buildOperationPathParams(operation.path, mailbox.resourceId, input.messageId);
+    const response = await this.callApi(
+      writeTool,
+      operation.method,
+      operation.path,
+      pathParams,
+      {},
+      {
+        to: input.to,
+        recipients: input.to,
+        subject: input.subject,
+        body: input.bodyText,
+        bodyText: input.bodyText,
+        text: input.bodyText,
+        messageId: input.messageId,
+        id: input.messageId,
+      },
+    );
+    assertSuccessfulApiResponse(response);
+    const sentAt = new Date(this.now()).toISOString();
+    const directId = extractString(apiBody(response), ["messageId", "message_id", "messageID", "id", "uid"]);
+    if (directId) return { providerMessageId: directId, sentAt };
+    const verified = await this.findSentMessage(input.to, input.subject, this.now() - 30_000);
+    if (!verified) {
+      throw new HostingerEmailError("PROVIDER_ACCEPTED_UNVERIFIED", "Hostinger aceptó el envío, pero no se pudo verificar en Enviados.");
+    }
+    return { providerMessageId: verified.providerMessageId, sentAt: verified.sentAt ?? sentAt };
+  }
+
+  private async findSentMessage(
+    recipients: readonly string[],
+    subject: string,
+    afterMs: number,
+  ): Promise<NormalizedEmailMessage | null> {
+    const mapping = this.mapping ?? (await this.discover());
+    const readTool = mapping.tools.find((tool) => tool.name === mapping.capabilities["email.read"]);
+    if (!readTool || readTool.name !== "email_call_api_read") return null;
+    const wantedRecipients = recipients.map((value) => value.toLowerCase());
+    for (const mailbox of await this.listMailboxRecords()) {
+      const response = await this.callApi(
+        readTool,
+        "GET",
+        "/api/v1/mailboxes/{mailboxResourceId}/folders/{folder}/messages",
+        { mailboxResourceId: mailbox.resourceId, folder: "SENT" },
+        { page: 1, perPage: 20, sort: "-uid" },
+      );
+      assertSuccessfulApiResponse(response);
+      const candidates = normalizeMessages(apiBody(response)).filter((message) => {
+        const timestamp = Date.parse(message.sentAt ?? message.receivedAt);
+        if (!Number.isFinite(timestamp) || timestamp < afterMs) return false;
+        if (subject && message.subject !== subject) return false;
+        const messageRecipients = message.to.map((address) => address.email.toLowerCase());
+        return wantedRecipients.length === 0 || wantedRecipients.some((recipient) => messageRecipients.includes(recipient));
+      });
+      if (candidates[0]) return candidates[0];
+    }
+    return null;
+  }
+
+  private async findApiOperation(kind: "send" | "reply"): Promise<HostingerApiOperation | null> {
+    if (this.operations === null) {
+      const mapping = this.mapping ?? (await this.discover());
+      const listTool = mapping.tools.find((tool) => tool.name === "email_list_operations");
+      if (!listTool) {
+        this.operations = [];
+      } else {
+        const listed = await this.callTool(listTool, buildArguments(listTool, {}));
+        const discovered = [...extractApiOperations(listed)];
+        if (discovered.length === 0) {
+          const describeTool = mapping.tools.find((tool) => tool.name === "email_describe_operation");
+          if (describeTool) {
+            const terms = kind === "send" ? /send|compose|outgoing/i : /reply|respond/i;
+            for (const name of extractOperationNames(listed).filter((candidate) => terms.test(candidate))) {
+              const described = await this.callTool(
+                describeTool,
+                buildArguments(describeTool, { name, operation: name, operationId: name }),
+              );
+              discovered.push(...extractApiOperations(described));
+            }
+          }
+        }
+        this.operations = discovered;
+      }
+    }
+    const terms = kind === "send" ? /send|compose|outgoing/i : /reply|respond/i;
+    return this.operations.find((operation) => terms.test(`${operation.name} ${operation.path}`)) ?? null;
   }
 
   private async toolFor(...capabilities: HostingerCapability[]): Promise<HostingerMcpTool> {
@@ -328,7 +477,7 @@ export class HostingerEmailAdapter {
 
   private async callApi(
     tool: HostingerMcpTool,
-    method: "GET" | "POST",
+    method: HostingerApiOperation["method"],
     path: string,
     pathParams: Readonly<Record<string, unknown>>,
     queryParams: Readonly<Record<string, unknown>>,
@@ -591,6 +740,56 @@ function extractStringList(value: unknown, keys: readonly string[]): readonly st
   const array = findArray(value);
   if (!array) return [];
   return array.map((item) => extractString(item, keys)).filter((item): item is string => Boolean(item));
+}
+
+function buildOperationPathParams(path: string, mailboxResourceId: string, messageId?: string): Readonly<Record<string, string>> {
+  const params: Record<string, string> = {};
+  for (const token of path.matchAll(/\{([^}]+)\}/g)) {
+    const name = token[1] ?? "";
+    if (/mailbox/i.test(name)) params[name] = mailboxResourceId;
+    else if (/folder/i.test(name)) params[name] = "SENT";
+    else if (/message|thread|uid/i.test(name) && messageId) params[name] = messageId;
+  }
+  return params;
+}
+
+function extractApiOperations(value: unknown): readonly HostingerApiOperation[] {
+  const records: HostingerApiOperation[] = [];
+  const visit = (candidate: unknown): void => {
+    if (Array.isArray(candidate)) {
+      for (const item of candidate) visit(item);
+      return;
+    }
+    if (!candidate || typeof candidate !== "object") return;
+    const record = candidate as Record<string, unknown>;
+    const name = extractDirectString(record, ["name", "operation", "operationId", "id"]);
+    const method = extractDirectString(record, ["method", "httpMethod"])?.toUpperCase();
+    const path = extractDirectString(record, ["path", "endpoint", "url"]);
+    if (name && path && method && ["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+      records.push({ name, path, method: method as HostingerApiOperation["method"], ...(record.inputSchema ? { inputSchema: record.inputSchema } : {}) });
+    }
+    for (const child of Object.values(record)) visit(child);
+  };
+  visit(value);
+  return records;
+}
+
+function extractOperationNames(value: unknown): readonly string[] {
+  const names: string[] = [];
+  const visit = (candidate: unknown): void => {
+    if (Array.isArray(candidate)) {
+      candidate.forEach(visit);
+      return;
+    }
+    if (!candidate || typeof candidate !== "object") return;
+    const record = candidate as Record<string, unknown>;
+    for (const key of ["name", "operation", "operationId", "id"]) {
+      if (typeof record[key] === "string" && record[key].trim()) names.push(record[key] as string);
+    }
+    Object.values(record).forEach(visit);
+  };
+  visit(value);
+  return [...new Set(names)];
 }
 
 function normalizeMessages(value: unknown): readonly NormalizedEmailMessage[] {

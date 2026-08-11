@@ -209,6 +209,10 @@ export async function registerCustomerZeroV2Routes(
   server: FastifyInstance,
   deps: ServerDeps = {},
 ): Promise<void> {
+  // All work routes in this module, including Inbox conversion and the
+  // executor, share the same existing DepartmentWorkStore implementation.
+  // Production injects Supabase; tests/dev use the in-memory adapter.
+  _workStoreSingleton = deps.workStore ?? getWorkStore();
   server.post(
     "/api/customer-zero/start",
     {
@@ -968,6 +972,92 @@ export async function registerCustomerZeroV2Routes(
     },
   );
 
+  // Unified Inbox email actions use the existing pending-email approval
+  // state machine. The browser never calls a provider directly: it creates
+  // a draft here, then explicitly approves that same draft below.
+  server.post<{
+    Params: { organizationId: string; itemId: string };
+    Body: { body: string };
+  }>(
+    "/api/customer-zero/:organizationId/inbox/:itemId/reply/draft",
+    async (request, reply) => {
+      const { organizationId, itemId } = request.params;
+      const session = await requireSession(organizationId, deps);
+      const item = await inboxStore.get(itemId);
+      if (!item || item.organizationId !== organizationId) return reply.code(404).send({ error: "inbox_item_not_found" });
+      const body = request.body?.body?.trim();
+      if (!body) return reply.code(400).send({ error: "email_body_required" });
+      const provider = providerForInboxSource(item.source);
+      if (!provider) return reply.code(400).send({ error: "email_provider_unsupported" });
+      if (!(await resolveOperationalEmailProvider(organizationId, provider, "email.send"))) {
+        return reply.code(503).send({ error: "email_send_unavailable" });
+      }
+      const work = createPendingEmailWork();
+      work.requestedProvider = provider;
+      work.recipient = item.sender.email;
+      work.objective = body;
+      work.replyToProviderMessageId = item.sourceMessageId;
+      work.replyToProviderThreadId = item.sourceThreadId ?? null;
+      work.draft = {
+        to: item.sender.email,
+        subject: replySubject(item.subject),
+        body,
+      };
+      work.missingFields = [];
+      work.status = "awaiting_approval";
+      session.state.pendingEmailWork = work;
+      return { organizationId, draftId: work.id, provider, draft: work.draft, status: work.status };
+    },
+  );
+
+  server.post<{
+    Params: { organizationId: string };
+    Body: { to: string; subject: string; body: string; provider?: EmailProvider };
+  }>(
+    "/api/customer-zero/:organizationId/inbox/email/draft",
+    async (request, reply) => {
+      const { organizationId } = request.params;
+      const session = await requireSession(organizationId, deps);
+      const to = request.body?.to?.trim();
+      const subject = request.body?.subject?.trim();
+      const body = request.body?.body?.trim();
+      if (!to || !subject || !body) return reply.code(400).send({ error: "email_draft_fields_required" });
+      const provider = await resolveOperationalEmailProvider(organizationId, request.body?.provider, "email.send");
+      if (!provider) return reply.code(503).send({ error: "email_send_unavailable" });
+      const work = createPendingEmailWork();
+      work.requestedProvider = provider;
+      work.recipient = to;
+      work.objective = body;
+      work.draft = { to, subject, body };
+      work.missingFields = [];
+      work.status = "awaiting_approval";
+      session.state.pendingEmailWork = work;
+      return { organizationId, draftId: work.id, provider, draft: work.draft, status: work.status };
+    },
+  );
+
+  server.post<{
+    Params: { organizationId: string };
+    Body: { draftId: string };
+  }>(
+    "/api/customer-zero/:organizationId/inbox/email/approve",
+    async (request, reply) => {
+      const { organizationId } = request.params;
+      const session = await requireSession(organizationId, deps);
+      const work = session.state.pendingEmailWork;
+      if (!work || work.id !== request.body?.draftId) return reply.code(409).send({ error: "email_draft_not_pending" });
+      const outcome = await sendPendingEmail(session, work, session.state.locale !== "en");
+      return {
+        organizationId,
+        draftId: work.id,
+        reply: outcome.reply,
+        status: session.state.lastExecutionReceipt?.status ?? work.status,
+        receipt: session.state.lastExecutionReceipt ?? null,
+        ...(session.state.pendingEmailWork?.draft ? { draft: session.state.pendingEmailWork.draft } : {}),
+      };
+    },
+  );
+
   // CZ03 — Inbox → work bridge. Converts a classified InboxItem into a durable
   // DepartmentTask (reusing the existing work store + status lifecycle). The
   // item records `relatedWorkItemId` + state `in_work` so the CEO can follow
@@ -994,9 +1084,18 @@ export async function registerCustomerZeroV2Routes(
         administrative: "Asunto administrativo",
         unknown: "Mensaje",
       };
+      const existingTask = await workStoreForRoutes().findTaskBySource(organizationId, item.id);
+      if (existingTask) {
+        if (!item.relatedWorkItemId) await inboxStore.setRelatedWorkItem(item.id, existingTask.id);
+        return {
+          organizationId,
+          task: existingTask,
+          item: await inboxStore.get(item.id),
+        };
+      }
       const title = `${categoryLabel[item.category] ?? "Mensaje"}: ${item.subject || "(sin asunto)"}`;
       const summary = `De ${item.sender.email} — ${item.preview || item.subject || "mensaje del inbox unificado"}`;
-      const workStore = getWorkStore();
+      const workStore = workStoreForRoutes();
       const requestedCapability = request.body?.capability;
       const capability: DepartmentWorkCapability =
         requestedCapability &&
@@ -1022,6 +1121,12 @@ export async function registerCustomerZeroV2Routes(
         errorCode: null,
         errorMessage: null,
         timeoutMs: 60_000,
+        source: {
+          type: "inbox_email",
+          inboxItemId: item.id,
+          provider: item.source,
+          providerMessageId: item.sourceMessageId,
+        },
       });
       await inboxStore.setRelatedWorkItem(item.id, task.id);
       const updated = await inboxStore.get(item.id);
@@ -4419,7 +4524,7 @@ async function sendPendingEmail(
   session.state.lastExecutionReceipt = failExecutionReceipt(
     receipt,
     work.sendError,
-    outcome.ok ? "ambiguous" : "failed",
+    work.sendError === "PROVIDER_ACCEPTED_UNVERIFIED" ? "ambiguous" : outcome.ok ? "ambiguous" : "failed",
     outcome.provider ?? "email",
   );
   const hint = isEs
@@ -4456,6 +4561,10 @@ function describeEmailSendFailure(error: string | null, isEs: boolean): string {
       return isEs
         ? "El servicio de correo no ha podido completar la operación."
         : "The email service could not complete the operation.";
+    case "PROVIDER_ACCEPTED_UNVERIFIED":
+      return isEs
+        ? "Hostinger ha aceptado el envío, pero todavía no he podido verificar la copia en Enviados. No lo volveré a enviar automáticamente."
+        : "Hostinger accepted the send, but I could not verify the copy in Sent. I will not retry automatically.";
     case "invalid_response":
     case "send_failed":
     default:
@@ -4959,6 +5068,20 @@ function getWorkStore(): DepartmentWorkStore {
     _workStoreSingleton = new InMemoryDepartmentWorkStore();
   }
   return _workStoreSingleton;
+}
+
+function workStoreForRoutes(): DepartmentWorkStore {
+  return getWorkStore();
+}
+
+function providerForInboxSource(source: string): EmailProvider | null {
+  if (source === "hostinger") return "hostinger";
+  if (source === "gmail" || source === "google") return "google";
+  return null;
+}
+
+function replySubject(subject: string): string {
+  return /^re\s*:/i.test(subject.trim()) ? subject.trim() : `Re: ${subject.trim() || "Tu correo"}`;
 }
 
 function createWorkExecutor(

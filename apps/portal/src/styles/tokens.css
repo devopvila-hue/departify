@@ -2620,6 +2620,9 @@ select {
 }
 .dfy-inbox-detail__actions {
   margin-bottom: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .dfy-inbox-detail__body {
   white-space: pre-wrap;
@@ -2637,6 +2640,39 @@ select {
   color: var(--dfy-color-accent, #3b82f6);
   font-size: 0.86rem;
   font-style: italic;
+}
+.dfy-inbox-composer {
+  margin-bottom: 1rem;
+}
+.dfy-inbox-composer__fields {
+  display: grid;
+  gap: 12px;
+  margin-top: 1rem;
+}
+.dfy-inbox-composer__fields label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.dfy-inbox-composer__fields input,
+.dfy-inbox-composer__fields textarea {
+  width: 100%;
+  border: 1px solid var(--dfy-color-border, rgba(0, 0, 0, 0.12));
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: var(--dfy-color-surface, #fff);
+  color: inherit;
+  font: inherit;
+}
+.dfy-inbox-composer__fields textarea {
+  resize: vertical;
+}
+.dfy-inbox-composer__approval {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 /* ============================================================

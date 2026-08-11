@@ -177,6 +177,46 @@ describe("Hostinger Email MCP adapter", () => {
     await expect(new HostingerEmailAdapter({ token: "secret-token", fetchImpl: noEvidenceFetch }).sendMessage({ to: ["ceo@example.com"], subject: "Prueba", bodyText: "Hola" })).rejects.toMatchObject({ category: "MCP_TOOL_CALL_FAILED" });
   });
 
+  it("uses discovered API operations and verifies a 204 send in Sent", async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        method?: string;
+        params?: { name?: string; arguments?: { path?: string } };
+      };
+      if (body.method === "initialize") return jsonResponse({ result: {} }, "session-api-send");
+      if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+      if (body.method === "tools/list") return jsonResponse({ result: { tools: [
+        { name: "email_call_api_read", description: "Read email API", inputSchema: { type: "object", properties: { method: {}, path: {}, path_params: {}, query_params: {}, body: {} }, required: ["method", "path"] } },
+        { name: "email_call_api_write", description: "Write email API", inputSchema: { type: "object", properties: { method: {}, path: {}, path_params: {}, query_params: {}, body: {} }, required: ["method", "path"] } },
+        { name: "email_list_operations", description: "List email operations", inputSchema: { type: "object", properties: {} } },
+      ] } });
+      if (body.method === "tools/call" && body.params?.name === "email_list_operations") {
+        return jsonResponse({ result: { content: [{ type: "text", text: JSON.stringify({ operations: [
+          { name: "send_message", method: "POST", path: "/api/v1/mailboxes/{mailboxResourceId}/messages" },
+        ] }) }] } });
+      }
+      if (body.method === "tools/call" && body.params?.name === "email_call_api_read") {
+        calls.push(`read:${body.params.arguments?.path ?? ""}`);
+        if (body.params.arguments?.path === "/api/v1/me") {
+          return jsonResponse({ result: { content: [{ type: "text", text: JSON.stringify({ status: 200, body: { data: { mailboxes: [{ resourceId: "MAILBOX-1", address: "ventas@empresa.com" }] } } }) }] } });
+        }
+        return jsonResponse({ result: { content: [{ type: "text", text: JSON.stringify({ status: 200, body: { data: [{ uid: 99, messageId: "verified-sent-1", subject: "Prueba", to: [{ address: "ceo@example.com" }], from: { address: "ventas@empresa.com" }, date: new Date().toISOString(), path: "SENT" }] } }) }] } });
+      }
+      if (body.method === "tools/call" && body.params?.name === "email_call_api_write") {
+        calls.push(`write:${body.params.arguments?.path ?? ""}`);
+        return jsonResponse({ result: { content: [{ type: "text", text: JSON.stringify({ status: 204 }) }] } });
+      }
+      throw new Error(`unexpected MCP call ${String(body.method)} ${String(body.params?.name)}`);
+    }) as unknown as typeof fetch;
+    const adapter = new HostingerEmailAdapter({ token: "secret-token", fetchImpl });
+    await expect(adapter.sendMessage({ to: ["ceo@example.com"], subject: "Prueba", bodyText: "Hola" })).resolves.toMatchObject({ providerMessageId: "verified-sent-1" });
+    expect(calls).toEqual(expect.arrayContaining([
+      "write:/api/v1/mailboxes/{mailboxResourceId}/messages",
+      "read:/api/v1/mailboxes/{mailboxResourceId}/folders/{folder}/messages",
+    ]));
+  });
+
   it("supports replies only through the discovered reply tool and requires provider evidence", async () => {
     const calls: Array<{ method: string; name?: string; arguments?: Record<string, unknown> }> = [];
     const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {

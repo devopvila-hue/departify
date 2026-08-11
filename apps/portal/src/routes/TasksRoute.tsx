@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { api, type CompanyStatus, type HeadIdentity } from "@/app/api";
+import { api, type CompanyStatus, type HeadIdentity, type MarketingWorkItem } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import { readable } from "@/app/readable";
 import { TasksIcon } from "@/components/icons";
@@ -17,18 +17,21 @@ export function TasksRoute() {
   const { organizationId } = useOrg();
   const navigate = useNavigate();
   const [status, setStatus] = useState<CompanyStatus | null>(null);
+  const [departmentTasks, setDepartmentTasks] = useState<TaskListItem[]>([]);
   const [head, setHead] = useState<HeadIdentity | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!organizationId) return;
-    const [statusData, handoff] = await Promise.all([
+    const [statusData, handoff, workFeed] = await Promise.all([
       api.status(organizationId),
       api.handoff(organizationId),
+      api.workFeed(organizationId),
     ]);
     if (statusData) setStatus(statusData);
     if (handoff) setHead(handoff.head);
+    setDepartmentTasks((workFeed?.tasks ?? []).map(toTaskListItem));
   }, [organizationId]);
 
   useEffect(() => {
@@ -48,7 +51,8 @@ export function TasksRoute() {
     await load();
   }
 
-  const items = status?.marketingWork?.items ?? [];
+  const legacyItems = status?.marketingWork?.items ?? [];
+  const items = mergeTaskItems(departmentTasks, legacyItems);
   const departments = [
     { id: "marketing", name: "Marketing", head },
   ];
@@ -56,8 +60,8 @@ export function TasksRoute() {
   // Group by status for the inbox: needs_approval first (urgency),
   // then running/pending, then completed/unavailable.
   const grouped = {
-    pending: items.filter((it) => it.status === "needs_approval"),
-    active: items.filter((it) => it.status === "running" || it.status === "pending" || it.status === "approved"),
+    pending: items.filter((it) => it.status === "needs_approval" || it.status === "waiting_approval"),
+    active: items.filter((it) => it.status === "running" || it.status === "pending" || it.status === "approved" || it.status === "queued"),
     done: items.filter((it) => it.status === "completed"),
     blocked: items.filter((it) => it.status === "unavailable" || it.status === "failed"),
   };
@@ -181,11 +185,7 @@ export function TasksRoute() {
 function TaskGroup(props: {
   title: string;
   empty?: boolean;
-  items: CompanyStatus["marketingWork"] extends infer T
-    ? T extends { items: readonly (infer I)[] }
-      ? I[]
-      : never
-    : never;
+  items: TaskListItem[];
   head: HeadIdentity | null;
   runningItem: string | null;
   onAction: (itemId: string, action: "execute" | "approve") => void;
@@ -216,7 +216,7 @@ function TaskGroup(props: {
               >
                 Abrir en el chat
               </button>
-              {props.actionKind !== "execute" && (
+              {item.actionable && props.actionKind !== "execute" && (
                 <button
                   type="button"
                   className="dfy-button dfy-button--small"
@@ -226,7 +226,7 @@ function TaskGroup(props: {
                   {props.actionLabel}
                 </button>
               )}
-              {props.actionKind === "execute" && (
+              {item.actionable && props.actionKind === "execute" && (
                 <button
                   type="button"
                   className="dfy-button dfy-button--small"
@@ -244,10 +244,58 @@ function TaskGroup(props: {
   );
 }
 
+interface TaskListItem {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  result?: string;
+  actionable: boolean;
+}
+
+function toTaskListItem(task: {
+  id: string;
+  title: string;
+  summary: string;
+  status: string;
+}): TaskListItem {
+  return {
+    id: task.id,
+    title: task.title,
+    description: task.summary,
+    status: task.status,
+    actionable: false,
+  };
+}
+
+function toLegacyTaskListItem(item: MarketingWorkItem): TaskListItem {
+  return {
+    id: item.id,
+    title: item.title,
+    description: item.description,
+    status: item.status ?? "pending",
+    ...(item.result ? { result: item.result } : {}),
+    actionable: true,
+  };
+}
+
+function mergeTaskItems(
+  departmentTasks: readonly TaskListItem[],
+  legacyItems: readonly MarketingWorkItem[],
+): TaskListItem[] {
+  const byId = new Map<string, TaskListItem>(departmentTasks.map((item) => [item.id, item]));
+  for (const item of legacyItems) {
+    if (!byId.has(item.id)) byId.set(item.id, toLegacyTaskListItem(item));
+  }
+  return [...byId.values()];
+}
+
 function labelForStatus(status: string): string {
   switch (status) {
     case "needs_approval":
       return "Esperando aprobación";
+    case "queued":
+      return "Pendiente";
     case "approved":
       return "Aprobado";
     case "completed":

@@ -116,6 +116,13 @@ export interface DepartmentTask {
   readonly errorMessage: string | null;
   /** Wall-clock deadline. Tasks that exceed it are auto-failed. */
   readonly timeoutMs: number;
+  /** Optional provenance for work created from a normalized Inbox item. */
+  readonly source?: {
+    readonly type: "inbox_email";
+    readonly inboxItemId: string;
+    readonly provider: string;
+    readonly providerMessageId: string;
+  };
 }
 
 /* ----------------------------------------------------------------------------
@@ -180,6 +187,7 @@ export interface DepartmentWorkStore {
   createTask(input: Omit<DepartmentTask, "id" | "createdAt">): Promise<DepartmentTask>;
   updateTask(id: string, patch: Partial<DepartmentTask>): Promise<DepartmentTask>;
   getTask(id: string): Promise<DepartmentTask | null>;
+  findTaskBySource(organizationId: string, inboxItemId: string): Promise<DepartmentTask | null>;
   listTasksForOrg(organizationId: string, limit?: number): Promise<DepartmentTask[]>;
   createResult(input: CreateDepartmentResultInput): Promise<DepartmentResult>;
   getResult(id: string): Promise<DepartmentResult | null>;
@@ -227,6 +235,14 @@ export class InMemoryDepartmentWorkStore implements DepartmentWorkStore {
 
   async getTask(id: string): Promise<DepartmentTask | null> {
     return this.tasks.get(id) ?? null;
+  }
+
+  async findTaskBySource(organizationId: string, inboxItemId: string): Promise<DepartmentTask | null> {
+    return [...this.tasks.values()].find((task) =>
+      task.organizationId === organizationId &&
+      task.source?.type === "inbox_email" &&
+      task.source.inboxItemId === inboxItemId,
+    ) ?? null;
   }
 
   async listTasksForOrg(organizationId: string, limit = 50): Promise<DepartmentTask[]> {

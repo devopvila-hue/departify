@@ -149,6 +149,12 @@ export interface DepartmentTask {
   errorCode: string | null;
   errorMessage: string | null;
   timeoutMs: number;
+  source?: {
+    type: "inbox_email";
+    inboxItemId: string;
+    provider: string;
+    providerMessageId: string;
+  };
 }
 
 export type ChartKind = "bar" | "line" | "donut" | "number" | "table";
@@ -180,6 +186,21 @@ export interface DepartmentResult {
   source: string;
   createdAt: string;
   producedByCapability: string;
+}
+
+export interface ExecutionReceipt {
+  operationId: string;
+  intent: string;
+  capability: string;
+  provider: string;
+  sideEffect: boolean;
+  status: "executing" | "succeeded" | "failed" | "ambiguous";
+  startedAt: string;
+  completedAt?: string;
+  providerResourceId?: string;
+  providerResourceUrl?: string;
+  safeMetadata?: Record<string, string | number | boolean>;
+  errorCategory?: string;
 }
 
 /* -------------------------------------------------------------------------
@@ -823,6 +844,34 @@ export const api = {
     }>(`/api/customer-zero/${org}/inbox/${itemId}/work`, {
       ...(capability ? { capability } : {}),
     }),
+  inboxReplyDraft: (org: string, itemId: string, body: string) =>
+    postJson<{
+      organizationId: string;
+      draftId: string;
+      provider: string;
+      draft: { to: string; subject: string; body: string };
+      status: string;
+      error?: string;
+    }>(`/api/customer-zero/${org}/inbox/${itemId}/reply/draft`, { body }),
+  inboxEmailDraft: (org: string, input: { to: string; subject: string; body: string; provider?: string }) =>
+    postJson<{
+      organizationId: string;
+      draftId: string;
+      provider: string;
+      draft: { to: string; subject: string; body: string };
+      status: string;
+      error?: string;
+    }>(`/api/customer-zero/${org}/inbox/email/draft`, input),
+  inboxEmailApprove: (org: string, draftId: string) =>
+    postJson<{
+      organizationId: string;
+      draftId: string;
+      reply: string;
+      status: string;
+      receipt: ExecutionReceipt | null;
+      draft?: { to: string; subject: string; body: string };
+      error?: string;
+    }>(`/api/customer-zero/${org}/inbox/email/approve`, { draftId }),
   testConnection: (org: string, provider: string) =>
     postJson<{
       provider: string;

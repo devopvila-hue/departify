@@ -91,7 +91,9 @@ export async function resolveOperationalEmailProvider(
 
 async function isHostingerOperational(requiredCapability: "email.read" | "email.send"): Promise<boolean> {
   try {
-    const mapping = await new HostingerEmailAdapter().verify();
+    const adapter = new HostingerEmailAdapter();
+    if (requiredCapability === "email.send") return await adapter.verifyCapability("email.send");
+    const mapping = await adapter.verify();
     return Boolean(mapping.capabilities[requiredCapability as HostingerCapability]);
   } catch {
     return false;
@@ -166,7 +168,12 @@ export async function sendEmail(
     try {
       const adapter = new HostingerEmailAdapter();
       const result = input.replyToMessageId
-        ? await adapter.replyMessage({ messageId: input.replyToMessageId, bodyText: input.bodyText })
+        ? await adapter.replyMessage({
+            messageId: input.replyToMessageId,
+            bodyText: input.bodyText,
+            to: input.to,
+            subject: input.subject,
+          })
         : await adapter.sendMessage({ to: [input.to], subject: input.subject, bodyText: input.bodyText });
       console.info(`[email-capability] ${JSON.stringify({
         event: "email_send_success",
