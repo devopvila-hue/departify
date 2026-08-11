@@ -921,6 +921,8 @@ describe("P0 — Central Chat reality", () => {
     expect(first.json().routing.intent).toBe("external_tool_query");
     expect(searchMaxResults).toContain(3);
     expect(first.json().reply).toContain("cliente@acme.com");
+    expect(first.json().events.find((event: { kind: string; speaker?: string }) => event.kind === "transcript").speaker).toBe("departify");
+    expect(first.json().events.some((event: { kind: string }) => event.kind === "work_state")).toBe(false);
 
     const second = await authedInject({
       method: "POST",

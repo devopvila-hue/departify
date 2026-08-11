@@ -3009,8 +3009,11 @@ export async function processCeoMessage(
     marketingInvoked:
       routed.decision.intent === "email_action"
         ? false
-        : marketingTurn !== null ||
-          routed.decision.intent === "delegate_marketing",
+        : routed.decision.intent === "delegate_marketing" ||
+          mauticDispatched ||
+          (routed.decision.intent === "external_tool_query" &&
+            isEmailMarketingAnalysis(message) &&
+            marketingTurn !== null),
     marketingSucceeded: marketingTurn !== null,
     locale: session.state.locale,
     reply: assistantReply,

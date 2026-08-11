@@ -89,14 +89,22 @@ export interface EnrichmentOutput {
  * Decide the chat speaker for a single turn. When Marketing answered
  * we mark it as `elvira`; otherwise `departify`.
  */
-export function speakerForIntent(intent: string): ChatSpeaker {
+export function speakerForIntent(
+  intent: string,
+  directExternalCapability = false,
+): ChatSpeaker {
   if (
     intent === "delegate_marketing" ||
-    intent === "external_tool_query" ||
     intent === "explain_work" ||
     intent === "explain_existing_result" ||
     intent === "department_request"
   ) {
+    return "elvira";
+  }
+  // `external_tool_query` is shared by direct Gmail capability reads and
+  // department-owned Mautic work. The execution path, not the intent label,
+  // decides the identity shown to the CEO.
+  if (intent === "external_tool_query" && !directExternalCapability) {
     return "elvira";
   }
   return "departify";
@@ -172,7 +180,10 @@ export function buildWorkStateEvents(
 
 export function enrichForChat(input: EnrichmentInput): EnrichmentOutput {
   return {
-    speaker: speakerForIntent(input.intent),
+    speaker: speakerForIntent(
+      input.intent,
+      input.intent === "external_tool_query" && !input.mauticToolUsed,
+    ),
     workStates: workStatesForTurn(input),
     normalizedReply: normalizeReplyForChat(input.reply),
   };
