@@ -67,6 +67,14 @@ describe("Command Center routing", () => {
     expect(decision.reply.toLowerCase()).toContain("operativo");
     expect(decision.connectionSuggestion).toBeUndefined();
   });
+
+  it("turns a genuine reconnect request into the contextual Gmail action", () => {
+    const decision = routeCommandCenter(makeInput({ message: "reconecta" }));
+    expect(decision.decision.intent).toBe("request_connection");
+    expect(decision.connectionSuggestion?.toolId).toBe("gmail");
+    expect(decision.connectionSuggestion?.connectable).toBe(true);
+    expect(decision.reply.toLowerCase()).not.toContain("inicia sesión");
+  });
   it("routes greetings without delegating to Marketing", () => {    const decision = routeCommandCenter(makeInput({ message: "Hola" }));
     expect(decision.decision.intent).toBe("greeting");
     expect(decision.decision.departments).toEqual([]);

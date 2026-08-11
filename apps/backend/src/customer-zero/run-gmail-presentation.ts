@@ -87,14 +87,22 @@ export function deriveGmailReadPlan(message: string): GmailReadPlan {
   // Note: `\b` is unreliable on Unicode inputs in some JS runtimes,
   // so we anchor on `(?:^|\W)` / `(?:\W|$)` for portable boundaries.
   if (
-    /(?:^|\W)([úu]ltim(?:o|os|a|as)|last|latest|more recent|most recent|reciente?s?)(?:\W|$)/u.test(
+    /(?:^|\W)([úu]ltim(?:o|os|a|as)|last|latest|more recent|most recent)(?:\W|$)/u.test(
       lower,
     )
   ) {
     return {
-      intent: count && count > 1 ? "recent" : "latest",
+      intent: "latest",
       query: "in:inbox newer_than:30d",
       maxResults: count ?? 1,
+    };
+  }
+
+  if (/(?:^|\W)recient(?:e|es)(?:\W|$)/u.test(lower)) {
+    return {
+      intent: "recent",
+      query: "in:inbox newer_than:7d",
+      maxResults: count ?? 5,
     };
   }
 
@@ -250,19 +258,23 @@ export function renderGmailSummary(input: {
   readonly items: readonly GmailSummaryItem[];
   readonly locale: SupportedLocale;
   readonly totalFound: number;
+  /** CEO-requested cap, when known, used to describe a short API result honestly. */
+  readonly requestedMaxResults?: number;
 }): string {
   if (input.items.length === 0) {
     return renderEmpty(input.intent, input.locale);
   }
   switch (input.intent) {
     case "latest":
-      return renderLatest(input.items[0]!, input.locale);
+      return input.requestedMaxResults && input.requestedMaxResults > 1
+        ? renderList(input.items, "latest", input.locale, input.totalFound, input.requestedMaxResults)
+        : renderLatest(input.items[0]!, input.locale);
     case "unread":
     case "important":
       return renderImportant(input.items, input.locale, input.totalFound);
     case "search":
     case "recent":
-      return renderList(input.items, input.intent, input.locale, input.totalFound);
+      return renderList(input.items, input.intent, input.locale, input.totalFound, input.requestedMaxResults);
   }
 }
 
@@ -349,6 +361,7 @@ function renderList(
   intent: GmailReadIntent,
   locale: SupportedLocale,
   totalFound: number,
+  requestedMaxResults?: number,
 ): string {
   const isEs = locale !== "en";
   const head = isEs
@@ -356,16 +369,24 @@ function renderList(
       ? totalFound > items.length
         ? `He encontrado ${totalFound} correos que coinciden con tu búsqueda. Los ${items.length} más relevantes:`
         : `He encontrado ${items.length} correo${items.length === 1 ? "" : "s"} que coinciden con tu búsqueda:`
+      : requestedMaxResults && items.length < requestedMaxResults
+        ? `He encontrado ${items.length} correo${items.length === 1 ? "" : "s"} de los ${requestedMaxResults} solicitados; Gmail solo ha devuelto ese resultado.`
       : totalFound > items.length
         ? `Estos son los ${items.length} más recientes de los ${totalFound} que he visto en tu bandeja:`
-        : `Esto es lo más reciente en tu bandeja:`
+        : intent === "latest"
+          ? `Estos son los ${items.length} últimos correos recibidos:`
+          : `Esto es lo más reciente en tu bandeja:`
     : intent === "search"
       ? totalFound > items.length
         ? `I found ${totalFound} emails matching your search. The ${items.length} most relevant:`
         : `I found ${items.length} email${items.length === 1 ? "" : "s"} matching your search:`
+      : requestedMaxResults && items.length < requestedMaxResults
+        ? `I found ${items.length} email${items.length === 1 ? "" : "s"} of the ${requestedMaxResults} requested; Gmail returned only that result.`
       : totalFound > items.length
         ? `These are the ${items.length} most recent of the ${totalFound} I saw in your inbox:`
-        : `This is the most recent in your inbox:`;
+        : intent === "latest"
+          ? `These are the ${items.length} most recent emails received:`
+          : `This is the most recent in your inbox:`;
   const body = items
     .map((item, index) => {
       const received = humanReceivedAt(item.receivedAt);

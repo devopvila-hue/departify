@@ -1073,10 +1073,17 @@ export function isEmailReadQuestion(message: string): boolean {
   // Mautic en este momento" — even though Gmail was operational.
   // `mailchimp` is one word, so the `\b` boundaries keep it out.
   const mentionsEmail =
-    /\b(correos?|emails?|mail|mailbox|inbox|bandeja\s+de\s+entrada|bandeja|buz[oó]n(?: de entrada)?|gmail|google\s+mail|googlemail)\b/i.test(
+    /\b(correos?|emails?|mails?|mailbox|inbox|bandeja\s+de\s+entrada|bandeja|buz[oó]n(?: de entrada)?|gmail|google\s+mail|googlemail)\b/i.test(
       lower,
     );
   if (mentionsEmail) {
+    // Quantity-qualified inbox reads are explicit capability operations even
+    // when the verb is omitted ("mis últimos 3 mails"). Keep this check
+    // ahead of the generic intent vocabulary so Unicode plurals and digits
+    // cannot fall through to Marketing.
+    if (/(?:[úu]ltim(?:o|os|a|as)|recient(?:e|es)|recent(?:e|s)?)\s+(?:\d{1,2}|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\b/i.test(lower)) {
+      return true;
+    }
     // An email vocabulary mention combined with an inbox-reading
     // intent. The reading/intent verbs now include "leer" (infinitive)
     // and "recibido" so messages like "¿puedes leer mi último mail

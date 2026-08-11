@@ -58,7 +58,22 @@ describe("run-gmail-presentation — deriveGmailReadPlan", () => {
 
   it("word quantities are parsed and capped", () => {
     expect(deriveGmailReadPlan("muéstrame los tres últimos correos").maxResults).toBe(3);
-    expect(deriveGmailReadPlan("muéstrame 99 correos recientes").maxResults).toBe(10);
+    const recent = deriveGmailReadPlan("muéstrame 99 correos recientes");
+    expect(recent.intent).toBe("recent");
+    expect(recent.maxResults).toBe(10);
+  });
+
+  it("one API result is described as one result, not as a permission limit", () => {
+    const text = renderGmailSummary({
+      intent: "latest",
+      items: [makeItem()],
+      locale: "es",
+      totalFound: 1,
+      requestedMaxResults: 3,
+    });
+    expect(text).toContain("1 correo de los 3 solicitados");
+    expect(text.toLowerCase()).not.toContain("permiso");
+    expect(text.toLowerCase()).not.toContain("conexión activa");
   });
 
   it("tengo correos importantes → 5 unread-style", () => {

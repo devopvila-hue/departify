@@ -83,6 +83,7 @@ function seedOperationalToken(org: string, userId = "user-a"): void {
 
 /** Mock Google HTTP endpoints: token, userinfo, probe, search, message. */
 let originalFetch: typeof fetch | null = null;
+let searchMaxResults: number[] = [];
 function mockGoogleFetch(options?: {
   probeStatus?: number;
   searchStatus?: number;
@@ -154,6 +155,10 @@ function mockGoogleFetch(options?: {
         );
       }
       // Search list.
+      const parsedUrl = new URL(url);
+      if (!url.includes("format=metadata")) {
+        searchMaxResults.push(Number(parsedUrl.searchParams.get("maxResults") ?? "0"));
+      }
       if (options?.searchStatus && options.searchStatus >= 400) {
         return new Response(JSON.stringify({ error: "boom" }), {
           status: options.searchStatus,
@@ -175,6 +180,7 @@ function restoreFetch(): void {
     globalThis.fetch = originalFetch;
     originalFetch = null;
   }
+  searchMaxResults = [];
 }
 
 describe("D–H — granted scopes → existing capability vocabulary", () => {
@@ -446,6 +452,7 @@ describe("P0 — post-OAuth HTTP: connect → callback → /conexiones", () => {
     delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
     delete process.env.PUBLIC_BASE_URL;
     restoreFetch();
+    searchMaxResults = [];
   });
 
   function authedInject(options: InjectOptions) {
@@ -899,6 +906,61 @@ describe("P0 — Central Chat reality", () => {
     // The reply uses the presenter and references real Gmail data.
     expect(reply).toContain("cliente@acme.com");
     expect(reply).toContain("Asunto");
+  });
+
+  it("U2: latest quantity is passed to Gmail and short follow-up stays Gmail", async () => {
+    const org = await startOrg();
+    seedOperationalToken(org);
+    mockGoogleFetch({});
+    const first = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "mis últimos 3 mails" },
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().routing.intent).toBe("external_tool_query");
+    expect(searchMaxResults).toContain(3);
+    expect(first.json().reply).toContain("cliente@acme.com");
+
+    const second = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "los 3 últimos" },
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().routing.intent).toBe("external_tool_query");
+    expect(second.json().reply).not.toContain("Mautic");
+    expect(second.json().reply).not.toMatch(/calendar|drive/i);
+    expect(searchMaxResults.filter((value) => value === 3)).toHaveLength(2);
+  });
+
+  it("U3: explicit marketing analysis retrieves Gmail before optional Elvira reasoning", async () => {
+    const reasoningCalls: string[] = [];
+    const marketing = {
+      talkToElvira: async (input: { message: string }) => {
+        expect(searchMaxResults).toContain(3);
+        reasoningCalls.push(input.message);
+        return { reply: "Oportunidad detectada en los correos recuperados." };
+      },
+    } as never;
+    const tenant = makeFakeTenant();
+    server = await buildServer(loadBackendConfig(), {
+      auth: tenant,
+      organizations: tenant,
+      marketing,
+    });
+    const org = await startOrg();
+    seedOperationalToken(org);
+    mockGoogleFetch({});
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "Analiza mis últimos 3 correos desde el punto de vista de marketing" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(reasoningCalls).toHaveLength(1);
+    expect(reasoningCalls[0]).toContain("DATOS NO CONFIABLES");
+    expect(response.json().reply).toContain("Oportunidad detectada");
   });
 
   it("V: empty Gmail result → honest empty answer (no hallucination)", async () => {
