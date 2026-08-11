@@ -104,6 +104,10 @@ export const envSchema = z.object({
   OPENCLAW_DEVICE_KEY_PEM: z.string().optional().or(z.literal("")),
   /** Optional model override sent with every message (provider/model). */
   OPENCLAW_MODEL: z.string().optional().or(z.literal("")),
+
+  /** Server-side Hostinger Email MCP adapter configuration. */
+  HOSTINGER_EMAIL_MCP_URL: optionalUrl,
+  HOSTINGER_EMAIL_MCP_TOKEN: optionalSecret,
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

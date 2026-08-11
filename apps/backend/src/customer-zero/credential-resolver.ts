@@ -35,7 +35,7 @@ import {
   type GoogleTokenSummary,
 } from "./google-tokens.js";
 
-export type CredentialProvider = "mautic" | "gmail" | "resend" | "google";
+export type CredentialProvider = "mautic" | "gmail" | "resend" | "google" | "hostinger";
 
 export interface CredentialSource {
   /** Where the credential ultimately comes from. */
@@ -87,6 +87,11 @@ export type ResolvedCredential =
   | {
       readonly provider: "resend";
       readonly apiKey: string;
+    }
+  | {
+      readonly provider: "hostinger";
+      readonly url: string;
+      readonly token: string;
     };
 
 function handleId(
@@ -106,6 +111,9 @@ export function resolveCredentials(
   }
   if (input.provider === "resend") {
     return resolveResendFromEnv();
+  }
+  if (input.provider === "hostinger") {
+    return resolveHostingerFromEnv();
   }
   // Gmail / Google — see `resolveGoogleCredentials` (async).
   return {
@@ -225,6 +233,49 @@ function resolveResendFromEnv(): CredentialResolution {
       resolvedAt: new Date().toISOString(),
     },
   };
+}
+
+const DEFAULT_HOSTINGER_MCP_URL = "https://mcp.mail.hostinger.com/mcp";
+
+function resolveHostingerFromEnv(): CredentialResolution {
+  const token = (process.env["HOSTINGER_EMAIL_MCP_TOKEN"] ?? "").trim();
+  const url =
+    (process.env["HOSTINGER_EMAIL_MCP_URL"] ?? DEFAULT_HOSTINGER_MCP_URL).trim() ||
+    DEFAULT_HOSTINGER_MCP_URL;
+  if (!token || !/^https:\/\//i.test(url)) {
+    return {
+      available: false,
+      source: "none",
+      label: "hostinger:missing",
+    };
+  }
+  const id = handleId("hostinger", "environment");
+  handleRegistry.set(id, { provider: "hostinger", url, token });
+  return {
+    available: true,
+    source: "environment",
+    label: "env:hostinger_email_mcp",
+    handle: {
+      id,
+      provider: "hostinger",
+      source: "environment",
+      resolvedAt: new Date().toISOString(),
+    },
+  };
+}
+
+export function resolveHostingerCredentials():
+  | { readonly url: string; readonly token: string }
+  | null {
+  const resolution = resolveCredentials({
+    organizationId: "system",
+    provider: "hostinger",
+  });
+  if (!resolution.available || !resolution.handle) return null;
+  const credentials = getCredentials(resolution.handle);
+  return credentials?.provider === "hostinger"
+    ? { url: credentials.url, token: credentials.token }
+    : null;
 }
 
 export function getCredentials(handle: CredentialHandle): ResolvedCredential | null {
@@ -360,6 +411,9 @@ export function hasConfiguredCredentials(provider: CredentialProvider): boolean 
   if (provider === "resend") {
     return Boolean((process.env["RESEND_API_KEY"] ?? "").trim());
   }
+  if (provider === "hostinger") {
+    return Boolean((process.env["HOSTINGER_EMAIL_MCP_TOKEN"] ?? "").trim());
+  }
   return false;
 }
 
@@ -374,11 +428,13 @@ export function publicCredentialSource(input: {
 }): { available: boolean; label: string; source: CredentialSource["source"] } {
   // sync best-effort (matches old behaviour for callers that cannot
   // be made async cheaply).
-  if (input.provider === "mautic" || input.provider === "resend") {
+  if (input.provider === "mautic" || input.provider === "resend" || input.provider === "hostinger") {
     const r =
       input.provider === "mautic"
         ? resolveMauticFromEnv()
-        : resolveResendFromEnv();
+        : input.provider === "resend"
+          ? resolveResendFromEnv()
+          : resolveHostingerFromEnv();
     return { available: r.available, label: r.label, source: r.source };
   }
   return { available: false, label: `${input.provider}:oauth_required`, source: "none" };

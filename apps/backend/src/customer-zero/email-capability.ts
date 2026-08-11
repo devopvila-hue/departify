@@ -6,8 +6,8 @@
  * corporate IMAP/SMTP, ...) are infrastructure selected by this
  * boundary from the org's operational connections.
  *
- * Today Gmail is the only implemented provider; a corporate IMAP/SMTP
- * provider plugs in behind the same boundary.
+ * Gmail, the existing corporate IMAP/SMTP provider and Hostinger Email plug
+ * in behind the same boundary. Provider selection remains a backend concern.
  *
  * Security: this module never returns credentials. Send results carry
  * only provider message id + timestamp + recipient (durable evidence,
@@ -23,11 +23,18 @@ import {
   getCorporateEmailStore,
   type CorporateEmailAccount,
 } from "./corporate-email-store.js";
+import { HostingerEmailAdapter, type HostingerCapability } from "./hostinger-email-adapter.js";
+
+export type EmailProvider = "corporate" | "hostinger" | "google";
 
 export interface EmailSendInput {
   readonly to: string;
   readonly subject: string;
   readonly bodyText: string;
+  /** Optional business-context selection when more than one provider exists. */
+  readonly provider?: EmailProvider;
+  readonly replyToMessageId?: string;
+  readonly replyToThreadId?: string;
 }
 
 export interface EmailSendOutcome {
@@ -42,10 +49,9 @@ export interface EmailSendOutcome {
 /** True when at least one email provider is operationally connected. */
 export async function isEmailCapabilityOperational(
   organizationId: string,
+  capability: "email.read" | "email.send" = "email.read",
 ): Promise<boolean> {
-  return (
-    (await resolveOperationalEmailProvider(organizationId)) !== null
-  );
+  return (await resolveOperationalEmailProvider(organizationId, undefined, capability)) !== null;
 }
 
 /**
@@ -56,7 +62,17 @@ export async function isEmailCapabilityOperational(
  */
 export async function resolveOperationalEmailProvider(
   organizationId: string,
-): Promise<"corporate" | "google" | null> {
+  preferred?: EmailProvider,
+  requiredCapability: "email.read" | "email.send" = "email.read",
+): Promise<EmailProvider | null> {
+  if (preferred === "hostinger") {
+    return (await isHostingerOperational(requiredCapability)) ? "hostinger" : null;
+  }
+  if (preferred === "google") {
+    return (await hasOperationalGoogleCapabilityForOrg(organizationId, requiredCapability))
+      ? "google"
+      : null;
+  }
   try {
     const corporate = await getCorporateEmailStore().listForOrg(organizationId);
     const operational = corporate.find(
@@ -66,10 +82,20 @@ export async function resolveOperationalEmailProvider(
   } catch {
     // Store not wired (dev/test) — fall through to Google.
   }
-  if (await hasOperationalGoogleCapabilityForOrg(organizationId, "email.read")) {
+  if (await isHostingerOperational(requiredCapability)) return "hostinger";
+  if (await hasOperationalGoogleCapabilityForOrg(organizationId, requiredCapability)) {
     return "google";
   }
   return null;
+}
+
+async function isHostingerOperational(requiredCapability: "email.read" | "email.send"): Promise<boolean> {
+  try {
+    const mapping = await new HostingerEmailAdapter().verify();
+    return Boolean(mapping.capabilities[requiredCapability as HostingerCapability]);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -81,7 +107,7 @@ export async function sendEmail(
   input: EmailSendInput,
 ): Promise<EmailSendOutcome> {
   const organizationId = session.organizationId;
-  const provider = await resolveOperationalEmailProvider(organizationId);
+  const provider = await resolveOperationalEmailProvider(organizationId, input.provider, "email.send");
   console.info(`[email-capability] ${JSON.stringify({
     event: "email_send_attempt",
     organizationId,
@@ -100,6 +126,15 @@ export async function sendEmail(
   }
 
   if (provider === "corporate") {
+    if (input.replyToMessageId) {
+      return {
+        ok: false,
+        provider: "corporate",
+        providerMessageId: null,
+        sentAt: null,
+        error: "reply_not_supported",
+      };
+    }
     const account = await loadOperationalCorporateAccount(organizationId);
     if (!account) {
       return {
@@ -125,6 +160,40 @@ export async function sendEmail(
       sentAt: outcome.sentAt,
       error: outcome.error,
     };
+  }
+
+  if (provider === "hostinger") {
+    try {
+      const adapter = new HostingerEmailAdapter();
+      const result = input.replyToMessageId
+        ? await adapter.replyMessage({ messageId: input.replyToMessageId, bodyText: input.bodyText })
+        : await adapter.sendMessage({ to: [input.to], subject: input.subject, bodyText: input.bodyText });
+      console.info(`[email-capability] ${JSON.stringify({
+        event: "email_send_success",
+        organizationId,
+        provider: "hostinger",
+        capability: "email.send",
+      })}`);
+      return {
+        ok: true,
+        provider: "hostinger",
+        providerMessageId: result.providerMessageId,
+        sentAt: result.sentAt,
+        error: null,
+      };
+    } catch (cause) {
+      const error = cause instanceof Error && "category" in cause
+        ? String((cause as { category?: unknown }).category ?? "provider_unavailable")
+        : "provider_unavailable";
+      logEmailSendFailure(organizationId, "hostinger", error);
+      return {
+        ok: false,
+        provider: "hostinger",
+        providerMessageId: null,
+        sentAt: null,
+        error,
+      };
+    }
   }
 
   const clientId = process.env["GOOGLE_OAUTH_CLIENT_ID"]?.trim();
@@ -179,6 +248,7 @@ export async function sendEmail(
       to: [input.to],
       subject: input.subject,
       bodyText: input.bodyText,
+      ...(input.replyToThreadId ? { threadId: input.replyToThreadId } : {}),
     });
   } catch {
     // Store refresh/provider exceptions are operational failures, not whole

@@ -1040,6 +1040,7 @@ function buildDepartmentRequestOutcome(input: CommandCenterInput): {
  * -------------------------------------------------------------------------*/
 
 const TOOL_KEYWORDS: readonly { keywords: readonly RegExp[]; toolId: string }[] = [
+  { keywords: [/hostinger/i, /correo\s+(?:de|del)\s+empresa/i], toolId: "hostinger_email" },
   { keywords: [/\bmautic\b/i], toolId: "mautic" },
   { keywords: [/\bhubspot\b/i], toolId: "hubspot" },
   { keywords: [/\bsalesforce\b/i], toolId: "salesforce" },

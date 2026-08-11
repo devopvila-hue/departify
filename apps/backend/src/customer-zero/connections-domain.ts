@@ -94,6 +94,25 @@ export interface CapabilityAvailability {
  */
 export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
   {
+    id: "hostinger_email",
+    name: "Correo de empresa",
+    category: "email",
+    categoryEs: "Correo",
+    categoryEn: "Email",
+    logoMark: "@",
+    brandColor: "#673de6",
+    capabilities: [
+      { id: "email.read", nameEs: "Leer correo", nameEn: "Read email" },
+      { id: "email.search", nameEs: "Buscar correos", nameEn: "Search emails" },
+      { id: "email.send", nameEs: "Enviar correo", nameEn: "Send email" },
+      { id: "email.reply", nameEs: "Responder correos", nameEn: "Reply to emails" },
+      { id: "email.organize", nameEs: "Organizar correo", nameEn: "Organize email" },
+    ],
+    configSourceLabel: "env:hostinger_email_mcp",
+    descriptionEs: "Tu buzón de empresa.",
+    descriptionEn: "Your business mailbox.",
+  },
+  {
     id: "mautic",
     name: "Mautic",
     category: "crm",

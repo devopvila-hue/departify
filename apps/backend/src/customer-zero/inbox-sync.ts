@@ -1,7 +1,7 @@
 /**
  * InboxSync — Customer Zero 03.
  *
- * Pulls recent messages from Gmail and normalizes them into the
+ * Pulls recent messages from the selected email provider and normalizes them into the
  * Unified Inbox domain. The sync:
  *   1. Looks up the Gmail token for the (organizationId, userId).
  *   2. Calls GmailAdapter.searchMessages with a recent window.
@@ -15,7 +15,9 @@
  * full email client.
  */
 
-import { GmailAdapter } from "./gmail-adapter.js";
+import { GmailAdapter, gmailTokenStore } from "./gmail-adapter.js";
+import { HostingerEmailAdapter, type NormalizedEmailMessage } from "./hostinger-email-adapter.js";
+import { resolveOperationalEmailProvider } from "./email-capability.js";
 import {
   buildPreview,
   classifyInboxItem,
@@ -50,23 +52,28 @@ export class InboxSync {
       input.sinceIso ??
       new Date(Date.now() - DEFAULT_LOOKBACK_MS).toISOString();
     const maxResults = input.maxResults ?? 25;
-    const adapter = new GmailAdapter(
-      { organizationId: input.organizationId, userId: input.userId },
-      process.env["GOOGLE_OAUTH_CLIENT_ID"] ?? "test-client-id",
-      process.env["GOOGLE_OAUTH_CLIENT_SECRET"] ?? "test-client-secret",
+    // Production resolves from the durable capability projection. Keep the
+    // adapter's legacy in-memory fallback for isolated development/test
+    // callers that seed Gmail directly without wiring a token store.
+    const resolvedProvider = await resolveOperationalEmailProvider(input.organizationId);
+    const provider = resolvedProvider ?? (
+      gmailTokenStore.get(input.organizationId, input.userId) ? "google" : null
     );
-    const search = await adapter.searchMessages(`after:${sinceIso}`, maxResults);
-    if (!search.success || !search.value) {
-      return { imported: 0, classified: 0, highImportance: 0 };
-    }
+    const messages: readonly (import("./gmail-adapter.js").EmailMessage | NormalizedEmailMessage)[] =
+      provider === "hostinger"
+        ? await new HostingerEmailAdapter().readRecentMessages(maxResults)
+        : provider === "google"
+          ? await this.readGmail(input, sinceIso, maxResults)
+          : [];
 
     let imported = 0;
     let classified = 0;
     let highImportance = 0;
-    for (const message of search.value) {
+    for (const message of messages) {
       const item = await this.normalizeAndPersist(
         input.organizationId,
         message,
+        provider === "hostinger" ? "hostinger" : "gmail",
       );
       if (item) {
         imported += 1;
@@ -79,19 +86,31 @@ export class InboxSync {
 
   private async normalizeAndPersist(
     organizationId: string,
-    message: import("./gmail-adapter.js").EmailMessage,
+    message: import("./gmail-adapter.js").EmailMessage | NormalizedEmailMessage,
+    source: "gmail" | "hostinger",
   ): Promise<InboxItem | null> {
+    const gmailMessage = source === "gmail"
+      ? message as import("./gmail-adapter.js").EmailMessage
+      : null;
+    const hostingerMessage = source === "hostinger"
+      ? message as NormalizedEmailMessage
+      : null;
+    const sourceMessageId = gmailMessage?.id ?? hostingerMessage?.providerMessageId ?? "";
+    const sourceThreadId = gmailMessage?.threadId ?? hostingerMessage?.providerThreadId;
+    const receivedAt = gmailMessage?.date ?? hostingerMessage?.receivedAt ?? "";
+    const snippet = gmailMessage?.snippet ?? hostingerMessage?.preview ?? "";
+    const unread = gmailMessage?.isUnread ?? hostingerMessage?.unread ?? false;
     const classification = classifyInboxItem({
       subject: message.subject,
-      plainText: message.snippet,
+      plainText: snippet,
       fromEmail: message.from.email,
       toEmails: message.to.map((a) => a.email),
     });
     const item = await this.store.upsert({
       organizationId,
-      source: "gmail",
-      sourceMessageId: message.id,
-      sourceThreadId: message.threadId,
+      source,
+      sourceMessageId,
+      ...(sourceThreadId ? { sourceThreadId } : {}),
       channel: "email",
       category: classification.category,
       subject: message.subject || "(Sin asunto)",
@@ -103,18 +122,32 @@ export class InboxSync {
         email: a.email,
         ...(a.displayName ? { displayName: a.displayName } : {}),
       })),
-      plainText: message.snippet || "",
-      preview: buildPreview(message.snippet || message.subject),
-      receivedAt: message.date || new Date().toISOString(),
-      unread: message.isUnread,
+      plainText: snippet || "",
+      preview: buildPreview(snippet || message.subject),
+      receivedAt: receivedAt || new Date().toISOString(),
+      unread,
       importance: classification.importance,
       departmentId: classification.departmentId,
       isLead: classification.isLead,
       relatedWorkItemId: null,
       relatedConversationId: null,
-      provenance: { provider: "gmail", rawEventId: message.id },
+      provenance: { provider: source, rawEventId: sourceMessageId },
       state: "classified",
     });
     return item;
+  }
+
+  private async readGmail(
+    input: InboxSyncInput,
+    sinceIso: string,
+    maxResults: number,
+  ): Promise<readonly import("./gmail-adapter.js").EmailMessage[]> {
+    const adapter = new GmailAdapter(
+      { organizationId: input.organizationId, userId: input.userId },
+      process.env["GOOGLE_OAUTH_CLIENT_ID"] ?? "test-client-id",
+      process.env["GOOGLE_OAUTH_CLIENT_SECRET"] ?? "test-client-secret",
+    );
+    const search = await adapter.searchMessages(`after:${sinceIso}`, maxResults);
+    return search.success && search.value ? search.value : [];
   }
 }

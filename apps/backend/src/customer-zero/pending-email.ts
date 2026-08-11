@@ -15,6 +15,7 @@
  */
 
 import type { SupportedLocale } from "./locale.js";
+import type { EmailProvider } from "./email-capability.js";
 
 export type PendingEmailStatus =
   | "awaiting_info" // missing recipient and/or objective
@@ -45,6 +46,11 @@ export interface PendingEmailWork {
   draft: PendingEmailDraft | null;
   /** Provider used for the send, once executed (e.g. "gmail"). */
   provider: string | null;
+  /** Explicit mailbox context selected by the CEO, if any. */
+  requestedProvider: EmailProvider | null;
+  /** Provider message being answered when this is an explicit reply. */
+  replyToProviderMessageId: string | null;
+  replyToProviderThreadId: string | null;
   /** Durable send evidence (never credentials). */
   sendResult: {
     readonly provider: string;
@@ -67,6 +73,9 @@ export function createPendingEmailWork(nowMs = Date.now()): PendingEmailWork {
     missingFields: ["destinatario", "mensaje"],
     draft: null,
     provider: null,
+    requestedProvider: null,
+    replyToProviderMessageId: null,
+    replyToProviderThreadId: null,
     sendResult: null,
     sendError: null,
     updatedAt: new Date(nowMs).toISOString(),
@@ -122,7 +131,7 @@ export function extractObjective(message: string): string | null {
 export function isEmailSendRequest(message: string): boolean {
   const lower = message.toLowerCase();
   const actionVerb =
-    /\b(env[ií]a|enviar|manda|mandar|escribe|escribir|redacta|redactar|prepara|preparar|m[eé]ndale)\b/.test(
+    /\b(env[ií]a|enviar|manda|mandar|escribe|escribir|redacta|redactar|prepara|preparar|m[eé]ndale|responde|responder|contesta|contestar)\b/.test(
       lower,
     );
   if (!actionVerb) return false;
@@ -131,6 +140,11 @@ export function isEmailSendRequest(message: string): boolean {
     /\b(escribe|manda|env[ií]a|m[eé]ndale)\s+a\b/.test(lower) ||
     EMAIL_RE.test(lower)
   );
+}
+
+export function isEmailReplyRequest(message: string): boolean {
+  return /^\s*(?:responde|responder|contesta|contestar)\b/i.test(message) &&
+    (/\b(correo|email|mail|mensaje)\b/i.test(message) || /\b(a|al|a la|a el)\b/i.test(message));
 }
 
 /** True when the CEO is answering an existing pending email (approval). */

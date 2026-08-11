@@ -110,6 +110,14 @@ export interface CustomerZeroSessionState {
   marketingWork?: MarketingWorkState;
   /** Pending email action (Customer Zero Email P0) — multi-turn send work. */
   pendingEmailWork?: import("./pending-email.js").PendingEmailWork;
+  /** Latest provider-backed email reference usable for an explicit reply. */
+  lastEmailContext?: {
+    provider: "google" | "corporate" | "hostinger";
+    providerMessageId: string;
+    providerThreadId?: string;
+    subject: string;
+    senderEmail: string;
+  };
   /** Pending Calendar mutation; retained until the CEO approves or cancels. */
   pendingCalendarWork?: {
     summary: string;

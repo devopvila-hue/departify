@@ -121,6 +121,7 @@ import {
   CONNECTION_DEFINITIONS,
   renderConnectionCard,
   listAvailableCapabilitiesForOrg,
+  type ConnectionCardView,
 } from "../../customer-zero/connections-domain.js";
 import { isCapabilityAvailable } from "../../customer-zero/capability-registry.js";
 import {
@@ -150,6 +151,7 @@ import {
   extractRecipient,
   extractObjective,
   isEmailSendRequest,
+  isEmailReplyRequest,
   isEmailApprovalResponse,
   isEmailCancellation,
   isEmailFailureQuestion,
@@ -162,8 +164,14 @@ import {
   isEmailCapabilityOperational,
   sendEmail,
   resolveOperationalEmailProvider,
+  type EmailProvider,
 } from "../../customer-zero/email-capability.js";
 import { getCorporateEmailStore } from "../../customer-zero/corporate-email-store.js";
+import {
+  HostingerEmailAdapter,
+  probeHostingerEmail,
+  type HostingerConnectionStatus,
+} from "../../customer-zero/hostinger-email-adapter.js";
 import {
   completeGoogleOAuthCallback,
   getGoogleTokenStore,
@@ -681,9 +689,19 @@ export async function registerCustomerZeroV2Routes(
         const orgState = toolStates.find((s) => s.toolId === def.id) ?? null;
         return renderConnectionCard(orgState, session.state.locale);
       });
+      const hostinger = await probeHostingerEmail();
+      const hostingerCardIndex = cards.findIndex((card) => card.id === "hostinger_email");
+      if (hostingerCardIndex >= 0) {
+        cards[hostingerCardIndex] = buildHostingerCard(hostinger, session.state.locale);
+      }
+      const catalog = await buildCatalogConnectionViews(session, session.state.locale);
+      const hostingerCatalogIndex = catalog.findIndex((entry) => entry.toolId === "hostinger_email");
+      if (hostingerCatalogIndex >= 0) {
+        catalog[hostingerCatalogIndex] = buildHostingerCatalogView(hostinger, session.state.locale);
+      }
       return reply.code(200).send({
         organizationId,
-        connections: await buildCatalogConnectionViews(session, session.state.locale),
+        connections: catalog,
         cards,
         google: await buildGoogleIdentityView(organizationId),
         unmappedTools: session.state.unmappedTools,
@@ -725,6 +743,28 @@ export async function registerCustomerZeroV2Routes(
     "/api/customer-zero/:organizationId/connections/:provider/test",
     async (request, reply) => {
       const { organizationId, provider } = request.params;
+      if (provider === "hostinger_email") {
+        const session = await requireSession(organizationId, deps);
+        const status = await probeHostingerEmail();
+        const now = new Date().toISOString();
+        await session.toolState.upsert({
+          organizationId,
+          toolId: "hostinger_email",
+          label: "Correo de empresa",
+          capability: "email.read",
+          declared: true,
+          status: status.state === "connected" ? "connected" : status.configured ? "degraded" : "needs_connection",
+          ...(status.configured ? { configSource: "env:hostinger_email_mcp" } : {}),
+          ...(status.state === "connected" ? { verifiedAt: status.checkedAt, updatedAt: now, health: "operational" as const } : { updatedAt: now, health: "down" as const }),
+        });
+        return {
+          organizationId,
+          provider,
+          available: status.state === "connected",
+          capabilities: status.capabilities,
+          state: status.state,
+        };
+      }
       if (provider !== "mautic") {
         return reply.code(404).send({ error: "unsupported_provider" });
       }
@@ -764,10 +804,23 @@ export async function registerCustomerZeroV2Routes(
       const { organizationId } = request.params;
       const session = await requireSession(organizationId, deps);
       const toolStates = await listToolStatesForSession(session);
-      const caps = listAvailableCapabilitiesForOrg(toolStates);
+      const capsByName = new Map(
+        listAvailableCapabilitiesForOrg(toolStates).map((capability) => [capability.capability, capability]),
+      );
+      const hostinger = await probeHostingerEmail();
+      if (hostinger.state === "connected") {
+        for (const capability of hostinger.capabilities) {
+          const existing = capsByName.get(capability);
+          capsByName.set(capability, {
+            capability,
+            available: true,
+            providers: [...new Set([...(existing?.providers ?? []), "Correo de empresa"])],
+          });
+        }
+      }
       return {
         organizationId,
-        capabilities: caps,
+        capabilities: [...capsByName.values()],
       };
     },
   );
@@ -856,6 +909,22 @@ export async function registerCustomerZeroV2Routes(
         limit: Number(request.query?.limit ?? 50),
       } as Parameters<typeof inboxStore.list>[0]);
       return { organizationId, items };
+    },
+  );
+
+  server.get<{
+    Params: { organizationId: string };
+  }>(
+    "/api/customer-zero/:organizationId/inbox/mailboxes",
+    async (request, reply) => {
+      const { organizationId } = request.params;
+      await requireSession(organizationId, deps);
+      try {
+        const mailboxes = await new HostingerEmailAdapter().listMailboxes();
+        return { organizationId, mailboxes };
+      } catch {
+        return reply.code(503).send({ error: "email_provider_unavailable" });
+      }
     },
   );
 
@@ -2243,6 +2312,69 @@ async function buildGoogleIdentityView(organizationId: string): Promise<{
   };
 }
 
+function buildHostingerCard(
+  status: HostingerConnectionStatus,
+  locale: SupportedLocale,
+): ConnectionCardView {
+  const definition = CONNECTION_DEFINITIONS.find((entry) => entry.id === "hostinger_email")!;
+  const state = status.state;
+  const es = locale !== "en";
+  const discovered = new Set(status.capabilities);
+  const capabilities = definition.capabilities.filter((capability) => {
+    if (capability.id === "email.organize") {
+      return discovered.has("email.move") || discovered.has("email.flag") || discovered.has("email.delete");
+    }
+    return discovered.has(capability.id as never);
+  });
+  return {
+    id: definition.id,
+    name: definition.name,
+    category: es ? definition.categoryEs : definition.categoryEn,
+    categoryId: definition.category,
+    logoMark: definition.logoMark,
+    brandColor: definition.brandColor,
+    state,
+    stateLabel: state === "connected"
+      ? es ? "Conectado" : "Connected"
+      : state === "needs_attention"
+        ? es ? "Necesita atención" : "Needs attention"
+        : state === "error"
+          ? es ? "Error de conexión" : "Connection error"
+          : es ? "No conectado" : "Not connected",
+    configSource: null,
+    verifiedAt: status.state === "connected" ? status.checkedAt : null,
+    capabilities,
+    actionLabel: state === "connected"
+      ? es ? "Comprobar conexión" : "Check connection"
+      : es ? "Configurar" : "Set up",
+    description: es ? definition.descriptionEs ?? null : definition.descriptionEn ?? null,
+  };
+}
+
+function buildHostingerCatalogView(
+  status: HostingerConnectionStatus,
+  locale: SupportedLocale,
+): ToolConnectionView {
+  const connected = status.state === "connected";
+  const configured = status.configured;
+  return {
+    toolId: "hostinger_email",
+    label: "Correo de empresa",
+    capability: "email.read",
+    category: locale === "en" ? "Email" : "Correo",
+    domains: ["email"],
+    state: connected ? "connected" : configured ? "degraded" : "available",
+    hasState: configured,
+    humanLabel: connected
+      ? locale === "en" ? "Connected" : "Conectado"
+      : configured
+        ? locale === "en" ? "Needs attention" : "Necesita atención"
+        : locale === "en" ? "Available" : "Disponible",
+    action: connected ? "verify" : configured ? "retry" : "prepare",
+    ...(connected ? { verifiedAt: status.checkedAt } : {}),
+  };
+}
+
 /** Builds Marketing-relevant department memory context for the chat tool. */
 function buildMemoryContextForChat(
   session: CustomerZeroSession,
@@ -2901,6 +3033,7 @@ export async function processCeoMessage(
             organizationId,
             message,
             session.state.locale,
+            session,
           );
           if (emailReply) {
             assistantReply = emailReply;
@@ -3466,7 +3599,7 @@ async function runGoogleBusinessTurn(
     const lower = message.toLowerCase();
     if (/\b(calendar|calendario|reuni[oó]n|meeting)\b/i.test(lower)) {
       const email = isEmailQuestion(message)
-        ? await readEmailAnswer(session.organizationId, message, session.state.locale)
+        ? await readEmailAnswer(session.organizationId, message, session.state.locale, session)
         : null;
       const calendar = await runCalendarReadTurn(session, message, isEs);
       return { reply: [email, calendar.reply].filter(Boolean).join("\n\n") };
@@ -3986,6 +4119,33 @@ async function runEmailTurn(
   // Fresh email request → start (or restart) the pending work.
   if (isEmailSendRequest(message)) {
     work = createPendingEmailWork();
+    work.requestedProvider = preferredEmailProviderForMessage(message);
+    if (isEmailReplyRequest(message)) {
+      const context = session.state.lastEmailContext;
+      if (!context) {
+        return {
+          reply: isEs
+            ? "¿A qué correo quieres responder? Primero puedo buscarlo o leer el último correo recibido."
+            : "Which email should I reply to? I can find it or read the latest message first.",
+          connectionSuggestion: null,
+        };
+      }
+      work.requestedProvider = context.provider;
+      work.replyToProviderMessageId = context.providerMessageId;
+      work.replyToProviderThreadId = context.providerThreadId ?? null;
+      work.recipient = context.senderEmail;
+      work.objective = extractObjective(message);
+      work.draft = work.objective
+        ? { ...buildEmailDraft(context.senderEmail, work.objective, locale), subject: `Re: ${context.subject || "Tu correo"}` }
+        : null;
+      recomputeMissingFields(work);
+      session.state.pendingEmailWork = work;
+      if (work.missingFields.length > 0) {
+        return { reply: missingFieldsCopy(work.missingFields, locale), connectionSuggestion: null };
+      }
+      work.status = "awaiting_approval";
+      return draftApprovalReply(work, isEs);
+    }
     const recipient = extractRecipient(message);
     const objective = extractObjective(message);
     work.recipient = recipient;
@@ -4177,14 +4337,24 @@ async function sendPendingEmail(
     sideEffect: true,
   });
   session.state.lastExecutionReceipt = receipt;
-  const operational = await isEmailCapabilityOperational(organizationId);
+  const operational = await isEmailCapabilityOperational(organizationId, "email.send");
   if (!operational) {
     work.status = "awaiting_approval";
     session.state.lastExecutionReceipt = failExecutionReceipt(receipt, "authorization_required");
+    const readProvider = await resolveOperationalEmailProvider(
+      organizationId,
+      work.requestedProvider ?? undefined,
+      "email.read",
+    );
+    const authorizationMissing = readProvider !== null;
     return {
       reply: isEs
-        ? "Tu correo todavía no está conectado, así que no puedo enviarlo. Conecta tu correo en Conexiones y volveré a intentarlo con el borrador que ya tengo."
-        : "Your email is not connected yet, so I can't send it. Connect your email in Connections and I'll retry with the draft I already have.",
+        ? authorizationMissing
+          ? "Tu correo está conectado para leer, pero necesita autorización adicional para enviar. Activa el permiso de envío en Conexiones y volveré a intentarlo con el borrador que ya tengo."
+          : "Tu correo todavía no está conectado, así que no puedo enviarlo. Conecta tu correo en Conexiones y volveré a intentarlo con el borrador que ya tengo."
+        : authorizationMissing
+          ? "Your email is connected for reading, but sending requires additional authorization. Enable sending in Connections and I'll retry with the draft I already have."
+          : "Your email is not connected yet, so I can't send it. Connect your email in Connections and I'll retry with the draft I already have.",
       connectionSuggestion: buildEmailConnectionSuggestion(isEs),
     };
   }
@@ -4194,6 +4364,9 @@ async function sendPendingEmail(
       to: work.draft.to,
       subject: work.draft.subject,
       bodyText: work.draft.body,
+      ...(work.requestedProvider ? { provider: work.requestedProvider } : {}),
+      ...(work.replyToProviderMessageId ? { replyToMessageId: work.replyToProviderMessageId } : {}),
+      ...(work.replyToProviderThreadId ? { replyToThreadId: work.replyToProviderThreadId } : {}),
     });
   } catch {
     // No adapter/store exception may escape as a blank HTTP 500 after the CEO
@@ -4342,21 +4515,83 @@ async function readEmailAnswer(
   organizationId: string,
   message: string,
   locale: SupportedLocale,
+  session?: CustomerZeroSession,
 ): Promise<string | null> {
-  const provider = await resolveOperationalEmailProvider(organizationId);
+  const preferred = /correo\s+de\s+empresa|hostinger/i.test(message)
+    ? "hostinger" as const
+    : /\bgmail\b|google\s+mail/i.test(message)
+      ? "google" as const
+      : undefined;
+  const provider = await resolveOperationalEmailProvider(organizationId, preferred);
   if (provider === "corporate") {
-    return readCorporateEmailAnswer(organizationId, message, locale);
+    return readCorporateEmailAnswer(organizationId, message, locale, session);
+  }
+  if (provider === "hostinger") {
+    return readHostingerEmailAnswer(message, locale, session);
   }
   if (provider === "google") {
-    return runGmailRead(organizationId, message, locale);
+    return runGmailRead(organizationId, message, locale, session);
   }
   return null;
+}
+
+function preferredEmailProviderForMessage(message: string): EmailProvider | null {
+  if (/correo\s+(?:de|del)\s+empresa|hostinger/i.test(message)) return "hostinger";
+  if (/\bgmail\b|google\s+mail/i.test(message)) return "google";
+  return null;
+}
+
+async function readHostingerEmailAnswer(
+  message: string,
+  locale: SupportedLocale,
+  session?: CustomerZeroSession,
+): Promise<string> {
+  const isEs = locale !== "en";
+  const plan = gmailDeriveReadPlan(message);
+  const adapter = new HostingerEmailAdapter();
+  const raw = plan.intent === "search"
+    ? await adapter.searchMessages(message, plan.maxResults)
+    : await adapter.readRecentMessages(plan.maxResults);
+  if (raw.length === 0) {
+    return isEs
+      ? "No he encontrado correos recientes en tu correo de empresa. Si buscas uno concreto, dime el remitente o el asunto."
+      : "I didn't find recent messages in your business email. Tell me the sender or subject if you need a specific one.";
+  }
+  const items = raw.map((m) => ({
+    id: m.providerMessageId,
+    threadId: m.providerThreadId ?? m.providerMessageId,
+    sender: m.from.displayName
+      ? `${decodeHtmlEntities(m.from.displayName)} <${decodeHtmlEntities(m.from.email)}>`
+      : decodeHtmlEntities(m.from.email),
+    senderEmail: decodeHtmlEntities(m.from.email),
+    subject: decodeHtmlEntities(m.subject) || (isEs ? "(sin asunto)" : "(no subject)"),
+    receivedAt: m.receivedAt,
+    snippet: decodeHtmlEntities(m.preview),
+    unread: m.unread,
+  }));
+  if (session && raw[0]) {
+    session.state.lastEmailContext = {
+      provider: "hostinger",
+      providerMessageId: raw[0].providerMessageId,
+      ...(raw[0].providerThreadId ? { providerThreadId: raw[0].providerThreadId } : {}),
+      subject: raw[0].subject,
+      senderEmail: raw[0].from.email,
+    };
+  }
+  return renderGmailSummary({
+    intent: plan.intent,
+    items,
+    locale,
+    totalFound: items.length,
+    requestedMaxResults: plan.maxResults,
+  });
 }
 
 async function readCorporateEmailAnswer(
   organizationId: string,
   message: string,
   locale: SupportedLocale,
+  session?: CustomerZeroSession,
 ): Promise<string | null> {
   const isEs = locale !== "en";
   const summaries = await getCorporateEmailStore().listForOrg(organizationId);
@@ -4389,6 +4624,15 @@ async function readCorporateEmailAnswer(
     snippet: decodeHtmlEntities(m.snippet),
     unread: m.isUnread,
   }));
+  if (session && raw[0]) {
+    session.state.lastEmailContext = {
+      provider: "corporate",
+      providerMessageId: raw[0].id,
+      providerThreadId: raw[0].threadId,
+      subject: raw[0].subject,
+      senderEmail: raw[0].from.email,
+    };
+  }
   return renderGmailSummary({
     intent: plan.intent,
     items,
@@ -4402,6 +4646,7 @@ async function runGmailRead(
   organizationId: string,
   message: string,
   locale: SupportedLocale,
+  session?: CustomerZeroSession,
 ): Promise<string | null> {
   const isEs = locale !== "en";
   const clientId = process.env["GOOGLE_OAUTH_CLIENT_ID"]?.trim();
@@ -4425,6 +4670,15 @@ async function runGmailRead(
   if (result.success && result.value) {
     const plan = gmailDeriveReadPlan(message);
     const items = result.value.map(summarizeGmailMessage);
+    if (session && result.value[0]) {
+      session.state.lastEmailContext = {
+        provider: "google",
+        providerMessageId: result.value[0].id,
+        providerThreadId: result.value[0].threadId,
+        subject: result.value[0].subject,
+        senderEmail: result.value[0].from.email,
+      };
+    }
     return renderGmailSummary({
       intent: plan.intent,
       items,

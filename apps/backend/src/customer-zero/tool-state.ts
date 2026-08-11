@@ -61,6 +61,10 @@ export function availableConfigForTool(toolId: string): string | null {
       return hasEnv(["MAUTIC_BASE_URL", "MAUTIC_CLIENT_ID", "MAUTIC_CLIENT_SECRET"])
         ? "env:mautic"
         : null;
+    case "hostinger_email":
+      return hasEnv(["HOSTINGER_EMAIL_MCP_TOKEN"])
+        ? "env:hostinger_email_mcp"
+        : null;
     default:
       return null;
   }
@@ -92,7 +96,8 @@ export function hasWorkingConnector(toolId: string): boolean {
     toolId === "gmail" ||
     toolId === "google_workspace" ||
     toolId === "google_calendar" ||
-    toolId === "google_drive"
+    toolId === "google_drive" ||
+    toolId === "hostinger_email"
   );
 }
 

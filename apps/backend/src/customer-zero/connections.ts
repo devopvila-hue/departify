@@ -67,6 +67,7 @@ export const TOOL_DOMAINS: Readonly<Record<string, readonly ToolDomain[]>> = {
   onedrive: ["documents"],
   dropbox: ["documents"],
   brevo: ["marketing", "email"],
+  hostinger_email: ["email"],
   microsoft_teams: ["team"],
 };
 
@@ -119,6 +120,16 @@ export interface ToolDescriptor {
  * sprint targets 1-2 real connections, not a catalog.
  */
 export const TOOL_CATALOG: readonly ToolDescriptor[] = [
+  {
+    id: "hostinger_email",
+    label: "Correo de empresa",
+    capability: "email.read",
+    categoryEs: "Correo",
+    categoryEn: "Email",
+    connectable: true,
+    // Deployment secret; never ask the CEO for this in chat.
+    requiredCredentials: [],
+  },
   {
     id: "gmail",
     label: "Gmail",
@@ -332,6 +343,9 @@ export const TOOL_CATALOG: readonly ToolDescriptor[] = [
 
 /** Free-text / synonym resolution: the CEO's words → the internal connector. */
 const ALIASES: Readonly<Record<string, string>> = {
+  hostinger: "hostinger_email",
+  "correo de empresa": "hostinger_email",
+  "correo empresarial": "hostinger_email",
   gmail: "gmail",
   "google mail": "gmail",
   correo: "gmail",
