@@ -210,9 +210,17 @@ export interface InboxItemView {
   channel: string;
   category: InboxCategory;
   subject: string;
-  senderEmail: string;
+  senderEmail?: string;
   senderName?: string;
+  sender?: { email: string; displayName?: string };
+  recipients?: { email: string; displayName?: string }[];
+  cc?: { email: string; displayName?: string }[];
   preview: string;
+  plainText?: string;
+  htmlBody?: string;
+  attachments?: { filename?: string; mimeType?: string; size?: number }[];
+  mailbox?: string;
+  folder?: string;
   receivedAt: string;
   unread: boolean;
   importance: number;
@@ -802,6 +810,11 @@ export const api = {
       `/api/customer-zero/${org}/inbox/sync`,
       body ?? {},
     ),
+  inboxItem: (org: string, itemId: string) =>
+    getJson<{
+      organizationId: string;
+      item: InboxItemView;
+    }>(`/api/customer-zero/${org}/inbox/${itemId}`),
   inboxToWork: (org: string, itemId: string, capability?: string) =>
     postJson<{
       organizationId: string;

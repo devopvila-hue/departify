@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type InboxItemView, type InboxCategory } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import { Card, EmptyState, Badge } from "@/components/primitives";
+import { sanitizeEmailHtml } from "@/lib/sanitize-email-html";
 
 /**
  * Inbox — Customer Zero 03.
@@ -32,6 +33,8 @@ export function InboxRoute() {
   const [category, setCategory] = useState<InboxCategory | "all">("all");
   const [syncing, setSyncing] = useState(false);
   const [workingId, setWorkingId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<InboxItemView | null>(null);
+  const [openingId, setOpeningId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -69,6 +72,20 @@ export function InboxRoute() {
       setError(cause instanceof Error ? cause.message : "No hemos podido crear la tarea.");
     } finally {
       setWorkingId(null);
+    }
+  }
+
+  async function openItem(item: InboxItemView) {
+    if (!organizationId || openingId) return;
+    setOpeningId(item.id);
+    setError(null);
+    try {
+      const result = await api.inboxItem(organizationId, item.id);
+      if (result?.item) setSelected(result.item);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "No hemos podido abrir el correo.");
+    } finally {
+      setOpeningId(null);
     }
   }
 
@@ -116,20 +133,74 @@ export function InboxRoute() {
         </p>
       )}
 
-      {filtered.length === 0 ? (
+      {selected && (
+        <Card className="dfy-inbox-detail">
+          <div className="dfy-inbox-detail__actions">
+            <button type="button" className="dfy-button dfy-button--small" onClick={() => setSelected(null)}>
+              Volver al inbox
+            </button>
+          </div>
+          <p className="dfy-muted dfy-muted--small">
+            {selected.source === "hostinger" ? "Correo empresarial" : selected.source}
+            {selected.mailbox ? ` · ${selected.mailbox}` : ""}
+            {selected.folder ? ` · ${selected.folder}` : ""}
+          </p>
+          <h2>{selected.subject || "(Sin asunto)"}</h2>
+          <p className="dfy-muted dfy-muted--small">
+            De: {selected.sender?.displayName ?? selected.senderName ?? selected.senderEmail}
+            {selected.sender?.email || selected.senderEmail ? ` <${selected.sender?.email ?? selected.senderEmail}>` : ""}
+          </p>
+          <p className="dfy-muted dfy-muted--small">
+            Para: {(selected.recipients ?? []).map((recipient) => recipient.email).join(", ") || "—"}
+            {selected.cc?.length ? ` · CC: ${selected.cc.map((recipient) => recipient.email).join(", ")}` : ""}
+            {` · ${new Date(selected.receivedAt).toLocaleString("es-ES")}`}
+          </p>
+          {selected.plainText ? (
+            <div className="dfy-inbox-detail__body">{selected.plainText}</div>
+          ) : selected.htmlBody ? (
+            <div
+              className="dfy-inbox-detail__body dfy-inbox-detail__body--html"
+              dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(selected.htmlBody) }}
+            />
+          ) : (
+            <p className="dfy-muted">Este correo no incluye contenido legible.</p>
+          )}
+          {!!selected.attachments?.length && (
+            <div className="dfy-inbox-detail__attachments">
+              <strong>Adjuntos</strong>
+              <ul>
+                {selected.attachments.map((attachment, index) => (
+                  <li key={`${attachment.filename ?? "adjunto"}-${index}`}>
+                    {attachment.filename ?? "Adjunto"}{attachment.mimeType ? ` · ${attachment.mimeType}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {!selected && filtered.length === 0 ? (
         <Card>
           <EmptyState
             title="Aún no hay nada en el inbox"
             description="Cuando lleguen mensajes importantes los verás aquí. Sincroniza tus cuentas de correo para importar los mensajes recientes."
           />
         </Card>
-      ) : (
+      ) : !selected ? (
         <div className="dfy-inbox-list">
           {filtered.map((item) => (
             <Card key={item.id}>
               <header className="dfy-inbox-item__head">
                 <div className="dfy-inbox-item__title">
-                  <strong>{item.subject || "(Sin asunto)"}</strong>
+                    <button
+                      type="button"
+                      className="dfy-inbox-item__open"
+                      onClick={() => void openItem(item)}
+                      disabled={openingId !== null}
+                    >
+                      <strong>{item.subject || "(Sin asunto)"}</strong>
+                    </button>
                   {item.unread && <span className="dfy-dot dfy-dot--connected" aria-hidden="true" />}
                 </div>
                 <Badge tone={toneForCategory(item.category)}>
@@ -137,8 +208,8 @@ export function InboxRoute() {
                 </Badge>
               </header>
               <p className="dfy-muted dfy-muted--small dfy-inbox-item__from">
-                De <strong>{item.senderEmail}</strong>
-                {item.senderName ? ` (${item.senderName})` : ""} ·{" "}
+                De <strong>{item.sender?.email ?? item.senderEmail}</strong>
+                {(item.sender?.displayName ?? item.senderName) ? ` (${item.sender?.displayName ?? item.senderName})` : ""} ·{" "}
                 {new Date(item.receivedAt).toLocaleString("es-ES")}
               </p>
               <p className="dfy-inbox-item__preview">{item.preview}</p>
@@ -165,7 +236,7 @@ export function InboxRoute() {
             </Card>
           ))}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

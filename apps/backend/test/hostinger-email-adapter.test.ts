@@ -109,6 +109,9 @@ describe("Hostinger Email MCP adapter", () => {
         if (path === "/api/v1/me") {
           return jsonResponse({ result: { content: [{ type: "text", text: JSON.stringify({ status: 200, body: { data: { mailboxes: [{ resourceId: "AC1", address: "ventas@empresa.com" }] } } }) }] } });
         }
+        if (path.endsWith("/text")) {
+          return jsonResponse({ result: { content: [{ type: "text", text: JSON.stringify({ status: 200, body: { data: { text: "Necesito el detalle de la consulta.", html: "<p>Necesito el <strong>detalle</strong> de la consulta.</p>" } } }) }] } });
+        }
         return jsonResponse({ result: { content: [{ type: "text", text: JSON.stringify({ status: 200, body: { data: [{ uid: 42, path: "INBOX", date: "2026-08-11T12:00:00.000Z", flags: ["\\Flagged"], unseen: true, subject: "Consulta", from: { address: "cliente@empresa.com", name: "Cliente" }, to: [], cc: [], messageId: "<host-42@example.com>" }], pagination: { total: 1 } } }) }] } });
       }
       if (body.method === "tools/call" && body.params?.name === "email_call_api_write") {
@@ -127,7 +130,12 @@ describe("Hostinger Email MCP adapter", () => {
     await expect(adapter.listMailboxes()).resolves.toEqual(["ventas@empresa.com"]);
     await expect(adapter.readRecentMessages(5)).resolves.toMatchObject([{
       providerMessageId: "<host-42@example.com>",
+      providerMessageUid: "42",
       mailbox: "ventas@empresa.com",
+      folder: "INBOX",
+      preview: "Necesito el detalle de la consulta.",
+      textBody: "Necesito el detalle de la consulta.",
+      htmlBody: "<p>Necesito el <strong>detalle</strong> de la consulta.</p>",
       unread: true,
       flagged: true,
     }]);

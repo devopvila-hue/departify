@@ -2605,6 +2605,33 @@ select {
   color: var(--dfy-color-text);
   line-height: 1.5;
 }
+.dfy-inbox-item__open {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.dfy-inbox-detail {
+  margin-bottom: 1rem;
+}
+.dfy-inbox-detail__actions {
+  margin-bottom: 1rem;
+}
+.dfy-inbox-detail__body {
+  white-space: pre-wrap;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.dfy-inbox-detail__body--html {
+  white-space: normal;
+}
+.dfy-inbox-detail__attachments {
+  margin-top: 1.25rem;
+}
 .dfy-inbox-item__hint {
   margin-top: 10px;
   color: var(--dfy-color-accent, #3b82f6);

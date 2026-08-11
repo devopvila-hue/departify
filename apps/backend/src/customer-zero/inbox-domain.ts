@@ -54,10 +54,20 @@ export interface InboxItem {
   readonly subject: string;
   readonly sender: InboxAddress;
   readonly recipients: readonly InboxAddress[];
+  readonly cc?: readonly InboxAddress[];
   /** Plain-text body — provider payloads are stripped of HTML. */
   readonly plainText: string;
+  /** Original HTML body, retained for a sanitized read view only. */
+  readonly htmlBody?: string;
   /** Short preview for the Portal list view. */
   readonly preview: string;
+  readonly attachments?: readonly {
+    readonly filename?: string;
+    readonly mimeType?: string;
+    readonly size?: number;
+  }[];
+  readonly mailbox?: string;
+  readonly folder?: string;
   readonly receivedAt: string;
   readonly unread: boolean;
   /** 0..1, computed at classification time. */

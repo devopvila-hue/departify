@@ -29,8 +29,13 @@ interface InboxItemRow {
   sender_email: string;
   sender_name: string | null;
   recipients: { email: string; displayName?: string }[];
+  cc: { email: string; displayName?: string }[];
   plain_text: string;
+  html_body: string | null;
   preview: string;
+  attachments: { filename?: string; mimeType?: string; size?: number }[];
+  mailbox: string | null;
+  folder: string | null;
   received_at: string;
   unread: boolean;
   importance: number;
@@ -59,8 +64,13 @@ function mapRow(row: InboxItemRow): InboxItem {
       ...(row.sender_name ? { displayName: row.sender_name } : {}),
     },
     recipients: row.recipients ?? [],
+    cc: row.cc ?? [],
     plainText: row.plain_text,
+    ...(row.html_body ? { htmlBody: row.html_body } : {}),
     preview: row.preview,
+    attachments: row.attachments ?? [],
+    ...(row.mailbox ? { mailbox: row.mailbox } : {}),
+    ...(row.folder ? { folder: row.folder } : {}),
     receivedAt: row.received_at,
     unread: row.unread,
     importance: Number(row.importance),
@@ -105,8 +115,13 @@ export class SupabaseInboxStore implements InboxStore {
           sender_email: item.sender.email,
           ...(item.sender.displayName ? { sender_name: item.sender.displayName } : {}),
           recipients: JSON.stringify(item.recipients),
+          cc: JSON.stringify(item.cc ?? []),
           plain_text: item.plainText,
+          html_body: item.htmlBody ?? null,
           preview: item.preview,
+          attachments: JSON.stringify(item.attachments ?? []),
+          mailbox: item.mailbox ?? null,
+          folder: item.folder ?? null,
           received_at: item.receivedAt,
           unread: item.unread,
           importance: item.importance,

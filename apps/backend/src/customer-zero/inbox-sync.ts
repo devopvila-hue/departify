@@ -117,7 +117,10 @@ export class InboxSync {
       : sourceMessageId;
     const sourceThreadId = gmailMessage?.threadId ?? hostingerMessage?.providerThreadId ?? corporateMessage?.threadId;
     const receivedAt = gmailMessage?.date ?? hostingerMessage?.receivedAt ?? corporateMessage?.date ?? "";
-    const snippet = gmailMessage?.snippet ?? hostingerMessage?.preview ?? corporateMessage?.snippet ?? "";
+    const hostingerText = hostingerMessage?.textBody ?? "";
+    const snippet = hostingerText || (
+      gmailMessage?.snippet ?? hostingerMessage?.preview ?? corporateMessage?.snippet ?? ""
+    );
     const unread = gmailMessage?.isUnread ?? hostingerMessage?.unread ?? corporateMessage?.isUnread ?? false;
     const recipients: readonly { email: string; displayName?: string }[] = source === "corporate"
       ? []
@@ -125,6 +128,9 @@ export class InboxSync {
         email: a.email,
         ...(a.displayName ? { displayName: a.displayName } : {}),
       }));
+    const cc = source === "hostinger"
+      ? (hostingerMessage?.cc ?? []).map((a) => ({ email: a.email, ...(a.displayName ? { displayName: a.displayName } : {}) }))
+      : [];
     const classification = classifyInboxItem({
       subject: message.subject,
       plainText: snippet,
@@ -144,8 +150,13 @@ export class InboxSync {
         ...(message.from.displayName ? { displayName: message.from.displayName } : {}),
       },
       recipients,
+      cc,
       plainText: snippet || "",
+      ...(hostingerMessage?.htmlBody ? { htmlBody: hostingerMessage.htmlBody } : {}),
       preview: buildPreview(snippet || message.subject),
+      attachments: source === "hostinger" ? (hostingerMessage?.attachments ?? []) : [],
+      ...(hostingerMessage?.mailbox ? { mailbox: hostingerMessage.mailbox } : {}),
+      ...(hostingerMessage?.folder ? { folder: hostingerMessage.folder } : {}),
       receivedAt: receivedAt || new Date().toISOString(),
       unread,
       importance: classification.importance,

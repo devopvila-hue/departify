@@ -38,6 +38,8 @@ export interface HostingerMcpTool {
 export interface NormalizedEmailMessage {
   readonly provider: "hostinger";
   readonly providerMessageId: string;
+  /** Hostinger mailbox UID used only for the provider's body endpoint. */
+  readonly providerMessageUid?: string;
   readonly providerThreadId?: string;
   readonly mailbox?: string;
   readonly folder?: string;
@@ -46,6 +48,13 @@ export interface NormalizedEmailMessage {
   readonly cc: readonly { readonly email: string; readonly displayName?: string }[];
   readonly subject: string;
   readonly preview: string;
+  readonly textBody?: string;
+  readonly htmlBody?: string;
+  readonly attachments?: readonly {
+    readonly filename?: string;
+    readonly mimeType?: string;
+    readonly size?: number;
+  }[];
   readonly receivedAt: string;
   readonly sentAt?: string;
   readonly unread: boolean;
@@ -173,13 +182,12 @@ export class HostingerEmailAdapter {
           { page: 1, perPage: Math.min(maxResults, 100), sort: "-uid" },
         );
         assertSuccessfulApiResponse(response);
-        messages.push(
-          ...normalizeMessages(apiBody(response)).map((message) => ({
+        const listed = normalizeMessages(apiBody(response)).map((message) => ({
             ...message,
             mailbox: mailbox.address,
             folder: message.folder ?? "INBOX",
-          })),
-        );
+          }));
+        messages.push(...await this.hydrateMessages(tool, mailbox, listed));
         if (messages.length >= maxResults) break;
       }
       return messages.slice(0, maxResults);
@@ -192,6 +200,7 @@ export class HostingerEmailAdapter {
     const tool = await this.toolFor("email.search", "email.read");
     if (isApiProxyTool(tool)) {
       const mailboxes = await this.listMailboxRecords();
+      const readTool = await this.toolFor("email.read");
       const messages: NormalizedEmailMessage[] = [];
       for (const mailbox of mailboxes) {
         const response = await this.callApi(
@@ -203,13 +212,12 @@ export class HostingerEmailAdapter {
           { text: query },
         );
         assertSuccessfulApiResponse(response);
-        messages.push(
-          ...normalizeMessages(apiBody(response)).map((message) => ({
+        const listed = normalizeMessages(apiBody(response)).map((message) => ({
             ...message,
             mailbox: mailbox.address,
             folder: message.folder ?? "INBOX",
-          })),
-        );
+          }));
+        messages.push(...await this.hydrateMessages(readTool, mailbox, listed));
         if (messages.length >= maxResults) break;
       }
       return messages.slice(0, maxResults);
@@ -354,6 +362,33 @@ export class HostingerEmailAdapter {
     assertSuccessfulApiResponse(response);
     this.mailboxes = extractMailboxes(apiBody(response));
     return this.mailboxes;
+  }
+
+  private async hydrateMessages(
+    readTool: HostingerMcpTool,
+    mailbox: HostingerMailbox,
+    messages: readonly NormalizedEmailMessage[],
+  ): Promise<readonly NormalizedEmailMessage[]> {
+    const hydrated: NormalizedEmailMessage[] = [];
+    for (const message of messages) {
+      const response = await this.callApi(
+        readTool,
+        "GET",
+        "/api/v1/mailboxes/{mailboxResourceId}/folders/{folder}/messages/{uid}/text",
+        { mailboxResourceId: mailbox.resourceId, folder: message.folder ?? "INBOX", uid: message.providerMessageUid ?? message.providerMessageId },
+        {},
+      );
+      assertSuccessfulApiResponse(response);
+      const content = extractMessageContent(apiBody(response));
+      const contentText = content.textBody ?? content.htmlBody ?? "";
+      hydrated.push({
+        ...message,
+        ...(content.textBody ? { textBody: content.textBody } : {}),
+        ...(content.htmlBody ? { htmlBody: content.htmlBody } : {}),
+        preview: message.preview || buildMessagePreview(contentText),
+      });
+    }
+    return hydrated;
   }
 
   private async sendHttp(payload: Readonly<Record<string, unknown>>, failureCategory: HostingerErrorCategory = "MCP_CONNECTION_FAILED"): Promise<JsonRpcResponse> {
@@ -567,12 +602,13 @@ function normalizeMessage(value: unknown): NormalizedEmailMessage | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
   const id = extractIdentifier(record, ["providerMessageId", "messageId", "message_id", "id", "uid"]);
+  const uid = extractIdentifier(record, ["uid"]);
   if (!id) return null;
   const address = (candidate: unknown): { email: string; displayName?: string } => {
     if (typeof candidate === "string") return { email: candidate };
     const object = candidate && typeof candidate === "object" ? candidate as Record<string, unknown> : {};
-    const email = extractString(object, ["email", "address", "mail"]) ?? "desconocido";
-    const displayName = extractString(object, ["displayName", "display_name", "name"]);
+    const email = extractDirectString(object, ["email", "address", "mail"]) ?? "desconocido";
+    const displayName = extractDirectString(object, ["displayName", "display_name", "name"]);
     return displayName ? { email, displayName } : { email };
   };
   const from = address(record.from ?? record.sender);
@@ -580,19 +616,61 @@ function normalizeMessage(value: unknown): NormalizedEmailMessage | null {
   return {
     provider: "hostinger",
     providerMessageId: id,
-    ...(extractString(record, ["threadId", "thread_id"]) ? { providerThreadId: extractString(record, ["threadId", "thread_id"])! } : {}),
-    ...(extractString(record, ["mailbox", "mailboxName"]) ? { mailbox: extractString(record, ["mailbox", "mailboxName"])! } : {}),
-    ...(extractString(record, ["folder", "folderName"]) ? { folder: extractString(record, ["folder", "folderName"])! } : {}),
+    ...(uid ? { providerMessageUid: uid } : {}),
+    ...(extractDirectString(record, ["threadId", "thread_id"]) ? { providerThreadId: extractDirectString(record, ["threadId", "thread_id"])! } : {}),
+    ...(extractDirectString(record, ["mailbox", "mailboxName"]) ? { mailbox: extractDirectString(record, ["mailbox", "mailboxName"])! } : {}),
+    ...(extractDirectString(record, ["folder", "folderName", "path"]) ? { folder: extractDirectString(record, ["folder", "folderName", "path"])! } : {}),
     from,
     to: list(record.to),
     cc: list(record.cc),
-    subject: extractString(record, ["subject", "title"]) ?? "",
-    preview: extractString(record, ["preview", "snippet", "body", "text"]) ?? "",
-    receivedAt: extractString(record, ["receivedAt", "received_at", "date", "timestamp"]) ?? new Date().toISOString(),
-    ...(extractString(record, ["sentAt", "sent_at"]) ? { sentAt: extractString(record, ["sentAt", "sent_at"])! } : {}),
+    subject: extractDirectString(record, ["subject", "title"]) ?? "",
+    preview: extractDirectString(record, ["preview", "snippet", "body", "text"]) ?? "",
+    attachments: normalizeAttachments(record.attachments),
+    receivedAt: extractDirectString(record, ["receivedAt", "received_at", "date", "timestamp"]) ?? new Date().toISOString(),
+    ...(extractDirectString(record, ["sentAt", "sent_at"]) ? { sentAt: extractDirectString(record, ["sentAt", "sent_at"])! } : {}),
     unread: Boolean(record.unread ?? record.isUnread ?? record.is_unread ?? record.unseen),
     flagged: Boolean(record.flagged ?? record.isFlagged ?? record.is_flagged ?? (Array.isArray(record.flags) && record.flags.includes("\\Flagged"))),
   };
+}
+
+function extractDirectString(record: Record<string, unknown>, keys: readonly string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+function extractMessageContent(value: unknown): { readonly textBody?: string; readonly htmlBody?: string } {
+  if (!value || typeof value !== "object") return {};
+  const record = value as Record<string, unknown>;
+  const data = record.data && typeof record.data === "object" ? record.data as Record<string, unknown> : record;
+  const textBody = typeof data.text === "string" && data.text.trim() ? data.text : undefined;
+  const htmlBody = typeof data.html === "string" && data.html.trim() ? data.html : undefined;
+  return { ...(textBody ? { textBody } : {}), ...(htmlBody ? { htmlBody } : {}) };
+}
+
+function normalizeAttachments(value: unknown): readonly { filename?: string; mimeType?: string; size?: number }[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry && typeof entry === "object"))
+    .map((entry) => ({
+      ...(extractDirectString(entry, ["filename", "fileName", "name"]) ? { filename: extractDirectString(entry, ["filename", "fileName", "name"])! } : {}),
+      ...(extractDirectString(entry, ["mimeType", "mime_type", "contentType"]) ? { mimeType: extractDirectString(entry, ["mimeType", "mime_type", "contentType"])! } : {}),
+      ...(typeof entry.size === "number" && Number.isFinite(entry.size) ? { size: entry.size } : {}),
+    }));
+}
+
+function buildMessagePreview(value: string, maxChars = 240): string {
+  const plain = value
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+  return plain.length <= maxChars ? plain : `${plain.slice(0, maxChars - 1).trimEnd()}…`;
 }
 
 function isApiProxyTool(tool: HostingerMcpTool): boolean {
