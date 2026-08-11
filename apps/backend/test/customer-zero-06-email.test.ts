@@ -77,10 +77,19 @@ function seedReadOnlyGmail(org: string, userId = "user-a"): void {
 }
 
 let originalFetch: typeof fetch | null = null;
-function mockGoogleFetch(options?: { sendStatus?: number; missingProviderId?: boolean }): void {
+function mockGoogleFetch(options?: { sendStatus?: number; missingProviderId?: boolean; refreshStatus?: number }): void {
   originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
+    if (url.includes("oauth2.googleapis.com/token")) {
+      return new Response(JSON.stringify({
+        access_token: "access-refreshed",
+        expires_in: 3600,
+      }), {
+        status: options?.refreshStatus ?? 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (url.includes("gmail.googleapis.com/gmail/v1/users/me/messages/send")) {
       if (options?.sendStatus && options.sendStatus >= 400) {
         return new Response(JSON.stringify({ error: "boom" }), {
@@ -233,6 +242,64 @@ describe("CZ06 — Email capability P0 (multi-turn send)", () => {
     await message(org, "Envía un correo a cliente@acme.com diciendo que la reunión pasa al viernes");
     const approved = await message(org, "si, envialo");
     expect(approved.reply).toContain("Enviado a cliente@acme.com");
+  });
+
+  it("P0 founder literal: 'si,envialo' refreshes safely, preserves capability evidence, and returns a visible terminal result", async () => {
+    const org = await startOrg();
+    await getGoogleTokenStore().put({
+      organizationId: org,
+      userId: "user-a",
+      provider: "gmail",
+      accessToken: "access-expired",
+      refreshToken: "refresh-1",
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      scopes: [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.compose",
+        "https://www.googleapis.com/auth/gmail.send",
+      ],
+      email: "ceo@departify.app",
+      displayName: "CEO",
+      operationalVerifiedAt: new Date().toISOString(),
+      operationalProbeError: null,
+      operationalCapabilities: ["email.read", "email.send"],
+    });
+    mockGoogleFetch();
+    const draft = await message(org, "manda un mail a valbuibar@gmail.com con el texto mail manadado");
+    expect(draft.reply).toContain("¿Lo envío?");
+    const approved = await message(org, "si,envialo");
+    expect(approved.status).toBe(200);
+    expect(approved.reply).toBe("Enviado a valbuibar@gmail.com.");
+    const persisted = await getGoogleTokenStore().get(org, "user-a");
+    expect(persisted?.operationalCapabilities).toEqual(["email.read", "email.send"]);
+  });
+
+  it("returns an observable retryable response when Google token refresh fails", async () => {
+    const org = await startOrg();
+    await getGoogleTokenStore().put({
+      organizationId: org,
+      userId: "user-a",
+      provider: "gmail",
+      accessToken: "access-expired",
+      refreshToken: "refresh-1",
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+      scopes: [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.send",
+      ],
+      email: "ceo@departify.app",
+      displayName: "CEO",
+      operationalVerifiedAt: new Date().toISOString(),
+      operationalProbeError: null,
+      operationalCapabilities: ["email.read", "email.send"],
+    });
+    mockGoogleFetch({ refreshStatus: 503 });
+    await message(org, "manda un mail a valbuibar@gmail.com con el texto mail manadado");
+    const approved = await message(org, "si,envialo");
+    expect(approved.status).toBe(200);
+    expect(approved.reply).toContain("No he podido enviar");
+    expect(approved.reply).toContain("borrador sigue preparado");
+    expect(approved.reply).not.toContain("Enviado a");
   });
 
   it("T3: missing objective → continuation fills it and preserves the recipient", async () => {

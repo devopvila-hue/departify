@@ -2714,7 +2714,41 @@ export async function processCeoMessage(
     delete session.state.pendingEmailWork;
   }
 
-  if (routed.decision.intent === "email_action" || emailOwnsPendingTurn) {
+  const calendarOwnsPendingTurn = Boolean(
+    session.state.pendingCalendarWork && (
+      isCalendarApproval(message) ||
+      isCalendarCancellation(message) ||
+      isCalendarAttendeeFollowUp(message) ||
+      isCalendarDateOrTimeFollowUp(message)
+    ),
+  );
+  const newBusinessIntentEscapesCalendar = Boolean(
+    session.state.pendingCalendarWork &&
+    !calendarOwnsPendingTurn &&
+    [
+      "email_action",
+      "calendar_read",
+      "calendar_create",
+      "drive_query",
+      "multi_capability",
+      "external_tool_query",
+      "knowledge_query",
+    ].includes(routed.decision.intent),
+  );
+  if (newBusinessIntentEscapesCalendar) {
+    delete session.state.pendingCalendarWork;
+  }
+
+  if (calendarOwnsPendingTurn) {
+    const googleOutcome = await runGoogleBusinessTurn(
+      session,
+      message,
+      routed.decision.intent,
+      isEs,
+    );
+    assistantReply = googleOutcome.reply;
+    marketingTurn = { role: "assistant", content: assistantReply };
+  } else if (routed.decision.intent === "email_action" || emailOwnsPendingTurn) {
     const emailOutcome = await runEmailTurn(session, message, isEs);
     assistantReply = emailOutcome.reply;
     marketingTurn = { role: "assistant", content: emailOutcome.reply };
@@ -3542,12 +3576,29 @@ async function runPendingCalendarTurn(
   isEs: boolean,
 ): Promise<{ reply: string }> {
   const work = session.state.pendingCalendarWork!;
-  if (/\b(cancel(a|ar)?|no\s+la\s+crees|descarta|olvid(a|alo))\b/i.test(message)) {
+  if (isCalendarCancellation(message)) {
     delete session.state.pendingCalendarWork;
     return { reply: isEs ? "De acuerdo, no he creado ningún evento." : "OK, I did not create any event." };
   }
   if (isCalendarNotFoundFollowUp(message)) {
     return { reply: await verifyLatestCalendarEvent(session, isEs) };
+  }
+  if (isCalendarAttendeeFollowUp(message)) {
+    const attendees = extractCalendarAttendees(message);
+    work.attendees = Array.from(new Set([...work.attendees, ...attendees]));
+    if (work.status === "awaiting_date") {
+      return { reply: isEs
+        ? `He añadido a ${attendees.join(", ")}. Necesito el día del evento: ¿hoy o mañana?`
+        : `I added ${attendees.join(", ")}. I still need the event day: today or tomorrow?` };
+    }
+    return { reply: isEs
+      ? `He añadido a ${attendees.join(", ")} al evento **${work.summary}**. ¿Quieres que lo cree? Responde «hazlo» para confirmarlo.`
+      : `I added ${attendees.join(", ")} to **${work.summary}**. Should I create it? Reply “go ahead” to confirm.` };
+  }
+  if (work.status === "creating") {
+    return { reply: isEs
+      ? "La creación ya está en curso; no crearé el evento dos veces."
+      : "Event creation is already in progress; I will not create it twice." };
   }
   if (work.status === "awaiting_date") {
     const dateOffset = /\b(ma[nñ]ana|tomorrow)\b/i.test(message) ? 1 : /\b(hoy|today)\b/i.test(message) ? 0 : null;
@@ -3632,6 +3683,36 @@ function isCalendarApproval(message: string): boolean {
     .replace(/\s+/g, " ")
     .trim();
   return /^(?:si|envialo|mandalo|crealo|confirmo|confirma|crea|hazlo|adelante|yes|approve|go ahead|ok)(?:\s+(?:envialo|mandalo|crealo|crea|hazlo|ya|go ahead|ok))?$/.test(normalized);
+}
+
+function isCalendarCancellation(message: string): boolean {
+  return /\b(cancel(?:a|ar)?|no\s+la\s+crees|descarta|olvid(?:a|alo))\b/i.test(message);
+}
+
+function extractCalendarAttendees(message: string): readonly string[] {
+  return Array.from(
+    message.matchAll(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g),
+    (match) => match[0]!.toLowerCase(),
+  );
+}
+
+function isCalendarAttendeeFollowUp(message: string): boolean {
+  const attendees = extractCalendarAttendees(message);
+  if (attendees.length === 0) return false;
+  const withoutAddresses = message
+    .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, " ")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[¿?!.,;:]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return /^(?:a|con|invita(?:\s+a)?|anade(?:\s+a)?|invitado(?:s)?|asistente(?:s)?)?$/.test(withoutAddresses);
+}
+
+function isCalendarDateOrTimeFollowUp(message: string): boolean {
+  return /^(?:hoy|ma[nñ]ana|today|tomorrow)(?:\s+a\s+las?\s+\d{1,2}(?::?\d{2})?)?$/i.test(message.trim()) ||
+    /^(?:a\s+las?|las?)\s+\d{1,2}(?::|\s+)?\d{0,2}$/i.test(message.trim());
 }
 
 function isCalendarNotFoundFollowUp(message: string): boolean {
@@ -3793,22 +3874,48 @@ function calendarRange(message: string): { start: string; end: string; timezone:
 }
 
 function parseCalendarProposal(message: string): null | { summary: string; hour: number; minute: number; startIso?: string; endIso?: string; timezone: string; attendees: readonly string[]; dateProvided: boolean } {
-  const time = message.match(/\b(?:a\s+las|a\s+la|las|at)\s*(\d{1,2})(?::|\s+)?(\d{2})?\b/i);
-  if (!time) return null;
   const timezone = businessTimezone();
-  const base = localDateParts(new Date(), timezone);
-  const dateProvided = /\b(hoy|today|ma[nñ]ana|tomorrow)\b/i.test(message);
+  const now = new Date();
+  const base = localDateParts(now, timezone);
+  const relativeMinutes = parseRelativeCalendarMinutes(message);
+  const periodHour = /\besta\s+tarde\b/i.test(message) ? 16 : /\besta\s+noche\b/i.test(message) ? 20 : null;
+  const time = message.match(/\b(?:a\s+las|a\s+la|las|at)\s*(\d{1,2})(?::|\s+)?(\d{2})?\b/i);
+  if (!time && relativeMinutes === null && periodHour === null) return null;
+  const dateProvided = relativeMinutes !== null || periodHour !== null || /\b(hoy|today|ma[nñ]ana|tomorrow)\b/i.test(message);
   const date = addLocalDays(base, /\b(ma[nñ]ana|tomorrow)\b/i.test(message) ? 1 : 0);
-  const hour = Number(time[1]);
-  const minute = Number(time[2] ?? 0);
+  const relativeStart = relativeMinutes === null ? null : new Date(now.getTime() + relativeMinutes * 60_000);
+  const periodStart = periodHour === null ? null : zonedDate(date, periodHour, 0, timezone);
+  // “Esta tarde/noche” means the remaining part of today. If the conventional
+  // anchor has already passed, use the next safe near-future slot rather than
+  // silently preparing an event in the past.
+  const resolvedPeriodStart = periodStart && periodStart.getTime() <= now.getTime()
+    ? new Date(now.getTime() + 5 * 60_000)
+    : periodStart;
+  const resolvedStart = relativeStart ?? resolvedPeriodStart;
+  const resolvedClock = resolvedStart
+    ? new Intl.DateTimeFormat("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hour12: false }).format(resolvedStart).split(":")
+    : null;
+  const hour = resolvedClock ? Number(resolvedClock[0]) : Number(time![1]);
+  const minute = resolvedClock ? Number(resolvedClock[1]) : Number(time![2] ?? 0);
   if (hour > 23 || minute > 59) return null;
-  const start = zonedDate(date, hour, minute, timezone);
-  const duration = message.match(/(\d+)\s*(?:minutos?|minutes?)/i);
+  const start = resolvedStart ?? zonedDate(date, hour, minute, timezone);
+  const durationSource = relativeMinutes === null ? message : message.replace(/(?:dentro\s+de|en)\s+\d+\s*(?:min(?:uto)?s?)/i, "");
+  const duration = durationSource.match(/(?:durante|de)\s+(\d+)\s*(?:minutos?|minutes?)/i);
   const end = new Date(start.getTime() + Number(duration?.[1] ?? 30) * 60_000);
-  const attendees = Array.from(message.matchAll(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g), (match) => match[0]!);
+  const attendees = extractCalendarAttendees(message);
   const named = message.match(/\b(?:llamad[oa]?|llamdo|titulado|con\s+nombre|named)\s+(.+?)(?:[,.!?]|$)/i)?.[1]?.trim();
-  const summary = named || message.match(/\b(?:con|with)\s+([^,.;]+?)(?:\s+(?:ma[nñ]ana|tomorrow|a\s+las|las|at)\b|$)/i)?.[1]?.trim() || "Reunión";
+  const eventNamed = message.match(/\bevento\s+(.+?)(?:\s+(?:hoy|ma[nñ]ana|today|tomorrow|a\s+las|en\s+\d+\s+min)\b|[,.!?]|$)/i)?.[1]?.trim();
+  const summary = named || eventNamed || message.match(/\b(?:con|with)\s+([^,.;]+?)(?:\s+(?:ma[nñ]ana|tomorrow|a\s+las|las|at)\b|$)/i)?.[1]?.trim() || "Reunión";
   return { summary: summary.replace(/\s+/g, " ").slice(0, 160), hour, minute, ...(dateProvided ? { startIso: start.toISOString(), endIso: end.toISOString() } : {}), timezone, attendees, dateProvided };
+}
+
+function parseRelativeCalendarMinutes(message: string): number | null {
+  if (/\b(?:en|dentro\s+de)\s+media\s+hora\b/i.test(message)) return 30;
+  if (/\b(?:en|dentro\s+de)\s+una\s+hora\b/i.test(message)) return 60;
+  const match = message.match(/\b(?:en|dentro\s+de)\s+(\d{1,3})\s*(?:min(?:uto)?s?)\b/i);
+  if (!match) return null;
+  const minutes = Number(match[1]);
+  return minutes > 0 && minutes <= 24 * 60 ? minutes : null;
 }
 
 function businessTimezone(): string {
@@ -4081,11 +4188,25 @@ async function sendPendingEmail(
       connectionSuggestion: buildEmailConnectionSuggestion(isEs),
     };
   }
-  const outcome = await sendEmail(session, {
-    to: work.draft.to,
-    subject: work.draft.subject,
-    bodyText: work.draft.body,
-  });
+  let outcome;
+  try {
+    outcome = await sendEmail(session, {
+      to: work.draft.to,
+      subject: work.draft.subject,
+      bodyText: work.draft.body,
+    });
+  } catch {
+    // No adapter/store exception may escape as a blank HTTP 500 after the CEO
+    // has approved a side effect. Preserve the draft and return an observable,
+    // retryable terminal state without exposing provider diagnostics.
+    outcome = {
+      ok: false,
+      provider: null,
+      providerMessageId: null,
+      sentAt: null,
+      error: "provider_unavailable",
+    };
+  }
   if (outcome.ok && outcome.providerMessageId) {
     work.status = "sent";
     work.provider = outcome.provider;
@@ -4151,6 +4272,10 @@ function describeEmailSendFailure(error: string | null, isEs: boolean): string {
       return isEs
         ? "Google limitó temporalmente el envío."
         : "Google temporarily rate-limited the send.";
+    case "provider_unavailable":
+      return isEs
+        ? "El servicio de correo no ha podido completar la operación."
+        : "The email service could not complete the operation.";
     case "invalid_response":
     case "send_failed":
     default:

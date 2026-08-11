@@ -302,7 +302,10 @@ export class SupabaseGoogleTokenStore implements GoogleTokenStore {
           display_name: record.displayName,
           operational_verified_at: record.operationalVerifiedAt,
           operational_probe_error: record.operationalProbeError,
-          operational_capabilities: record.operationalCapabilities ?? null,
+          // Production declares this projection NOT NULL. Callers that create
+          // legacy/dev records without probe evidence persist an honest empty
+          // projection instead of turning a token refresh into a database 500.
+          operational_capabilities: record.operationalCapabilities ?? [],
           updated_at: new Date().toISOString(),
         },
         { onConflict: "organization_id,user_id" },

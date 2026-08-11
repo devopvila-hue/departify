@@ -85,6 +85,9 @@ function seedOperationalToken(org: string, userId = "user-a"): void {
 let originalFetch: typeof fetch | null = null;
 let searchMaxResults: number[] = [];
 let driveMutationCalls = 0;
+let gmailSendCalls = 0;
+let calendarCreateCalls = 0;
+let lastCalendarCreateBody: Record<string, unknown> | null = null;
 function mockGoogleFetch(options?: {
   probeStatus?: number;
   searchStatus?: number;
@@ -136,6 +139,8 @@ function mockGoogleFetch(options?: {
     }
     if (url.includes("www.googleapis.com/calendar/v3/calendars/primary/events")) {
       if (init?.method === "POST") {
+        calendarCreateCalls += 1;
+        lastCalendarCreateBody = JSON.parse(String(init.body)) as Record<string, unknown>;
         return new Response(JSON.stringify({
           id: "event-created-1",
           calendarId: "primary",
@@ -181,6 +186,13 @@ function mockGoogleFetch(options?: {
       });
     }
     if (url.includes("gmail.googleapis.com/gmail/v1/users/me/messages")) {
+      if (url.includes("/messages/send") && init?.method === "POST") {
+        gmailSendCalls += 1;
+        return new Response(JSON.stringify({ id: "gmail-message-real-1", threadId: "thread-real-1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
       // Message detail fetch (contains ?format=metadata).
       if (url.includes("format=metadata")) {
         const idMatch = url.match(/messages\/([^/?]+)/);
@@ -229,6 +241,9 @@ function restoreFetch(): void {
     originalFetch = null;
   }
   searchMaxResults = [];
+  gmailSendCalls = 0;
+  calendarCreateCalls = 0;
+  lastCalendarCreateBody = null;
 }
 
 describe("D–H — granted scopes → existing capability vocabulary", () => {
@@ -759,6 +774,80 @@ describe("P0 — post-OAuth HTTP: connect → callback → /conexiones", () => {
     expect(chat.statusCode).toBe(200);
     expect(chat.json().reply).toMatch(/Calendar todavía no está activado/i);
     expect(chat.json().reply).not.toMatch(/Lo paso a Elvira|Marketing/i);
+  });
+
+  it("P0 founder transcript keeps Gmail and Calendar operation ownership across exact follow-ups", async () => {
+    const org = await startOrg();
+    await getGoogleTokenStore().put({
+      organizationId: org,
+      userId: "user-a",
+      provider: "gmail",
+      accessToken: "access-google",
+      refreshToken: "refresh-google",
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      scopes: [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.compose",
+        "https://www.googleapis.com/auth/gmail.send",
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/calendar.events",
+      ],
+      email: "ceo@departify.app",
+      displayName: "CEO",
+      operationalVerifiedAt: new Date().toISOString(),
+      operationalProbeError: null,
+      operationalCapabilities: ["email.read", "email.send", "calendar.read", "calendar.create"],
+    });
+    mockGoogleFetch({});
+    const send = async (message: string) => authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message },
+    });
+
+    expect((await send("manda un mail a valbuibar@gmail.com con el texto mail manadado")).json().reply).toContain("¿Lo envío?");
+    const approved = await send("si,envialo");
+    expect(approved.statusCode).toBe(200);
+    expect(approved.json().reply).toBe("Enviado a valbuibar@gmail.com.");
+    expect(gmailSendCalls).toBe(1);
+
+    expect((await send("mis proximos eventos")).json().reply).toContain("Reunión de prueba");
+    const proposal = await send("añade al calendaro en 5 min el evento jodar hoy");
+    expect(proposal.json().reply).toMatch(/preparado/i);
+    expect(proposal.json().reply).toContain("jodar");
+    expect(proposal.json().reply).not.toMatch(/a qu[eé] hora/i);
+
+    const attendee = await send("a  devopgava@gmail.com");
+    expect(attendee.json().reply).toContain("devopgava@gmail.com");
+    expect(attendee.json().reply).not.toMatch(/Gmail est[aá] conectado|Elvira|Marketing/i);
+
+    const created = await send("hazlo");
+    expect(created.json().reply).toContain("Google lo ha confirmado");
+    expect(created.json().reply).not.toMatch(/Elvira|Marketing/i);
+    expect(calendarCreateCalls).toBe(1);
+    expect(lastCalendarCreateBody?.["attendees"]).toEqual([{ email: "devopgava@gmail.com" }]);
+
+    const secondProposal = await send("añade al calendaro en 5 min el evento otro hoy");
+    expect(secondProposal.json().reply).toMatch(/preparado/i);
+    const escaped = await send("mis últimos 3 emails");
+    expect(escaped.json().reply).toContain("cliente@acme.com");
+    expect(calendarCreateCalls).toBe(1);
+
+    for (const relativeRequest of [
+      "crea una reunión en 5 minutos llamada Cinco",
+      "crea una reunión dentro de 5 minutos llamada Dentro",
+      "crea una reunión en media hora llamada Media",
+      "crea una reunión en una hora llamada Hora",
+      "crea una reunión hoy a las 20 llamada Hoy",
+      "crea una reunión mañana a las 10 llamada Mañana",
+      "crea una reunión esta tarde llamada Tarde",
+      "crea una reunión esta noche llamada Noche",
+    ]) {
+      const relative = await send(relativeRequest);
+      expect(relative.json().reply, relativeRequest).toMatch(/preparado/i);
+      expect(relative.json().reply, relativeRequest).not.toMatch(/a qu[eé] hora/i);
+      expect((await send("cancela")).json().reply).toMatch(/no he creado/i);
+    }
   });
 
   it("routes a Drive PDF organization request to real read-only inspection, never Marketing or a mutation", async () => {

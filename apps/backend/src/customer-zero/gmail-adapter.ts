@@ -27,6 +27,7 @@ import {
   googleApiFetch,
   hasGrantedScope,
   refreshGoogleToken,
+  type GoogleCapability,
 } from "./google-tokens.js";
 
 /* ----------------------------------------------------------------------------
@@ -543,11 +544,12 @@ export class GmailAdapter {
     if (new Date(tokens.expiresAt).getTime() - 60_000 > Date.now()) {
       return tokens;
     }
-    return this.refresh(tokens);
+    return this.refresh(tokens, durable.operationalCapabilities ?? []);
   }
 
   private async refresh(
     current: GmailTokens,
+    operationalCapabilities: readonly GoogleCapability[],
   ): Promise<GmailTokens | null> {
     if (!current.refreshToken) return current;
     const result = await refreshGoogleToken({
@@ -579,6 +581,7 @@ export class GmailAdapter {
       displayName: next.displayName ?? null,
       operationalVerifiedAt: new Date().toISOString(),
       operationalProbeError: null,
+      operationalCapabilities,
     });
     // Belt-and-braces: also write to the legacy in-memory store
     // when present, so existing tests keep working.

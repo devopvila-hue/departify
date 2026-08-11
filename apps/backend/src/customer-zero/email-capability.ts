@@ -173,11 +173,26 @@ export async function sendEmail(
     clientId,
     clientSecret,
   );
-  const result = await adapter.sendMessage({
-    to: [input.to],
-    subject: input.subject,
-    bodyText: input.bodyText,
-  });
+  let result;
+  try {
+    result = await adapter.sendMessage({
+      to: [input.to],
+      subject: input.subject,
+      bodyText: input.bodyText,
+    });
+  } catch {
+    // Store refresh/provider exceptions are operational failures, not whole
+    // turn failures. Never leak credential-bearing provider diagnostics and
+    // never leave the CEO without a terminal response.
+    logEmailSendFailure(organizationId, "google", "provider_unavailable");
+    return {
+      ok: false,
+      provider: "google",
+      providerMessageId: null,
+      sentAt: null,
+      error: "provider_unavailable",
+    };
+  }
   if (result.success && result.value?.messageId) {
     console.info(`[email-capability] ${JSON.stringify({
       event: "email_send_success",
