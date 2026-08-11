@@ -178,7 +178,7 @@ export async function sendEmail(
     subject: input.subject,
     bodyText: input.bodyText,
   });
-  if (result.success && result.value) {
+  if (result.success && result.value?.messageId) {
     console.info(`[email-capability] ${JSON.stringify({
       event: "email_send_success",
       organizationId,
@@ -193,19 +193,22 @@ export async function sendEmail(
       error: null,
     };
   }
+  const error = result.success
+    ? "provider_confirmation_missing"
+    : result.errorCode ?? "send_failed";
   console.info(`[email-capability] ${JSON.stringify({
     event: "email_send_failed",
     organizationId,
     provider: "google",
     capability: "email.send",
-    error: result.errorCode ?? "send_failed",
+    error,
   })}`);
   return {
     ok: false,
     provider: "google",
     providerMessageId: null,
     sentAt: null,
-    error: result.errorCode ?? "send_failed",
+    error,
   };
 }
 

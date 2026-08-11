@@ -85,6 +85,11 @@ import {
 import { GoogleCalendarAdapter } from "../../customer-zero/google-calendar-adapter.js";
 import { GoogleDriveAdapter } from "../../customer-zero/google-drive-adapter.js";
 import {
+  completeExecutionReceipt,
+  failExecutionReceipt,
+  startExecutionReceipt,
+} from "../../customer-zero/execution-receipt.js";
+import {
   DEFAULT_CONVERSATION_TITLE,
   deriveConversationTitle,
   type ConversationRecord,
@@ -3471,15 +3476,27 @@ async function runCalendarReadTurn(
       : "Calendar is not activated yet. You can give Calendar access from Connections." };
   }
   const range = calendarRange(message);
+  const receipt = startExecutionReceipt({
+    operationId: connectorOperationId("calendar_read"),
+    intent: "calendar.read",
+    capability: "calendar.read",
+    provider: "google",
+    sideEffect: false,
+  });
+  session.state.lastExecutionReceipt = receipt;
   const result = await new GoogleCalendarAdapter({
     organizationId: session.organizationId,
     userId: identity.userId,
   }).listEvents({ timeMinIso: range.start, timeMaxIso: range.end, maxResults: 50 });
   if (!result.success) {
+    session.state.lastExecutionReceipt = failExecutionReceipt(receipt, result.errorCode ?? "provider_error");
     session.state.lastCalendarOperation = { status: "failed", operation: "list", ...(result.message ? { error: result.message } : {}) };
     return { reply: calendarFailure(result.message, isEs) };
   }
   const events = result.value ?? [];
+  session.state.lastExecutionReceipt = completeExecutionReceipt(receipt, {
+    safeMetadata: { resultCount: events.length },
+  });
   if (events.length === 0) return { reply: isEs ? "No tienes reuniones en ese periodo." : "You have no meetings in that period." };
   const lines = events.slice(0, 8).map((event) =>
     `• ${formatCalendarTime(event.startIso, range.timezone)} — ${event.summary}${event.location ? ` (${event.location})` : ""}`,
@@ -3553,6 +3570,14 @@ async function runPendingCalendarTurn(
   const identity = await findOperationalGoogleIdentityForOrg(session.organizationId, "calendar.create");
   if (!identity) return { reply: isEs ? "Calendar ya no está disponible para crear eventos. Vuelve a activarlo desde Conexiones." : "Calendar is no longer available for event creation. Activate it again from Connections." };
   work.status = "creating";
+  const receipt = startExecutionReceipt({
+    operationId: `calendar_create_${work.createdAt}`,
+    intent: "calendar.create",
+    capability: "calendar.create",
+    provider: "google",
+    sideEffect: true,
+  });
+  session.state.lastExecutionReceipt = receipt;
   const result = await new GoogleCalendarAdapter({ organizationId: session.organizationId, userId: identity.userId }).createEvent({
     summary: work.summary,
     startIso: work.startIso!,
@@ -3562,10 +3587,25 @@ async function runPendingCalendarTurn(
   });
   if (!result.success || !result.value?.id) {
     work.status = "awaiting_approval";
+    session.state.lastExecutionReceipt = failExecutionReceipt(
+      receipt,
+      result.errorCode ?? "provider_confirmation_missing",
+      result.success ? "ambiguous" : "failed",
+    );
     session.state.lastCalendarOperation = { status: "ambiguous", operation: "create", ...(result.message ? { error: result.message } : {}) };
     return { reply: calendarFailure(result.message, isEs) };
   }
   const event = result.value;
+  session.state.lastExecutionReceipt = completeExecutionReceipt(receipt, {
+    providerResourceId: event.id,
+    ...(event.htmlLink ? { providerResourceUrl: event.htmlLink } : {}),
+    safeMetadata: {
+      calendarId: event.calendarId ?? "primary",
+      summary: event.summary,
+      startIso: event.startIso,
+      endIso: event.endIso,
+    },
+  });
   session.state.lastCalendarOperation = {
     status: "verified",
     operation: "create",
@@ -3595,8 +3635,12 @@ function isCalendarApproval(message: string): boolean {
 }
 
 function isCalendarNotFoundFollowUp(message: string): boolean {
-  return /\b(no\s+(?:veo|aparece|me\s+aparece)|no\s+lo\s+veo|no\s+veo\s+el|no\s+me\s+sale|no\s+est[aá])\b/i.test(message) &&
-    /\b(evento|event|calendar|calendario)\b/i.test(message);
+  const cannotSeeIt = /\b(no\s+(?:lo\s+)?veo|no\s+(?:me\s+)?aparece|no\s+me\s+sale|no\s+est[aá])\b/i.test(message);
+  if (!cannotSeeIt) return false;
+  // This helper is only consulted while a Calendar operation is pending or
+  // after a verified Calendar operation exists, so short CEO continuations
+  // such as "sí pofa, no me aparece" safely keep that workflow.
+  return true;
 }
 
 async function runCalendarFollowUp(
@@ -3649,19 +3693,86 @@ async function runDriveTurn(
     : "Drive is not activated yet. You can give Drive access from Connections." };
   const query = extractDriveQuery(message);
   const adapter = new GoogleDriveAdapter({ organizationId: session.organizationId, userId: identity.userId });
+  const wantsOrganization = /\b(organiza|organizar|ordena|clasifica)\b/i.test(message) &&
+    /\b(pdf|drive|archivos?|documentos?)\b/i.test(message);
+  const wantsPdfInventory = /\bpdfs?\b/i.test(message) &&
+    /\b(dime|qu[eé]|cu[aá]les?|lista|listar|tengo|hay|muestra)\b/i.test(message);
+  if (wantsOrganization || wantsPdfInventory) {
+    const receipt = startExecutionReceipt({
+      operationId: connectorOperationId("drive_list"),
+      intent: wantsOrganization ? "drive.organize.inspect" : "drive.list",
+      capability: "drive.search",
+      provider: "google",
+      sideEffect: false,
+    });
+    session.state.lastExecutionReceipt = receipt;
+    const listed = await adapter.listFiles({
+      ...( /\bpdf\b/i.test(message) ? { mimeType: "application/pdf" } : {}),
+      pageSize: 100,
+    });
+    if (!listed.success) {
+      session.state.lastExecutionReceipt = failExecutionReceipt(receipt, listed.errorCode ?? "provider_error");
+      return { reply: driveFailure(listed.message, isEs) };
+    }
+    const files = listed.value ?? [];
+    session.state.lastExecutionReceipt = completeExecutionReceipt(receipt, {
+      safeMetadata: { resultCount: files.length, requestedType: /\bpdf\b/i.test(message) ? "pdf" : "all" },
+    });
+    if (!files.length) return { reply: isEs
+      ? `He consultado Drive y no he encontrado PDFs${wantsOrganization ? " para organizar" : ""}.`
+      : `I checked Drive and found no PDFs${wantsOrganization ? " to organize" : ""}.` };
+    if (!wantsOrganization) return { reply: formatDriveList(files, isEs) };
+    return { reply: isEs
+      ? `${formatDriveList(files, isEs)}\n\nHe inspeccionado ${files.length} PDF reales de Drive. Esta conexión solo tiene lectura: no he movido, renombrado ni creado archivos. Si quieres organizarlo, primero necesitaríamos una autorización de escritura y una aprobación explícita del plan.`
+      : `${formatDriveList(files, isEs)}\n\nI inspected ${files.length} real Drive PDFs. This connection is read-only: I did not move, rename, or create files. Organizing them requires write authorization and explicit approval of a plan.` };
+  }
+  const receipt = startExecutionReceipt({
+    operationId: connectorOperationId("drive_search"),
+    intent: "drive.search",
+    capability: "drive.search",
+    provider: "google",
+    sideEffect: false,
+  });
+  session.state.lastExecutionReceipt = receipt;
   const found = await adapter.searchFiles({ query, pageSize: 10 });
-  if (!found.success) return { reply: driveFailure(found.message, isEs) };
+  if (!found.success) {
+    session.state.lastExecutionReceipt = failExecutionReceipt(receipt, found.errorCode ?? "provider_error");
+    return { reply: driveFailure(found.message, isEs) };
+  }
   const files = found.value ?? [];
+  session.state.lastExecutionReceipt = completeExecutionReceipt(receipt, {
+    safeMetadata: { resultCount: files.length },
+  });
   if (!files.length) return { reply: isEs ? `No he encontrado documentos relacionados con «${query}».` : `I found no documents related to “${query}”.` };
   const first = files[0]!;
+  const readReceipt = startExecutionReceipt({
+    operationId: connectorOperationId("drive_read"),
+    intent: "drive.read",
+    capability: "drive.read",
+    provider: "google",
+    sideEffect: false,
+  });
+  session.state.lastExecutionReceipt = readReceipt;
   const read = await adapter.readFile({ fileId: first.id });
-  if (!read.success) return { reply: `${formatDriveList(files, isEs)}\n\n${driveFailure(read.message, isEs)}` };
+  if (!read.success) {
+    session.state.lastExecutionReceipt = failExecutionReceipt(readReceipt, read.errorCode ?? "provider_error");
+    return { reply: `${formatDriveList(files, isEs)}\n\n${driveFailure(read.message, isEs)}` };
+  }
+  session.state.lastExecutionReceipt = completeExecutionReceipt(readReceipt, {
+    providerResourceId: first.id,
+    ...(first.webViewLink ? { providerResourceUrl: first.webViewLink } : {}),
+    safeMetadata: { mimeType: first.mimeType, name: first.name },
+  });
   const preview = read.value?.preview;
   const content = preview ? preview.slice(0, 4000) : "";
   return {
     reply: `${formatDriveList(files, isEs)}\n\n${isEs ? `Esto es lo que he podido leer de «${first.name}»:\n\n${content || "El archivo está localizado, pero no contiene texto extraíble en este formato."}` : `Here is what I could read from “${first.name}”:\n\n${content || "The file is located, but this format has no extractable text."}`}`,
     ...(content ? { sourceText: content, title: first.name } : {}),
   };
+}
+
+function connectorOperationId(prefix: string): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 function calendarRange(message: string): { start: string; end: string; timezone: string } {
@@ -3951,9 +4062,18 @@ async function sendPendingEmail(
   // Set the state before the first awaited operation. A repeated approval
   // arriving concurrently therefore cannot start a second provider call.
   work.status = "sending";
+  const receipt = startExecutionReceipt({
+    operationId: work.id,
+    intent: "email.send",
+    capability: "email.send",
+    provider: "email",
+    sideEffect: true,
+  });
+  session.state.lastExecutionReceipt = receipt;
   const operational = await isEmailCapabilityOperational(organizationId);
   if (!operational) {
     work.status = "awaiting_approval";
+    session.state.lastExecutionReceipt = failExecutionReceipt(receipt, "authorization_required");
     return {
       reply: isEs
         ? "Tu correo todavía no está conectado, así que no puedo enviarlo. Conecta tu correo en Conexiones y volveré a intentarlo con el borrador que ya tengo."
@@ -3966,7 +4086,7 @@ async function sendPendingEmail(
     subject: work.draft.subject,
     bodyText: work.draft.body,
   });
-  if (outcome.ok) {
+  if (outcome.ok && outcome.providerMessageId) {
     work.status = "sent";
     work.provider = outcome.provider;
     work.sendResult = {
@@ -3976,6 +4096,14 @@ async function sendPendingEmail(
       providerMessageId: outcome.providerMessageId,
     };
     work.sendError = null;
+    session.state.lastExecutionReceipt = completeExecutionReceipt(receipt, {
+      provider: outcome.provider ?? "email",
+      providerResourceId: outcome.providerMessageId,
+      safeMetadata: {
+        recipient: work.draft.to,
+        sentAt: outcome.sentAt ?? new Date().toISOString(),
+      },
+    });
     delete session.state.pendingEmailWork;
     return {
       reply: isEs
@@ -3986,7 +4114,13 @@ async function sendPendingEmail(
   }
   // Failed send: keep the draft, surface an actionable recovery.
   work.status = "failed";
-  work.sendError = outcome.error ?? "send_failed";
+  work.sendError = outcome.error ?? (outcome.ok ? "provider_confirmation_missing" : "send_failed");
+  session.state.lastExecutionReceipt = failExecutionReceipt(
+    receipt,
+    work.sendError,
+    outcome.ok ? "ambiguous" : "failed",
+    outcome.provider ?? "email",
+  );
   const hint = isEs
     ? `No he podido enviar el correo. ${describeEmailSendFailure(work.sendError, true)} Puedes responder «sí» para reintentarlo; el borrador sigue preparado.`
     : `I couldn't send the email. ${describeEmailSendFailure(work.sendError, false)} You can reply "yes" to retry; the draft is still ready.`;

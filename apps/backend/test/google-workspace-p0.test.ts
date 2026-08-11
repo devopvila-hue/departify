@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createInMemoryGoogleTokenStore,
+  hasGrantedScope,
   hasOperationalGoogleCapability,
   mergeTokenExchange,
   type GoogleTokenRecord,
@@ -9,6 +10,10 @@ import { GoogleCalendarAdapter } from "../src/customer-zero/google-calendar-adap
 import { GoogleDriveAdapter } from "../src/customer-zero/google-drive-adapter.js";
 import { routeCommandCenter } from "../src/customer-zero/command-center.js";
 import { gmailTokenStore } from "../src/customer-zero/gmail-adapter.js";
+import {
+  completeExecutionReceipt,
+  startExecutionReceipt,
+} from "../src/customer-zero/execution-receipt.js";
 
 const GMAIL = "https://www.googleapis.com/auth/gmail.readonly";
 const CALENDAR = "https://www.googleapis.com/auth/calendar.readonly";
@@ -90,6 +95,34 @@ describe("Google Workspace P0 — one identity and truthful capabilities", () =>
     expect(hasOperationalGoogleCapability(summary, "email.read")).toBe(true);
     expect(hasOperationalGoogleCapability(summary, "calendar.read")).toBe(false);
     expect(hasOperationalGoogleCapability(summary, "drive.read")).toBe(false);
+    expect(hasOperationalGoogleCapability(summary, "drive.create")).toBe(false);
+  });
+
+  it("records provider-backed evidence without connector credentials", () => {
+    const started = startExecutionReceipt({
+      operationId: "calendar-op-1",
+      intent: "calendar.create",
+      capability: "calendar.create",
+      provider: "google",
+      sideEffect: true,
+      startedAt: "2026-08-11T10:00:00.000Z",
+    });
+    const receipt = completeExecutionReceipt(started, {
+      providerResourceId: "event-real-1",
+      providerResourceUrl: "https://calendar.google.com/calendar/event?eid=event-real-1",
+      safeMetadata: { calendarId: "primary" },
+      completedAt: "2026-08-11T10:00:01.000Z",
+    });
+    expect(receipt.status).toBe("succeeded");
+    expect(receipt.providerResourceId).toBe("event-real-1");
+    expect(JSON.stringify(receipt)).not.toMatch(/access[_-]?token|refresh[_-]?token|Bearer/i);
+  });
+
+  it("treats explicit full Drive consent as a superset of Drive read", () => {
+    expect(hasGrantedScope(
+      ["https://www.googleapis.com/auth/drive"],
+      "https://www.googleapis.com/auth/drive.readonly",
+    )).toBe(true);
   });
 
   it("uses the durable personal Google identity for Calendar and gates writes by scope", async () => {
@@ -182,6 +215,8 @@ describe("Google Workspace P0 — one identity and truthful capabilities", () =>
     expect(routeCommandCenter({ ...base, message: "¿Qué tengo mañana?" }).decision.intent).toBe("calendar_read");
     expect(routeCommandCenter({ ...base, message: "Agenda una reunión mañana a las 16:00" }).decision.intent).toBe("calendar_create");
     expect(routeCommandCenter({ ...base, message: "Busca en Drive el plan de marketing" }).decision.intent).toBe("drive_query");
+    expect(routeCommandCenter({ ...base, message: "organiza todos los pdf del drive" }).decision.intent).toBe("drive_query");
+    expect(routeCommandCenter({ ...base, message: "dime qué PDFs tengo en Drive" }).decision.intent).toBe("drive_query");
     expect(routeCommandCenter({ ...base, message: "Busca el último correo de Pedro y dime si tenemos alguna reunión con él" }).decision.intent).toBe("multi_capability");
   });
 

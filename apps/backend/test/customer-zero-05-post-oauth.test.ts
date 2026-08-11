@@ -84,12 +84,14 @@ function seedOperationalToken(org: string, userId = "user-a"): void {
 /** Mock Google HTTP endpoints: token, userinfo, probe, search, message. */
 let originalFetch: typeof fetch | null = null;
 let searchMaxResults: number[] = [];
+let driveMutationCalls = 0;
 function mockGoogleFetch(options?: {
   probeStatus?: number;
   searchStatus?: number;
   emptyInbox?: boolean;
   tokenScope?: string;
   withRefreshToken?: boolean;
+  driveFiles?: readonly Record<string, unknown>[];
 }): void {
   originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
@@ -167,6 +169,16 @@ function mockGoogleFetch(options?: {
         }),
         { status: options?.probeStatus ?? 200, headers: { "content-type": "application/json" } },
       );
+    }
+    if (url.includes("www.googleapis.com/drive/v3/files")) {
+      if (["POST", "PATCH", "DELETE"].includes(init?.method ?? "GET")) {
+        driveMutationCalls += 1;
+        return new Response(JSON.stringify({ error: "unexpected mutation" }), { status: 500 });
+      }
+      return new Response(JSON.stringify({ files: options?.driveFiles ?? [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
     }
     if (url.includes("gmail.googleapis.com/gmail/v1/users/me/messages")) {
       // Message detail fetch (contains ?format=metadata).
@@ -489,6 +501,7 @@ describe("P0 — post-OAuth HTTP: connect → callback → /conexiones", () => {
     delete process.env.PUBLIC_BASE_URL;
     restoreFetch();
     searchMaxResults = [];
+    driveMutationCalls = 0;
   });
 
   function authedInject(options: InjectOptions) {
@@ -716,6 +729,24 @@ describe("P0 — post-OAuth HTTP: connect → callback → /conexiones", () => {
       payload: { message: "no veo el eventa el calendario" },
     });
     expect(notVisible.json().reply).toContain("event-created-1");
+    const stillMissing = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "si pofa no me aparece" },
+    });
+    expect(stillMissing.json().reply).toContain("event-created-1");
+    const calendarAndLink = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "nme puedes dar el encale en que calendario las pones" },
+    });
+    expect(calendarAndLink.json().reply).toContain("https://calendar.google.com/calendar/event?eid=event-created-1");
+    const typoLink = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "dane el link del evento , no lo veo en calendario" },
+    });
+    expect(typoLink.json().reply).toContain("event-created-1");
   });
 
   it("Calendar read without its granted capability offers authorization instead of delegating", async () => {
@@ -728,6 +759,53 @@ describe("P0 — post-OAuth HTTP: connect → callback → /conexiones", () => {
     expect(chat.statusCode).toBe(200);
     expect(chat.json().reply).toMatch(/Calendar todavía no está activado/i);
     expect(chat.json().reply).not.toMatch(/Lo paso a Elvira|Marketing/i);
+  });
+
+  it("routes a Drive PDF organization request to real read-only inspection, never Marketing or a mutation", async () => {
+    const org = await startOrg();
+    await getGoogleTokenStore().put({
+      organizationId: org,
+      userId: "user-a",
+      provider: "gmail",
+      accessToken: "access-drive",
+      refreshToken: "refresh-drive",
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+      email: "ceo@departify.app",
+      displayName: "CEO",
+      operationalVerifiedAt: new Date().toISOString(),
+      operationalProbeError: null,
+      operationalCapabilities: ["drive.search", "drive.read"],
+    });
+    mockGoogleFetch({
+      driveFiles: [{
+        id: "pdf-real-1",
+        name: "Presupuesto real.pdf",
+        mimeType: "application/pdf",
+        modifiedTime: "2026-08-11T12:00:00Z",
+        webViewLink: "https://drive.google.com/file/d/pdf-real-1",
+      }],
+    });
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "organiza todos los pdf del drive" },
+    });
+    expect(response.statusCode).toBe(200);
+    const reply = response.json().reply as string;
+    expect(reply).toContain("Presupuesto real.pdf");
+    expect(reply).toMatch(/solo tiene lectura/i);
+    expect(reply).toMatch(/no he movido, renombrado ni creado/i);
+    expect(reply).not.toMatch(/Elvira|Marketing|Mautic/i);
+    expect(driveMutationCalls).toBe(0);
+    const inventory = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "dime qué PDFs tengo en Drive" },
+    });
+    expect(inventory.json().reply).toContain("Presupuesto real.pdf");
+    expect(inventory.json().reply).not.toMatch(/Elvira|Marketing|Mautic/i);
+    expect(driveMutationCalls).toBe(0);
   });
 
   it("O: failed probe → NOT falsely connected; blocked with recovery reason", async () => {

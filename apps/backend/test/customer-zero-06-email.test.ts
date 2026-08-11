@@ -77,7 +77,7 @@ function seedReadOnlyGmail(org: string, userId = "user-a"): void {
 }
 
 let originalFetch: typeof fetch | null = null;
-function mockGoogleFetch(options?: { sendStatus?: number }): void {
+function mockGoogleFetch(options?: { sendStatus?: number; missingProviderId?: boolean }): void {
   originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -89,7 +89,7 @@ function mockGoogleFetch(options?: { sendStatus?: number }): void {
         });
       }
       return new Response(
-        JSON.stringify({ id: "gmail-msg-123", threadId: "thread-123" }),
+        JSON.stringify(options?.missingProviderId ? { threadId: "thread-123" } : { id: "gmail-msg-123", threadId: "thread-123" }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
     }
@@ -204,6 +204,16 @@ describe("CZ06 — Email capability P0 (multi-turn send)", () => {
     expect(second.reply).toContain("Enviado a cliente@acme.com");
     expect(second.reply).not.toContain("no ha podido responderte");
     expect(second.connectionSuggestion).toBeNull();
+  });
+
+  it("does not claim send success when Gmail omits provider confirmation", async () => {
+    const org = await startOrg();
+    seedOperationalGmail(org);
+    mockGoogleFetch({ missingProviderId: true });
+    await message(org, "Envía un correo a cliente@acme.com diciendo hola");
+    const approval = await message(org, "sí");
+    expect(approval.reply).toContain("No he podido enviar");
+    expect(approval.reply).not.toContain("Enviado a");
   });
 
   it("P0: standalone approval 'si' approves the existing draft, never replaces its body", async () => {

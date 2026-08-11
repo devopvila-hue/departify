@@ -135,6 +135,8 @@ export interface CustomerZeroSessionState {
     verifiedAt?: string;
     error?: string;
   };
+  /** Latest normalized connector receipt. Contains safe provider evidence only. */
+  lastExecutionReceipt?: import("./execution-receipt.js").ExecutionReceipt;
   /** UI/session locale — every generated visible text respects it. */
   locale: SupportedLocale;
   /** Onboarding intake (Fase 2). */

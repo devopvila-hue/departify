@@ -24,6 +24,7 @@ import {
   startGmailOAuth,
   completeGmailOAuth,
   GMAIL_SCOPES,
+  GOOGLE_DRIVE_SCOPES,
 } from "../src/customer-zero/gmail-adapter.js";
 import { resolveCredentials } from "../src/customer-zero/credential-resolver.js";
 
@@ -481,7 +482,7 @@ describe("GoogleDriveAdapter", () => {
       accessToken: "tok",
       refreshToken: "ref",
       expiresAt: new Date(Date.now() + 3600_000).toISOString(),
-      scopes: GMAIL_SCOPES,
+      scopes: [...GMAIL_SCOPES, ...GOOGLE_DRIVE_SCOPES],
       email: "ceo_a@example.com",
       displayName: "CEO A",
     });
@@ -520,6 +521,45 @@ describe("GoogleDriveAdapter", () => {
     const out = await adapter.searchFiles({ query: "   " });
     expect(out.success).toBe(false);
     expect(out.errorCode).toBe("invalid_response");
+  });
+
+  it("lists real PDFs by MIME type without making a write request", async () => {
+    seedTokens();
+    let requestedUrl = "";
+    let requestedMethod = "GET";
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      requestedUrl = String(input);
+      requestedMethod = init?.method ?? "GET";
+      return jsonResponse(200, {
+        files: [{
+          id: "pdf_1",
+          name: "Presupuesto.pdf",
+          mimeType: "application/pdf",
+          modifiedTime: "2026-08-10T10:00:00Z",
+          webViewLink: "https://drive.google.com/file/d/pdf_1",
+        }],
+      });
+    }) as typeof fetch;
+    const out = await new GoogleDriveAdapter({ organizationId: "org_a", userId: "ceo_a" })
+      .listFiles({ mimeType: "application/pdf" });
+    expect(out.success).toBe(true);
+    expect(out.value?.[0]?.id).toBe("pdf_1");
+    expect(new URL(requestedUrl).searchParams.get("q")).toContain("mimeType = 'application/pdf'");
+    expect(requestedMethod).toBe("GET");
+  });
+
+  it("does not reuse Drive read authorization for a write", async () => {
+    seedTokens();
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return jsonResponse(200, { id: "must-not-be-created" });
+    }) as typeof fetch;
+    const out = await new GoogleDriveAdapter({ organizationId: "org_a", userId: "ceo_a" })
+      .createFile({ name: "No crear.txt", content: "test" });
+    expect(out.success).toBe(false);
+    expect(out.errorCode).toBe("auth");
+    expect(calls).toBe(0);
   });
 });
 

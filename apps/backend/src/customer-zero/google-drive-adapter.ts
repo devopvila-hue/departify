@@ -39,6 +39,11 @@ export interface DriveSearchInput {
   readonly pageSize?: number;
 }
 
+export interface DriveListInput {
+  readonly mimeType?: string;
+  readonly pageSize?: number;
+}
+
 export interface DriveReadInput {
   readonly fileId: string;
 }
@@ -78,13 +83,13 @@ function fail<T>(
 export class GoogleDriveAdapter {
   constructor(private readonly input: DriveAdapterInput) {}
 
-  private async getAccessToken(): Promise<string | null> {
+  private async getAccessToken(requiredScope = "https://www.googleapis.com/auth/drive.readonly"): Promise<string | null> {
     const durable = await getGoogleTokenStore().get(
       this.input.organizationId,
       this.input.userId,
     );
     if (durable) {
-      if (!hasGrantedScope(durable.scopes, "https://www.googleapis.com/auth/drive.readonly")) {
+      if (!hasGrantedScope(durable.scopes, requiredScope)) {
         return null;
       }
       if (new Date(durable.expiresAt).getTime() - 60_000 > Date.now()) {
@@ -112,6 +117,7 @@ export class GoogleDriveAdapter {
     // local development. Production always uses the durable row above.
     const tokens = gmailTokenStore.get(this.input.organizationId, this.input.userId);
     if (!tokens) return null;
+    if (!hasGrantedScope(tokens.scopes, requiredScope)) return null;
     if (new Date(tokens.expiresAt).getTime() - 60_000 > Date.now()) {
       return tokens.accessToken;
     }
@@ -195,6 +201,31 @@ export class GoogleDriveAdapter {
     return ok(files);
   }
 
+  async listFiles(input: DriveListInput = {}): Promise<DriveAdapterResult<readonly DriveFile[]>> {
+    const accessToken = await this.getAccessToken();
+    if (!accessToken) return fail("Google no está conectado.", "auth");
+    const clauses = ["trashed = false"];
+    if (input.mimeType) clauses.push(`mimeType = '${input.mimeType.replace(/'/g, "\\'")}'`);
+    const params = new URLSearchParams({
+      q: clauses.join(" and "),
+      pageSize: String(input.pageSize ?? 100),
+      orderBy: "modifiedTime desc",
+      fields: "files(id,name,mimeType,size,modifiedTime,webViewLink,owners(emailAddress))",
+    });
+    const response = await googleApiFetch(
+      `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!response.ok) {
+      if (response.status === 401) return fail("Google rechazó la autorización.", "auth");
+      if (response.status === 429) return fail("Google aplicó rate limit.", "rate_limit");
+      if (response.status >= 500) return fail("Google no responde.", "unavailable");
+      return fail(`Google devolvió ${response.status}.`, "invalid_response");
+    }
+    const data = (await response.json()) as { files?: DriveRawFile[] };
+    return ok(normalizeDriveFiles(data.files ?? []));
+  }
+
   async readFile(input: DriveReadInput): Promise<DriveAdapterResult<DriveFile>> {
     const accessToken = await this.getAccessToken();
     if (!accessToken) return fail("Google no está conectado.", "auth");
@@ -257,8 +288,8 @@ export class GoogleDriveAdapter {
   }
 
   async createFile(input: DriveCreateInput): Promise<DriveAdapterResult<DriveFile>> {
-    const accessToken = await this.getAccessToken();
-    if (!accessToken) return fail("Google no está conectado.", "auth");
+    const accessToken = await this.getAccessToken("https://www.googleapis.com/auth/drive");
+    if (!accessToken) return fail("Drive no tiene autorización de escritura.", "auth");
     const name = input.name.trim();
     if (!name) return fail("Nombre de archivo vacío.", "invalid_response");
     const mimeType = input.mimeType ?? "text/plain";
@@ -291,7 +322,7 @@ export class GoogleDriveAdapter {
       webViewLink?: string;
       owners?: Array<{ emailAddress?: string }>;
     };
-    return ok({
+    const result = {
       id: data.id ?? "",
       name: data.name ?? name,
       mimeType: data.mimeType ?? mimeType,
@@ -299,6 +330,32 @@ export class GoogleDriveAdapter {
       modifiedTime: data.modifiedTime ?? new Date().toISOString(),
       ...(data.webViewLink ? { webViewLink: data.webViewLink } : {}),
       ...(data.owners?.[0]?.emailAddress ? { ownerEmail: data.owners[0].emailAddress } : {}),
-    });
+    } satisfies DriveFile;
+    if (!result.id) return fail("Google no ha confirmado el archivo.", "invalid_response");
+    return ok(result);
   }
+}
+
+interface DriveRawFile {
+  id?: string;
+  name?: string;
+  mimeType?: string;
+  size?: string;
+  modifiedTime?: string;
+  webViewLink?: string;
+  owners?: Array<{ emailAddress?: string }>;
+}
+
+function normalizeDriveFiles(files: readonly DriveRawFile[]): readonly DriveFile[] {
+  return files
+    .filter((file): file is DriveRawFile & { id: string; name: string } => Boolean(file.id) && Boolean(file.name))
+    .map((file) => ({
+      id: file.id,
+      name: file.name,
+      mimeType: file.mimeType ?? "application/octet-stream",
+      ...(file.size ? { size: Number(file.size) } : {}),
+      modifiedTime: file.modifiedTime ?? "",
+      ...(file.webViewLink ? { webViewLink: file.webViewLink } : {}),
+      ...(file.owners?.[0]?.emailAddress ? { ownerEmail: file.owners[0].emailAddress } : {}),
+    }));
 }

@@ -1125,8 +1125,8 @@ export function isCalendarCreateRequest(message: string): boolean {
 }
 
 export function isDriveRequest(message: string): boolean {
-  const hasSource = /\b(drive|documento|documentos|archivo|archivos|plan\s+de\s+marketing|google\s+docs?)\b/i.test(message);
-  const hasAction = /\b(busca|buscar|encuentra|encontrar|lee|leer|dice|informaci[oó]n|reciente?s?|recent|search|find|read|what does)\b/i.test(message);
+  const hasSource = /\b(drive|documento|documentos|archivo|archivos|pdf|plan\s+de\s+marketing|google\s+docs?)\b/i.test(message);
+  const hasAction = /\b(busca|buscar|encuentra|encontrar|lee|leer|dice|dime|tengo|informaci[oó]n|reciente?s?|organiza|organizar|ordena|clasifica|recent|search|find|read|what does)\b/i.test(message);
   return hasSource && hasAction;
 }
 

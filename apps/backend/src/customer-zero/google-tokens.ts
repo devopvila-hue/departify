@@ -53,6 +53,10 @@ export const GOOGLE_CAPABILITY_SCOPES = {
   "calendar.create": ["https://www.googleapis.com/auth/calendar.events"],
   "drive.search": ["https://www.googleapis.com/auth/drive.readonly"],
   "drive.read": ["https://www.googleapis.com/auth/drive.readonly"],
+  // Full Drive access is deliberately not requested by the current Drive
+  // connection. It is listed so write capability resolution cannot silently
+  // reuse drive.readonly when a future, explicitly-consented flow is added.
+  "drive.create": ["https://www.googleapis.com/auth/drive"],
 } as const;
 
 export type GoogleCapability = keyof typeof GOOGLE_CAPABILITY_SCOPES;
@@ -1029,7 +1033,12 @@ export function hasGrantedScope(
   granted: readonly string[],
   scope: string,
 ): boolean {
-  return granted.includes(scope);
+  if (granted.includes(scope)) return true;
+  // Google's full Drive scope is a strict superset of drive.readonly. This
+  // keeps read/search truthful if a future explicit write consent replaces
+  // the narrower scope in Google's token response.
+  return scope === "https://www.googleapis.com/auth/drive.readonly" &&
+    granted.includes("https://www.googleapis.com/auth/drive");
 }
 
 /** Map the canonical Gmail capability → required OAuth scope URL. */
