@@ -279,6 +279,8 @@ export interface CompanyStatus {
   /** Customer Zero readiness — backend gate result. */
   contextReady?: boolean;
   contextMissing?: readonly string[];
+  /** Canonical durable onboarding stage: intake|research|discovery|understanding|ready */
+  stage?: "intake" | "research" | "discovery" | "understanding" | "ready";
 }
 
 /**
@@ -701,6 +703,12 @@ export const api = {
   /** What Departify understood about the company (CEO review screen). */
   understanding: (org: string) =>
     getJson<UnderstandingView>(`/api/customer-zero/${org}/understanding`),
+  /** Resume/retry research for an existing org (never a replacement org). */
+  research: (org: string) =>
+    postJson<{ organizationId: string; status: string }>(
+      `/api/customer-zero/${org}/research`,
+      {},
+    ),
   /** The CEO corrects and confirms the understanding. */
   confirmCompany: (org: string, corrections: CompanyCorrections) =>
     postJson<{

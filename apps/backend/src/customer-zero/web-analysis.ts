@@ -48,24 +48,36 @@ const MAX_BYTES = 512_000;
 export async function fetchAndExtractWebsite(
   url: string,
 ): Promise<ExtractedWebsite> {
-  const response = await fetch(url, {
-    headers: {
-      "user-agent":
-        "Mozilla/5.0 (compatible; DepartifyCustomerZero/1.0; +https://departify.example)",
-      accept: "text/html,application/xhtml+xml",
-    },
-    redirect: "follow",
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        "user-agent":
+          "Mozilla/5.0 (compatible; DepartifyCustomerZero/1.0; +https://departify.example)",
+        accept: "text/html,application/xhtml+xml",
+      },
+      redirect: "follow",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+  } catch {
+    // NEVER surface the raw Node fetch error ("fetch failed") to the CEO.
+    // The URL may be wrong, down, or slow — the company and the intake
+    // survive and the CEO gets a business-readable recovery path.
+    throw new Error(
+      "No hemos podido acceder a la web de tu empresa. Comprueba la dirección o elige «no tengo web».",
+    );
+  }
 
   if (!response.ok) {
-    throw new Error(`Web fetch failed with HTTP ${response.status}.`);
+    throw new Error(
+      `No hemos podido leer la web de tu empresa (respuesta ${response.status}).`,
+    );
   }
 
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("text/html")) {
     throw new Error(
-      `The URL does not return HTML (${contentType.split(";")[0] ?? "unknown"}).`,
+      "La dirección no devuelve una página web. Comprueba la URL o elige «no tengo web».",
     );
   }
 

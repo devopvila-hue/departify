@@ -425,6 +425,48 @@ export async function registerCustomerZeroV2Routes(
     },
   );
 
+  // Customer Zero P0 — resume/retry the REAL research for an EXISTING
+  // organization. A research failure or a backend restart must never
+  // strand the company: this endpoint restarts research on the SAME
+  // organization (never a replacement org) and is idempotent while a
+  // run is already in flight.
+  server.post(
+    "/api/customer-zero/:organizationId/research",
+    {
+      schema: {
+        tags: ["customer-zero"],
+        summary: "Resume/retry company research for an existing organization",
+        params: {
+          type: "object",
+          required: ["organizationId"],
+          properties: { organizationId: { type: "string" } },
+        },
+        response: {
+          200: { type: "object", additionalProperties: true },
+          404: { type: "object", properties: { error: { type: "string" } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId } = request.params as { organizationId: string };
+      const session = await requireSession(organizationId, deps);
+      const progress = session.state.progress;
+      if (progress && progress.status === "running") {
+        return reply.code(200).send({ organizationId, status: "running" });
+      }
+      if (!session.state.onboarding) {
+        return reply.code(404).send({ error: "No hay empresa que investigar." });
+      }
+      const dnaStore = resolveCompanyDnaStore(deps);
+      const locale = session.state.locale;
+      checkpoint("research_started", organizationId);
+      void runResearch(session, locale, dnaStore).catch(() => {
+        /* runResearch records the failure on progress itself */
+      });
+      return reply.code(200).send({ organizationId, status: "running" });
+    },
+  );
+
   server.get(
     "/api/customer-zero/:organizationId/progress",
     {
@@ -2961,7 +3003,10 @@ function buildConversationPayload(session: CustomerZeroSession) {
     connections: [...session.state.connections.values()],
     transcript: session.state.discoveryTranscript,
     intro: buildDiscoveryIntro(session),
-    ...(question === null ? { handoff: buildHandoffMessage(session) } : {}),
+    // Customer Zero P0 — the legacy `handoff` terminal is GONE. When no
+    // question remains the next product stage is the understanding /
+    // confirmation review, driven by the canonical readiness stage — never
+    // a "Ya tengo suficiente / Vamos a trabajar" dead end.
   };
 }
 

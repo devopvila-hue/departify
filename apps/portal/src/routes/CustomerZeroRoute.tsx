@@ -62,11 +62,26 @@ export function CustomerZeroRoute() {
   const [step, setStep] = useState<Step>({ name: "intake" });
   const [error, setError] = useState<string | null>(null);
   const [conversation, setConversation] = useState<ConversationResponse | null>(null);
-  const [handoff, setHandoff] = useState<string>("");
   const [entering, setEntering] = useState(false);
   const [understanding, setUnderstanding] = useState<UnderstandingView | null>(
     null,
   );
+
+  /**
+   * Customer Zero P0 — the CEO reviews what we understood BEFORE we
+   * start working. Declared before the resume effect because the effect
+   * routes by the canonical stage and may jump straight to confirmation.
+   */
+  const openConfirmation = useCallback(async (org: string) => {
+    setError(null);
+    const body = await api.understanding(org);
+    if (!body) {
+      setError("No hemos podido preparar el resumen de tu empresa.");
+      return;
+    }
+    setUnderstanding(body);
+    setStep({ name: "confirmation", org });
+  }, []);
 
   // Resume after a reload: DNA, objetivo, respuestas, herramientas y Marketing.
   useEffect(() => {
@@ -106,43 +121,75 @@ export function CustomerZeroRoute() {
         setError("No hemos podido conectar con Departify. Inténtalo de nuevo.");
         return;
       }
-      // Customer Zero P0 — READINESS decides, not the presence of a
-      // department row.
+      // Customer Zero P0 — the CANONICAL onboarding stage decides, not
+      // the presence of a department row and not the legacy conversation
+      // handoff. The backend derives the stage from DURABLE Company DNA,
+      // so a reload/restart always resumes at the correct stage.
       //
-      // This used to read `status.department`, which meant a company that
-      // had merely been provisioned was walked into the operational chat
-      // even though Departify had never completed its research, never
-      // persisted a complete Company DNA and never asked the CEO to
-      // confirm anything. `contextReady` is the backend's durable verdict
-      // on whether we actually understand this company.
+      //   intake         → the intake form (no durable company yet)
+      //   research       → the live research screen (resume/retry)
+      //   discovery      → the progressive questions
+      //   understanding  → the CEO review + confirmation
+      //   ready          → chat
       if (status.contextReady) {
         setOrganizationId(status.organizationId);
         navigate("/chat", { replace: true });
         return;
       }
-      // Not ready: resume onboarding at the correct incomplete stage.
-      // When the understanding exists but has not been confirmed, the
-      // CEO resumes at confirmation rather than being asked questions
-      // again.
-      const missing = status.contextMissing ?? [];
-      if (missing.length === 1 && missing[0] === "confirmation") {
-        const understanding = await api.understanding(parsed.organizationId);
-        if (understanding && !cancelled) {
-          setUnderstanding(understanding);
-          setStep({ name: "confirmation", org: parsed.organizationId });
+      const stage = status.stage ?? deriveStageFromMissing(status.contextMissing ?? []);
+      switch (stage) {
+        case "research":
+          setStep({ name: "researching", org: parsed.organizationId });
+          return;
+        case "understanding":
+        case "confirmation": {
+          const understanding = await api.understanding(parsed.organizationId);
+          if (understanding && !cancelled) {
+            setUnderstanding(understanding);
+            setStep({ name: "confirmation", org: parsed.organizationId });
+            return;
+          }
+          // Understanding endpoint failed: land on research retry rather
+          // than a dead end — the intake + research are the truthful
+          // resumable states.
+          setStep({ name: "intake" });
           return;
         }
+        case "discovery":
+        case "conversation": {
+          const conversation = await api.nextQuestion(parsed.organizationId);
+          if (conversation && !cancelled) {
+            setConversation(conversation);
+            // No question left → the next stage is the understanding
+            // review, never the legacy "Ya tengo suficiente" terminal.
+            if (conversation.question === null) {
+              await openConfirmation(parsed.organizationId);
+              return;
+            }
+            setStep({ name: "conversation", org: parsed.organizationId });
+            return;
+          }
+          break;
+        }
+        case "intake":
+        default:
+          setStep({ name: "intake" });
+          return;
       }
-      const conversation = await api.nextQuestion(parsed.organizationId);
-      if (conversation && !cancelled) {
-        setConversation(conversation);
-        setStep({ name: "conversation", org: parsed.organizationId });
-      }
+      setStep({ name: "intake" });
     })();
     return () => {
       cancelled = true;
     };
-  }, [navigate, setOrganizationId]);
+  }, [navigate, setOrganizationId, openConfirmation]);
+
+  /** Backwards-compatible fallback when the backend has no `stage` yet. */
+  function deriveStageFromMissing(missing: readonly string[]): string {
+    if (missing.length === 1 && missing[0] === "confirmation") {
+      return "understanding";
+    }
+    return "discovery";
+  }
 
   function persistSession(organizationId: string) {
     try {
@@ -159,24 +206,8 @@ export function CustomerZeroRoute() {
     const body = await api.nextQuestion(org);
     if (!body) return;
     setConversation(body);
-    if (body.handoff) setHandoff(body.handoff);
-    setStep({ name: "conversation", org });
-  }, []);
 
-  /**
-   * Customer Zero P0 — the CEO reviews what we understood BEFORE we
-   * start working. This step did not exist: the CEO went straight from
-   * the last question into the operational chat.
-   */
-  const openConfirmation = useCallback(async (org: string) => {
-    setError(null);
-    const body = await api.understanding(org);
-    if (!body) {
-      setError("No hemos podido preparar el resumen de tu empresa.");
-      return;
-    }
-    setUnderstanding(body);
-    setStep({ name: "confirmation", org });
+    setStep({ name: "conversation", org });
   }, []);
 
   /**
@@ -237,7 +268,7 @@ export function CustomerZeroRoute() {
         return;
       }
       setConversation(body);
-      if (body.handoff) setHandoff(body.handoff);
+  
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -340,8 +371,15 @@ export function CustomerZeroRoute() {
             org={step.org}
             onDone={() => loadConversation(step.org)}
             onFail={(message) => {
+              // Customer Zero P0 — a research failure NEVER resets the
+              // intake. The company (and its organization id) survive; the
+              // CEO sees the business-readable reason and can retry.
               setError(message);
-              setStep({ name: "intake" });
+              setStep({ name: "researching", org: step.org });
+            }}
+            onRetry={() => {
+              setError(null);
+              setStep({ name: "researching", org: step.org });
             }}
           />
         )}
@@ -349,7 +387,6 @@ export function CustomerZeroRoute() {
         {step.name === "conversation" && conversation && (
           <ConversationStep
             conversation={conversation}
-            handoff={handoff}
             onAnswer={(questionId, answers) =>
               answerQuestion(step.org, questionId, answers)
             }
@@ -649,9 +686,31 @@ function ResearchStep(props: {
   org: string;
   onDone: () => void;
   onFail: (message: string) => void;
+  onRetry: () => void;
 }) {
   const [progress, setProgress] = useState<ProgressResponse | null>(null);
+  const [failed, setFailed] = useState(false);
   const done = useRef(false);
+  const [runKey, setRunKey] = useState(0);
+
+  // Resume/restart research on mount AND on retry: after a backend
+  // restart or a research failure the org still exists — the run is
+  // (re)started on the SAME organization, never a replacement.
+  useEffect(() => {
+    let cancelled = false;
+    done.current = false;
+    setFailed(false);
+    setProgress(null);
+    void (async () => {
+      await api.research(props.org);
+      if (cancelled) return;
+      const body = await api.progress(props.org);
+      if (!cancelled && body) setProgress(body);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [props.org, runKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -666,6 +725,7 @@ function ResearchStep(props: {
         }
         if (body.status === "failed" && !done.current) {
           done.current = true;
+          setFailed(true);
           props.onFail(body.error ?? "No hemos podido analizar tu negocio.");
         }
       } catch {
@@ -683,7 +743,7 @@ function ResearchStep(props: {
   return (
     <div className="customer-zero__state" role="status" aria-live="polite">
       <p>Departify está trabajando en tu negocio.</p>
-      {estimate !== null && (
+      {estimate !== null && !failed && (
         <p className="customer-zero__state-hint">
           Normalmente tarda menos de {Math.max(1, Math.round(estimate / 1000))}{" "}
           segundos.
@@ -707,6 +767,18 @@ function ResearchStep(props: {
           </li>
         ))}
       </ul>
+      {failed && (
+        <button
+          type="button"
+          className="customer-zero__submit"
+          onClick={() => {
+            setRunKey((k) => k + 1);
+            props.onRetry();
+          }}
+        >
+          Reintentar
+        </button>
+      )}
     </div>
   );
 }
@@ -714,7 +786,6 @@ function ResearchStep(props: {
 /** Fases 5-9 — one question at a time, with connection cards in the chat. */
 function ConversationStep(props: {
   conversation: ConversationResponse;
-  handoff: string;
   entering?: boolean;
   onAnswer: (questionId: string, answers: string[]) => void;
   onConnect: (toolId: string) => void;
@@ -877,10 +948,14 @@ function ConversationStep(props: {
           )}
         </div>
       ) : (
+        // Customer Zero P0 — no more legacy "Ya tengo suficiente" dead
+        // end. When the questions are done the CEO reviews what
+        // Departify understood and confirms before anything starts.
         <div className="customer-zero__review">
-          <h2>Ya tengo suficiente</h2>
+          <h2>Ya conocemos tu empresa</h2>
           <p className="customer-zero__muted">
-            {props.handoff || conversation.handoff}
+            Hemos terminado las preguntas. Revisa ahora lo que hemos
+            entendido de tu empresa antes de ponernos a trabajar.
           </p>
           <button
             type="button"
@@ -888,7 +963,7 @@ function ConversationStep(props: {
             disabled={props.entering ?? false}
             onClick={props.onStartMarketing}
           >
-            {props.entering ? "Entrando…" : "Vamos a trabajar"}
+            {props.entering ? "Preparando…" : "Revisar lo que hemos entendido"}
           </button>
         </div>
       )}

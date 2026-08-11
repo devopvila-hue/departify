@@ -54,6 +54,39 @@ export interface DurableReadiness extends ReadinessReport {
   readonly facts: ReadinessFacts;
 }
 
+/**
+ * The CANONICAL onboarding stage, derived from DURABLE evidence alone.
+ *
+ * This is the single product path:
+ *
+ *   intake         → no durable company record yet (or no intake facts)
+ *   research       → intake durable, research not completed
+ *   discovery      → research completed, blocking discovery not done
+ *   understanding  → discovery done, CEO confirmation not (current)
+ *   ready          → CEO confirmation current → chat
+ *
+ * The portal routes by this stage; the legacy conversation→handoff
+ * terminal is no longer a product state. Existing organizations resume
+ * at the earliest truthful incomplete stage.
+ */
+export type OnboardingStage =
+  | "intake"
+  | "research"
+  | "discovery"
+  | "understanding"
+  | "ready";
+
+export function durableOnboardingStage(
+  record: CompanyDnaRecord | null,
+  facts: ReadinessFacts,
+): OnboardingStage {
+  if (!record || !facts.hasIntake) return "intake";
+  if (!facts.hasCompanyDna) return "research";
+  if (!facts.blockingDiscoveryComplete) return "discovery";
+  if (!facts.ceoConfirmed) return "understanding";
+  return "ready";
+}
+
 function hasText(value: string | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }

@@ -214,7 +214,7 @@ describe("CustomerZeroRoute — UX v2", () => {
     ).toBeInTheDocument();
   });
 
-  it("closes discovery with continuity, never with 'Discovery completed'", async () => {
+  it("closes discovery with continuity: question null → the understanding review, never a legacy terminal", async () => {
     window.localStorage.setItem(
       "departify_customer_zero",
       JSON.stringify({ organizationId: "org_moon" }),
@@ -225,19 +225,32 @@ describe("CustomerZeroRoute — UX v2", () => {
           ...conversation,
           question: null,
           ready: true,
-          handoff:
-            "Ya tengo suficiente para empezar. Me has dicho que quieres conseguir " +
-            "los primeros 20 clientes en España.",
+        });
+      if (url.endsWith("/understanding"))
+        return okJson({
+          organizationId: "org_moon",
+          companyName: "MOON Shared Living",
+          description: "Plataforma de vivienda compartida.",
+          objective: "Conseguir los primeros 20 clientes",
+          products: [],
+          customers: [],
+          declaredTools: [],
+          uncertainties: [],
+          confirmed: false,
         });
       return okJson({ organizationId: "org_moon", department: null, conversation: [] });
     });
 
     render(<CustomerZeroRoute />);
+    // The CEO lands on the understanding review, not a handoff terminal.
     expect(
-      await screen.findByText(/me has dicho que quieres conseguir los primeros 20 clientes/i),
+      await screen.findByText(/Esto es lo que he entendido de tu empresa/i),
     ).toBeInTheDocument();
-    expect(screen.queryByText(/discovery completed/i)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /vamos a trabajar/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Ya tengo suficiente/i)).not.toBeInTheDocument();
+    // The confirmation action is the explicit review button.
+    expect(
+      screen.getByRole("button", { name: /sí, es correcto/i }),
+    ).toBeInTheDocument();
   });
 
   it("recovers from a stale local session: clears it and shows clean onboarding", async () => {

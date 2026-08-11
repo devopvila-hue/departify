@@ -16,6 +16,7 @@ import {
 import { isToolDiscoveryComplete } from "../../customer-zero/progressive-discovery.js";
 import {
   evaluateDurableReadiness,
+  durableOnboardingStage,
   markMilestone,
   resolveCompanyDnaStore,
 } from "../../customer-zero/company-readiness.js";
@@ -776,6 +777,17 @@ export async function registerCustomerZeroRoutes(
               department: { type: ["object", "null"], additionalProperties: true },
               marketingWork: { type: ["object", "null"], additionalProperties: true },
               conversation: { type: "array" },
+              // Customer Zero P0 — readiness MUST reach the portal.
+              // Without these fields Fastify strips them from the
+              // serialized body and the portal can never see
+              // contextReady → every org is treated as not-ready and the
+              // legacy handoff terminal resurfaced.
+              contextReady: { type: "boolean" },
+              contextMissing: { type: "array", items: { type: "string" } },
+              stage: {
+                type: "string",
+                enum: ["intake", "research", "discovery", "understanding", "ready"],
+              },
             },
           },
           404: { type: "object", properties: { error: { type: "string" } } },
@@ -793,11 +805,27 @@ export async function registerCustomerZeroRoutes(
 
       if (!session) {
         // The in-memory session is gone (backend restart / new process).
-        // If the company is DURABLE we must NOT 404 — a 404 makes the
-        // portal wipe local state and drag the CEO back through
-        // onboarding, losing a company Departify genuinely knows.
+        // The auth boundary already validated membership, so this org
+        // EXISTS in the tenant. NEVER 404 a member's org — a 404 makes
+        // the portal wipe local state and drag the CEO back through
+        // onboarding, losing the organization identity.
         if (!durable.record) {
-          return reply.code(404).send({ error: "Session not found." });
+          // Existing org, never onboarded (no durable Company DNA):
+          // resume truthfully at the intake stage ON THE SAME org.
+          return reply.code(200).send({
+            organizationId,
+            gapCount: 0,
+            mandatoryQuestions: [],
+            locale: "es",
+            discoveryTranscript: [],
+            connections: [],
+            unmappedTools: [],
+            department: null,
+            conversation: [],
+            contextReady: false,
+            contextMissing: durable.missing,
+            stage: "intake",
+          });
         }
         const record = durable.record;
         return reply.code(200).send({
@@ -822,6 +850,7 @@ export async function registerCustomerZeroRoutes(
           department: null,
           contextReady: durable.ready,
           contextMissing: durable.missing,
+          stage: durableOnboardingStage(durable.record, durable.facts),
           conversation: [],
         });
       }
@@ -853,6 +882,7 @@ export async function registerCustomerZeroRoutes(
         // DURABLE: the verdict does not depend on this in-memory session.
         contextReady: durable.ready,
         contextMissing: durable.missing,
+        stage: durableOnboardingStage(durable.record, durable.facts),
         ...(session.state.marketingWork
           ? { marketingWork: session.state.marketingWork }
           : {}),
