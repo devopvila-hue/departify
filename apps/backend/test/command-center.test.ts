@@ -21,6 +21,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCommandCenterInput,
   buildProactiveOpening,
+  isEmailReadFollowUp,
   discoverConnection,
   isEmailReadQuestion,
   routeCommandCenter,
@@ -48,6 +49,24 @@ function makeInput(overrides: Partial<CommandCenterInput> = {}): CommandCenterIn
 }
 
 describe("Command Center routing", () => {
+  it("routes a quantity-only inbox follow-up to Gmail", () => {
+    expect(isEmailReadFollowUp("los 3 últimos")).toBe(true);
+    const decision = routeCommandCenter(makeInput({ message: "los 3 últimos" }));
+    expect(decision.decision.intent).toBe("external_tool_query");
+  });
+
+  it("does not ask to reconnect an operational Gmail connection", () => {
+    const decision = routeCommandCenter(makeInput({
+      message: "reconecta",
+      connections: [{
+        ...buildConnectionState(TOOL_CATALOG.find((tool) => tool.id === "gmail")!, "es"),
+        status: "connected",
+      }],
+    }));
+    expect(decision.decision.intent).toBe("capability_status");
+    expect(decision.reply.toLowerCase()).toContain("operativo");
+    expect(decision.connectionSuggestion).toBeUndefined();
+  });
   it("routes greetings without delegating to Marketing", () => {    const decision = routeCommandCenter(makeInput({ message: "Hola" }));
     expect(decision.decision.intent).toBe("greeting");
     expect(decision.decision.departments).toEqual([]);

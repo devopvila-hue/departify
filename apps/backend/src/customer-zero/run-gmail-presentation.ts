@@ -53,24 +53,48 @@ export interface GmailReadPlan {
   readonly maxResults: number;
 }
 
+const GMAIL_RESULT_CAP = 10;
+
+function requestedResultCount(message: string): number | null {
+  const lower = message.toLowerCase().normalize("NFC");
+  const words: Record<string, number> = {
+    uno: 1, una: 1, dos: 2, tres: 3, cuatro: 4, cinco: 5,
+    seis: 6, siete: 7, ocho: 8, nueve: 9, diez: 10,
+  };
+  const quantity = lower.match(/\b(?:los|las)\s+(\d{1,2}|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+(?:últim(?:o|os|a|as)|ultim(?:o|os|a|as)|recient(?:e|es))\b/u)
+    ?? lower.match(/\b(?:mu[eé]strame|ens[eé]ñame|dame)\s+(?:los|las)?\s*(\d{1,2}|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+(?:últim(?:o|os|a|as)|ultim(?:o|os|a|as)|recient(?:e|es)|mails?|correos?|emails?)\b/u);
+  const explicit = quantity?.[1];
+  const numeric = lower.match(/(?:últim(?:o|os|a|as)|ultim(?:o|os|a|as)|recent(?:e|s)?|recient(?:e|es)?)\s+(\d{1,2})\b/u)
+    ?? lower.match(/\b(?:los|las)?\s*(\d{1,2})\s+(?:últim(?:o|os|a|as)|ultim(?:o|os|a|as)|mails?|correos?|emails?)\b/u);
+  const word = lower.match(/(?:últim(?:o|os|a|as)|ultim(?:o|os|a|as)|recent(?:e|s)?|recient(?:e|es)?)\s+([a-záéíóú]+)\b/u)
+    ?? lower.match(/(?:\b(?:los|las)\s+)?([a-záéíóú]+)\s+(?:últim(?:o|os|a|as)|ultim(?:o|os|a|as)|mails?|correos?|emails?)\b/u);
+  const value = explicit
+    ? (Number.isFinite(Number(explicit)) ? Number(explicit) : words[explicit])
+    : numeric?.[1] ? Number(numeric[1]) : word?.[1] ? words[word[1]] : null;
+  return value && Number.isFinite(value) ? Math.max(1, Math.min(GMAIL_RESULT_CAP, value)) : null;
+}
+
 /** Map the CEO's email question to an intent + Gmail query + result cap. */
 export function deriveGmailReadPlan(message: string): GmailReadPlan {
   // Normalize to NFC so accents like "último" composed by the runtime
   // (UTF-8) match the regex literals in this source file (also UTF-8).
   const lower = message.toLowerCase().normalize("NFC");
 
-  // Latest / last / most recent — a single mail.
+  const count = requestedResultCount(lower);
+
+  // Latest / last / most recent — one mail unless the CEO asks for a bounded
+  // quantity explicitly.
   // Note: `\b` is unreliable on Unicode inputs in some JS runtimes,
   // so we anchor on `(?:^|\W)` / `(?:\W|$)` for portable boundaries.
   if (
-    /(?:^|\W)([úu]ltimo|[úu]ltima|last|latest|more recent|most recent|reciente)(?:\W|$)/u.test(
+    /(?:^|\W)([úu]ltim(?:o|os|a|as)|last|latest|more recent|most recent|reciente?s?)(?:\W|$)/u.test(
       lower,
     )
   ) {
     return {
-      intent: "latest",
+      intent: count && count > 1 ? "recent" : "latest",
       query: "in:inbox newer_than:30d",
-      maxResults: 1,
+      maxResults: count ?? 1,
     };
   }
 
@@ -79,7 +103,7 @@ export function deriveGmailReadPlan(message: string): GmailReadPlan {
     return {
       intent: "unread",
       query: "is:unread newer_than:30d",
-      maxResults: 5,
+      maxResults: count ?? 5,
     };
   }
 
@@ -90,7 +114,7 @@ export function deriveGmailReadPlan(message: string): GmailReadPlan {
     return {
       intent: "important",
       query: "is:unread newer_than:30d",
-      maxResults: 5,
+      maxResults: count ?? 5,
     };
   }
 
@@ -108,7 +132,7 @@ export function deriveGmailReadPlan(message: string): GmailReadPlan {
         : topic
           ? `in:anywhere newer_than:365d {subject:${topic} ${topic}}`
           : "in:inbox newer_than:30d",
-      maxResults: 5,
+      maxResults: count ?? 5,
     };
   }
 
@@ -116,7 +140,7 @@ export function deriveGmailReadPlan(message: string): GmailReadPlan {
   return {
     intent: "recent",
     query: "in:inbox newer_than:7d",
-    maxResults: 5,
+    maxResults: count ?? 5,
   };
 }
 

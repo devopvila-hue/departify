@@ -50,6 +50,17 @@ describe("run-gmail-presentation — deriveGmailReadPlan", () => {
     expect(plan.maxResults).toBe(1);
   });
 
+  it("latest 3 requests exactly three bounded results", () => {
+    const plan = deriveGmailReadPlan("mis últimos 3 mails");
+    expect(plan.maxResults).toBe(3);
+    expect(plan.query).toContain("in:inbox");
+  });
+
+  it("word quantities are parsed and capped", () => {
+    expect(deriveGmailReadPlan("muéstrame los tres últimos correos").maxResults).toBe(3);
+    expect(deriveGmailReadPlan("muéstrame 99 correos recientes").maxResults).toBe(10);
+  });
+
   it("tengo correos importantes → 5 unread-style", () => {
     const plan = deriveGmailReadPlan("¿Tengo correos importantes?");
     expect(plan.intent).toBe("important");

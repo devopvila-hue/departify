@@ -76,6 +76,7 @@ import {
 import {
   buildCommandCenterInput,
   buildProactiveOpening,
+  isEmailReadFollowUp,
   routeCommandCenter,
   type CommandCenterEvent,
   type ConnectionSuggestion,
@@ -107,6 +108,7 @@ import {
 } from "../../customer-zero/credential-resolver.js";
 import {
   deriveGmailReadPlan as gmailDeriveReadPlan,
+  decodeHtmlEntities,
   renderGmailSummary,
   summarizeGmailMessage,
 } from "../../customer-zero/run-gmail-presentation.js";
@@ -2593,7 +2595,28 @@ export async function processCeoMessage(
 
   await session.conversations.addMessage(conversation.id, "user", message);
 
-  const input = buildCommandCenterInput(session, message);
+  const baseInput = buildCommandCenterInput(session, message);
+  // A reconnect request is itself capability-dependent. Hydrate the Gmail
+  // projection from the durable operational resolver before routing, so a
+  // fresh conversation or a restarted backend cannot ask the CEO to
+  // re-authorize an already-working identity merely because its in-memory
+  // connection map is stale.
+  let input = baseInput;
+  if (/\b(reconecta|reconectar|reconnect)\b/i.test(message)) {
+    const operational = await resolveOperationalEmailProvider(organizationId);
+    if (operational === "google") {
+      const existing = baseInput.connections.find((connection) => connection.toolId === "gmail");
+      const connections = existing
+        ? baseInput.connections.map((connection) =>
+            connection.toolId === "gmail" ? { ...connection, status: "connected" as const } : connection,
+          )
+        : [
+            ...baseInput.connections,
+            { toolId: "gmail", label: "Gmail", capability: "email.read", category: "email", status: "connected" as const },
+          ];
+      input = { ...baseInput, connections };
+    }
+  }
   const routed = routeCommandCenter(input);
 
   const isEs = session.state.locale !== "en";
@@ -2757,7 +2780,7 @@ export async function processCeoMessage(
     // operational EMAIL provider (corporate IMAP first, Google as the
     // default identity) and reads real inbox data through it. Falls
     // through to the Mautic dispatch otherwise.
-    if (isEmailQuestion(message)) {
+    if (isEmailQuestion(message) || isEmailReadFollowUp(message)) {
       const provider = await resolveOperationalEmailProvider(
         organizationId,
       );
@@ -3781,12 +3804,12 @@ async function readCorporateEmailAnswer(
     id: m.id,
     threadId: m.threadId,
     sender: m.from.displayName
-      ? `${m.from.displayName} <${m.from.email}>`
-      : m.from.email,
-    senderEmail: m.from.email,
-    subject: m.subject || (isEs ? "(sin asunto)" : "(no subject)"),
+      ? `${decodeHtmlEntities(m.from.displayName)} <${decodeHtmlEntities(m.from.email)}>`
+      : decodeHtmlEntities(m.from.email),
+    senderEmail: decodeHtmlEntities(m.from.email),
+    subject: decodeHtmlEntities(m.subject) || (isEs ? "(sin asunto)" : "(no subject)"),
     receivedAt: m.date,
-    snippet: m.snippet,
+    snippet: decodeHtmlEntities(m.snippet),
     unread: m.isUnread,
   }));
   return renderGmailSummary({

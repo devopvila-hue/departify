@@ -323,7 +323,7 @@ const ROUTING_RULES: readonly RoutingRule[] = [
       // durable token store — never from the session connection map —
       // so this rule stays purely message-based and keeps working
       // after a backend restart.
-      if (isEmailReadQuestion(input.message)) return true;
+      if (isEmailReadQuestion(input.message) || isEmailReadFollowUp(input.message)) return true;
       const isDataQuery =
         /\b(cu[áa]ntos\s+contactos?|cu[áa]ntas?\s+personas?|how many contacts|lista de contactos|busca\s+(en\s+mautic\s+)?(contactos?|clientes?)|search\s+contacts|qu[ée]\s+(hay|tenemos|tiene|cu[aá]ntos)\s+(en\s+)?mautic)\b/i.test(
           input.message,
@@ -373,7 +373,7 @@ const ROUTING_RULES: readonly RoutingRule[] = [
       "A tool name or capability is mentioned. Departify will check whether it can connect it.",
     match: (input) => /\b(mautic|hubspot|salesforce|mailchimp|gmail|outlook|whatsapp|telegram|slack|notion|zoho|pipedrive| veinti twenty|veinte)\b/i.test(
       input.message,
-    ) || /\b(conecta|conectar|integraci[óo]n|integrate|connect)\b/i.test(input.message),
+    ) || /\b(conecta|conectar|reconecta|reconectar|integraci[óo]n|integrate|connect|reconnect)\b/i.test(input.message),
   },
   {
     intent: "unknown_department",
@@ -686,6 +686,59 @@ function buildConnectionOutcome(input: CommandCenterInput): {
   reply: string;
   connectionSuggestion?: ConnectionSuggestion;
 } {
+  const reconnectRequested = /\b(reconecta|reconectar|reconnect)\b/i.test(input.message);
+  const operationalEmail = input.connections.find(
+    (connection) =>
+      connection.status === "connected" &&
+      (connection.toolId === "gmail" || connection.capability?.startsWith("email.")),
+  );
+  if (reconnectRequested && operationalEmail) {
+    return {
+      decision: {
+        intent: "capability_status",
+        departments: [],
+        rationale: `${operationalEmail.label} is already connected; no reconnect action is required.`,
+      },
+      reply: t(
+        input.locale,
+        `Tu ${operationalEmail.label} ya está conectado y operativo. No necesitas volver a autorizarlo.`,
+        `Your ${operationalEmail.label} connection is already operational. You do not need to authorize it again.`,
+      ),
+    };
+  }
+  if (reconnectRequested) {
+    const known = input.connections.find(
+      (connection) => connection.toolId === "gmail" || connection.capability?.startsWith("email."),
+    );
+    const suggestion: ConnectionSuggestion = known
+      ? {
+          toolId: known.toolId,
+          label: known.label,
+          capability: known.capability,
+          why: whyForCapability(known.capability, input.locale),
+          connectable: true,
+          requiredCredentials: [],
+          rawInput: input.message,
+        }
+      : {
+          toolId: "gmail",
+          label: "Gmail",
+          capability: "email.read",
+          why: t(input.locale, "Para volver a consultar tu correo, necesito restablecer el acceso a Gmail.", "To query your email again, I need to restore Gmail access."),
+          connectable: true,
+          requiredCredentials: [],
+          rawInput: input.message,
+        };
+    return {
+      decision: {
+        intent: "request_connection",
+        departments: [],
+        rationale: "Gmail is not operational; return the bounded connection action instead of manual OAuth instructions.",
+      },
+      reply: t(input.locale, "Puedo restablecer el acceso a Gmail desde Conexiones.", "I can restore Gmail access from Connections."),
+      connectionSuggestion: suggestion,
+    };
+  }
   // Operational truth first: if the CEO mentions a tool that is ALREADY
   // connected, the connection does not need to be re-established. Answer from
   // the operational state, never a reconnection instruction.
@@ -1037,6 +1090,12 @@ export function isEmailReadQuestion(message: string): boolean {
   return /\b(cu[aá]l(?:es)?\s+deber[ií]a(?:mos|s)?\s+(contestar|responder)|contestar(?:los)?\s+primero|responder(?:los)?\s+primero)\b/i.test(
     lower,
   );
+}
+
+/** Short inbox continuations keep their email meaning without repeating it. */
+export function isEmailReadFollowUp(message: string): boolean {
+  return /^\s*(?:mu[eé]strame|ens[eé]ñame|dame|los|las)?\s*(?:\d{1,2}|uno|una|dos|tres|cuatro|cinco|seis|siete|ocho|nueve|diez)\s+(?:[úu]ltim(?:o|os|a|as)|recient(?:e|es)|mails?|correos?|emails?)\b/i.test(message)
+    || /^\s*(?:los|las)\s+[úu]ltim(?:o|os|a|as)\b/i.test(message);
 }
 
 export function isCalendarReadRequest(message: string): boolean {
