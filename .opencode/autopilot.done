@@ -1,153 +1,175 @@
-# AUTOPILOT DONE — Customer Zero Email P0 closure
+# AUTOPILOT DONE — Onboarding / Company DNA / Readiness Recovery
 
 ## 1. ROSA PRE-FLIGHT
-Read: rosa.yaml, docs/architecture.md, existing Gmail OAuth (google-tokens,
-oauth-state, gmail-adapter), credential layer (credential-resolver,
-google_oauth_tokens), command-center routing, conversation durability,
-approval system, marketing work. No runtime/credential/OAuth redesign.
-Gmail OAuth untouched. No Calendar/Drive. No new department.
+Read the onboarding commits (b7f904e, 87db295, 9b99dfa, c73a159, 0070009),
+company-dna.ts, company-readiness.ts, onboarding-checkpoints.ts,
+SupabaseCompanyDNAStore, RootRoute, ShellGate, CustomerZeroRoute, all
+/start /progress /next-question /understanding /confirm /handoff endpoints,
+auth boundary, session hydration. No feature work. No Email/Calendar/Drive.
+No OnboardingV3/CompanyDNAV2/new state machine — consolidated onto the
+readiness architecture the previous sprint introduced.
 
-## 2. EXISTING EMAIL ARCHITECTURE FOUND
-Capability vocabulary already provider-independent (email.read/search/draft/
-send.personal), GmailAdapter (read/search/draft/send), durable Google token
-store, email-delivery-adapter (Resend, campaigns). MISSING: email send routing
-in chat, multi-turn pending email state, corporate (non-Google) provider.
+## 2. PRODUCTION EVIDENCE INSPECTED
+- Supabase production: 8 orgs; NONE has a complete DNA record. The
+  founder's org (7a9f4986, Gmail connected) has NO DNA row. A new-user org
+  (8aae681a) has intake-only DNA (research never completed).
+- Railway logs: new-user /start → `customer_zero_started` +
+  `research_started`, NO `research_completed` (research threw).
+- Deployed commit 0070009 (adoption) at 01:04 UTC; failure evidence after.
 
-## 3. RED-ERROR LAST_SUCCESSFUL_CHECKPOINT
-POST /conversations/{id}/messages 200 (22:52:43, 8.5s) — the CEO's email
-request was understood and Elvira asked for missing info.
+## 3. EXISTING-USER LAST_SUCCESSFUL_CHECKPOINT
+GET /:org 200 (record branch) — the org's durable state was readable.
 
-## 4. RED-ERROR FIRST_FAILED_CHECKPOINT
-The follow-up POST /conversations/{id}/messages → **HTTP 499 after 28s**
-(Railway log 22:53:33) — the client closed the request while the engine
-(OpenClaw, 120s timeout) was still processing the generic `delegate_marketing`
-turn. Portal `postJson` returned null → ChatRoute rendered
-"Departify no ha podido responderte ahora mismo."
+## 4. EXISTING-USER FIRST_FAILED_CHECKPOINT
+GET /:org 200 response body WITHOUT contextReady/contextMissing/stage —
+the Fastify response schema omitted them, so the serializer stripped them.
+The portal always saw `contextReady === undefined`.
 
-## 5. ROOT CAUSE
-Email requests fell into `delegate_marketing` → engine/LLM turn (slow,
-unbounded for UX, no email context) and there was NO pending-email state, so a
-follow-up could not continue the objective. The 28s+ engine turn exceeded the
-client's patience → 499 → red error, work lost.
+## 5. EXISTING-USER ROOT_CAUSE
+The status response schema (customer-zero.ts) listed only the legacy
+fields. `contextReady`, `contextMissing`, `stage` were returned by the
+handler but never reached the portal. RootRoute therefore never saw
+"ready" → every org was treated as not-ready → CustomerZeroRoute fell
+into the LEGACY conversation step → `currentQuestion` returned null →
+`buildConversationPayload` emitted the legacy `handoff` →
+"Ya tengo suficiente / Vamos a trabajar" (dead: the button's
+understanding endpoint had no DNA to show → "No hemos podido preparar el
+resumen").
 
-## 6. FILES CHANGED
-pending-email.ts (new), email-capability.ts (new), corporate-email-store.ts (new),
-corporate-email-adapter.ts (new), command-center.ts, customer-zero-session.ts,
-customer-zero-v2.ts, main.ts, portal api.ts / ConnectionsRoute.tsx / tokens.css,
-package.json + pnpm-lock (imapflow, nodemailer), migration
-20260811090000_email_accounts.sql, tests customer-zero-06/07 + portal tests.
+## 6. NEW-USER LAST_SUCCESSFUL_CHECKPOINT
+POST /start 200 → `research_started` checkpoint.
 
-## 7. EMAIL CAPABILITY ARCHITECTURE
-email.read/search/compose/send boundary; provider resolution:
-corporate (IMAP/SMTP) first, Google fallback. Business code never names a
-provider. Gmail is a provider, not the capability.
+## 7. NEW-USER FIRST_FAILED_CHECKPOINT
+`research_started` with NO `research_completed` — `fetchAndExtractWebsite`
+rejected (unreachable website) → runResearch recorded the RAW Node error
+("fetch failed") via failProgress → the portal's ResearchStep showed it
+verbatim and the flow reset toward intake.
 
-## 8. GMAIL PROVIDER BEHAVIOR
-Unchanged OAuth; reads via presenter (no query jargon); sends via
-GmailAdapter.sendMessage through the capability boundary; durable send evidence
-(messageId, recipient, sentAt).
+## 8. NEW-USER ROOT_CAUSE
+Unbounded raw error propagation: the web fetch rejection message
+("fetch failed") was stored on progress.error and rendered to the CEO.
+No business-readable mapping; no retry that preserved the organization.
 
-## 9. IMAP PROVIDER BEHAVIOR
-imapflow, bounded 15s; read inbox (unseen→recent), presents via the same
-business presenter. Valid creds → operational (probe IMAP connect + INBOX).
+## 9. WHY LEGACY TERMINAL STILL EXISTED
+Two onboarding UIs coexisted: the legacy conversation→handoff step
+(next-question returned `handoff` when no question remained) and the new
+readiness/understanding path. The portal only entered the new path when
+contextMissing === ["confirmation"]; with the schema stripping the stage,
+that never happened for pre-DNA orgs.
 
-## 10. SMTP PROVIDER BEHAVIOR
-nodemailer, bounded; send via transporter.sendMail; probe = verify() session
-(never sends mail). Operational only when IMAP AND SMTP probes succeed.
+## 10. WHY "VAMOS A TRABAJAR" WAS DEAD
+The button called openConfirmation → api.understanding → the org had no
+DNA → nothing to review; the understanding endpoint returned no data and
+the flow could not advance.
 
-## 11. CREDENTIAL SECURITY
-Corporate password stored server-side (email_accounts, service-role only, RLS
-block-all, org+user scoped), NEVER returned by APIs, never logged, never in
-chat/DNA/model. Same posture as Google tokens.
+## 11. WHY UNDERSTANDING RECONSTRUCTION FAILED
+Same root cause: stage/contextReady never reached the portal, so it never
+routed to the understanding screen, and the org had no DNA to show.
 
-## 12. CONNECTION STATE MODEL
-Connected = durable credentials + real bounded probe success
-(operationalVerifiedAt). Probe failure → honest non-connected state with a
-business reason. No "connected" without capability.
+## 12. EXACT CAUSE OF RAW "FETCH FAILED"
+Node's undici `fetch` rejects with message "fetch failed" for DNS/TLS/refused
+connections. `fetchAndExtractWebsite` did not map it; runResearch recorded
+the raw message; ResearchStep rendered `body.error` verbatim.
 
-## 13. MULTI-TURN CONTINUATION FIX
-pendingEmailWork (session): recipient/objective/missingFields/draft/status.
-Follow-ups absorb missing info, preserve recipient+objective, rebuild draft,
-never fall to generic routing, never pick Mautic, never emit the red error.
-Deterministic pipeline — no engine dependency.
+## 13. CANONICAL STATE MACHINE AFTER FIX
+AUTHENTICATED → INTAKE (no DNA) → RESEARCH (intake, research not done) →
+DISCOVERY (research done, blocking discovery not done) → UNDERSTANDING
+(discovery done, unconfirmed) → READY (confirmed current) → CHAT. The
+portal routes exclusively by the durable stage; the legacy handoff
+terminal is removed from the API.
 
-## 14. APPROVAL FLOW
-Conversational: draft shown with "¿Lo envío? Responde «sí, envíalo»"; approval
-sends; cancellation cancels; new info rebuilds the draft.
+## 14. DURABLE RECONSTRUCTION TABLE
+FACT | DURABLE SOURCE | WRITER | READER | REQUIRED FOR READINESS
+intake | company_dna (company_name, website/description, objective) | /start (projectIntakeToDna) | readinessFactsFromRecord, status | yes
+research completion | company_dna.research_completed_at | runResearch (projectResearchToDna) | readinessFactsFromRecord | yes
+research facts | company_dna (products, customers, geography, ...) | runResearch / /answer | understanding, readiness | yes
+blocking discovery | company_dna.blocking_discovery_completed_at | /answer (markMilestone) | readinessFactsFromRecord | yes
+CEO confirmation | company_dna.ceo_confirmed_at (+ facts_updated_at) | /confirm (applyCeoConfirmation) | isConfirmationCurrent | yes
+factsUpdatedAt | company_dna.facts_updated_at | all fact writers | isConfirmationCurrent | yes
+ceoConfirmedAt | company_dna.ceo_confirmed_at | /confirm | readinessFactsFromRecord | yes
+department provisioned | company_dna.department_provisioned_at | /marketing handoff (markMilestone) | readinessFactsFromRecord | yes
 
-## 15. SEND-RESULT DURABILITY
-PendingEmailWork.sendResult { provider, recipient, sentAt, providerMessageId }
-persisted on the session + the send confirmation is a durable conversation
-message. Failed sends never report success; draft survives for retry.
+## 15. EXISTING-ORG ADOPTION
+Existing org without DNA → status 200 stage "intake" on the SAME
+organization id (the 404 that wiped the org is gone). Integrations,
+conversations and org identity are untouched.
 
-## 16. PROMPT-INJECTION BOUNDARY
-Email body is DATA: malicious content is echoed as draft content to send,
-never executed as instructions (CZ06 Z test).
+## 16. COMPANY DNA BEHAVIOR
+DNA is the single durable source of the five readiness facts. A row alone
+is not readiness (L test). Research output is only written when genuine.
 
-## 17. ORG ISOLATION
-Credential stores + capability resolution are org-scoped; cross-org access
-rejected (CZ06 X, CZ07 X tests).
+## 17. READINESS BEHAVIOR
+Evaluated from durable DNA only; never from process memory. The stage is
+projected from the same record.
 
-## 18. UX CHANGES
-/conexiones → "Correo" capability with providers: Google/Gmail (Conectar),
-Microsoft 365 (honest "Próximamente"), Otro correo de empresa (IMAP/SMTP form).
-Product wording everywhere; contextual "Conecta tu correo" card when email is
-needed but not connected.
+## 18. REFRESH BEHAVIOR
+Refresh → status (durable stage) → the portal resumes at the correct
+incomplete stage (research/discovery/understanding) or chat when ready.
 
-## 19. TESTS ADDED
-CZ06 (10): multi-turn draft/approval/send, missing-info continuation,
-"Conecta tu correo", no unnecessary card, no Mautic/red error, failed send,
-org isolation, prompt-injection. CZ07 (6): corporate probe ok/invalid,
-no credential leakage, corporate send/read dispatch, org isolation.
+## 19. BACKEND RESTART BEHAVIOR
+Same as refresh — the stage is computed from Supabase; confirmed orgs
+return contextReady=true → chat.
 
-## 20. BACKEND TESTS — 482/482 (37 files) PASS
-## 21. PORTAL TESTS — 98/98 (12 files) PASS
-## 22. LINT — pnpm -r lint VERDE
-## 23. TYPECHECK — pnpm -r typecheck VERDE
-## 24. BUILD — pnpm -r build VERDE
-## 25. PNPM CHECK — VERDE (36/36 packages)
-## 26. COMMITS
-0594e05 (multi-turn email capability, no red error)
-78e7f10 (corporate IMAP/SMTP provider + Correo UX)
+## 20. NEW-USER BEHAVIOR
+Intake → research (resumable via POST /:org/research on the same org) →
+discovery → understanding → confirmation → chat. Research failure shows a
+business message + Reintentar; intake is never reset.
 
-## 27. PRODUCTION DEPLOY
-Railway departify-api SUCCESS (78e7f10); boot logs confirm durable
-google-oauth + oauth-state + corporate-email stores; health 200. Netlify
-bundle contains the Correo section. Migration applied to production Supabase;
-smoke write→read-back OK on both google_oauth_tokens and email_accounts.
+## 21. SAFE ERROR UX
+web-analysis fetch failures map to "No hemos podido acceder a la web de tu
+empresa…". Raw "fetch failed" never reaches the CEO.
 
-## 28. BROWSER VALIDATION PERFORMED
-None (requires founder accounts). Portal tests cover the Correo section render
-and the Gmail handshake; backend tests cover the full flows with mocked
-providers.
+## 22. FILES CHANGED
+company-readiness.ts (durableOnboardingStage), customer-zero.ts (schema +
+404→200 intake + stage), customer-zero-v2.ts (resume research, no handoff),
+web-analysis.ts (friendly errors), portal api.ts (stage/research),
+CustomerZeroRoute.tsx (stage routing, research retry, no legacy terminal),
+CustomerZeroRoute.test.tsx.
 
-## 29. VALIDATED
-Multi-turn email pipeline (draft→approval→send), no red error on follow-ups,
-corporate provider configure/probe/send/read with mocks, credential secrecy,
-org isolation, prompt-injection boundary, all gates, deploy, production
-durable-store smoke.
+## 23. TESTS ADDED
+customer-zero-08-onboarding-recovery.test.ts (9): stage derivation,
+no-handoff, refresh reconstruction, restart durability, stale
+confirmation, no chat bypass, same-org adoption, understanding 404,
+friendly research errors.
 
-## 30. NOT VALIDATED
-Real Gmail send receipt; real IMAP/SMTP against a live corporate account;
-real browser scroll/UX; conversational continuation with the real engine.
-
-## 31. BLOCKED
+## 24. BACKEND TEST TOTAL — 506/506 (40 files) PASS
+## 25. PORTAL TEST TOTAL — 101/101 (13 files) PASS
+## 26. LINT — pnpm -r lint VERDE
+## 27. TYPECHECK — pnpm -r typecheck VERDE
+## 28. BUILD — pnpm -r build VERDE
+## 29. PNPM CHECK — portal check verde en aislamiento; el check agregado
+falla intermitentemente por contención de 36 paquetes (timeout del test
+runner), no por regresión (suite estable en 3 ejecuciones consecutivas).
+## 30. MIGRATIONS — none new (company_dna already applied).
+## 31. COMMITS
+03b4090 fix(customer-zero): onboarding readiness recovery — one canonical
+path, no legacy handoff terminal
+## 32. RAILWAY DEPLOYMENT — departify-api SUCCESS (03b4090); health 200.
+## 33. NETLIFY DEPLOYMENT — bundle contiene el nuevo copy (Revisar lo que
+hemos entendido / Reintentar).
+## 34. BROWSER VALIDATION EXISTING ORG — NOT VALIDATED IN REAL
+AUTHENTICATED BROWSER (requires the founder's account; no browser
+automation against the real authenticated session was possible).
+## 35. BROWSER VALIDATION NEW ORG — NOT VALIDATED IN REAL AUTHENTICATED
+BROWSER (same limitation).
+## 36. VALIDATED
+Code paths, durable stage projection, schema delivery, resume research,
+friendly errors, 506 backend + 101 portal tests, deploy, health, bundle.
+## 37. NOT VALIDATED
+Real authenticated browser flows (both scenarios), real website research.
+## 38. BLOCKED
 None.
-
-## 32. FOUNDER GOOGLE TEST
-1. /conexiones → Correo → Google/Gmail operational. 2. /chat:
-"¿Cuál es mi último correo recibido?" → one real email (sender/subject/date/
-snippet). 3. "¿Tengo algún correo importante?" → concise prioritized list.
-4. "Prepara un correo para [address] diciendo [message]." → draft shown.
-5. Reply "sí, envíalo". 6. Verify actual receipt.
-
-## 33. FOUNDER CORPORATE-EMAIL TEST
-1. /conexiones → Correo → "Otro correo de empresa". 2. Configure a real
-IMAP/SMTP account. 3. Verify connection (probe result). 4. "¿Cuál es el
-último correo?" → real inbox email. 5. Search a known email. 6. Draft a
-message. 7. "sí, envíalo". 8. Verify actual receipt.
-
-## 34. FINAL STATUS
-**READY FOR FOUNDER HUMAN VALIDATION**
-(Golden Department not declared. STOP — no Calendar, no Drive, no other
-department. Waiting for founder validation.)
+## 39. EXACT FOUNDER RETEST
+SCENARIO 1 (existing org): refresh app.departify.app → debe ver intake u
+onboarding en el MISMO org (no "Ya tengo suficiente") → completar →
+research → "Esto es lo que he entendido" → confirmar → chat → refresh →
+sigue en chat.
+SCENARIO 2 (new org): cuenta nueva → intake → research → preguntas →
+revisión → confirmación → chat → refresh → sigue en chat. Si la web falla:
+mensaje en lenguaje de negocio + Reintentar (nunca "fetch failed").
+## 40. FINAL STATUS
+READY FOR FOUNDER VALIDATION — automated/production checkpoints healthy;
+real authenticated browser validation NOT performed (requires the
+founder's account). Per the golden rule: onboarding is now the single
+canonical path, impossible to bypass, and a refresh cannot forget where
+the CEO was.

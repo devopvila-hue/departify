@@ -316,3 +316,30 @@ Trabajo de OpenCode:
 - Migración `20260811090000_email_accounts` aplicada a producción (verificada).
 - Deploy Railway SUCCESS (78e7f10) con store corporativo cableado; Netlify bundle
   con sección Correo; health 200; smoke Supabase prod write→read-back OK.
+
+## Sesión 7 (2026-08-11) — Onboarding/readiness production recovery
+
+### Root cause canónico (los 3 fallos comparten uno)
+El schema de respuesta de GET /:org NO incluía contextReady/contextMissing/
+stage → Fastify los eliminaba al serializar → el portal SIEMPRE veía
+contextReady=undefined → ningún org "ready" → caída al step de conversación
+legacy → next-question con question=null → handoff "Ya tengo suficiente"
+(botón muerto; understanding sin DNA → "No hemos podido preparar el resumen").
+El "fetch failed" del usuario nuevo era el error crudo de Node fetch
+(web-analysis) propagado sin mapear.
+
+### Fixes (commit 03b4090)
+- Schema 200 de /:org con contextReady/contextMissing/stage (llegan al portal).
+- durableOnboardingStage (intake→research→discovery→understanding→ready)
+  derivado SOLO del DNA durable; el portal rutea por stage.
+- next-question ya NO emite handoff (sin bypass legacy).
+- Org existente sin DNA → 200 stage intake en el MISMO org (nunca 404/borrado).
+- POST /:org/research para reintentar research en el mismo org.
+- web-analysis: errores de fetch en lenguaje de negocio (nunca "fetch failed");
+  el portal se queda en research con Reintentar (no resetea intake).
+- question===null → pantalla de revisión/confirmación (nunca el terminal legacy).
+
+### Validación
+Backend 506/506 (9 tests CZ08), portal 101/101, lint/typecheck/build verdes.
+Deploy Railway SUCCESS + Netlify bundle + health 200.
+FINAL STATUS: READY FOR FOUNDER VALIDATION (browser autenticado real NO validado).
