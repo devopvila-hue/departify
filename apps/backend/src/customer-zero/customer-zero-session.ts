@@ -89,6 +89,11 @@ import {
   InMemoryConversationStore,
   type ConversationStore,
 } from "./conversation-store.js";
+import {
+  getGoogleTokenStore,
+  hasOperationalGoogleCapability,
+  type GoogleCapability,
+} from "./google-tokens.js";
 
 const ONBOARDING_DIRECTOR_AGENT_ID = "agent_marketing_director";
 const ONBOARDING_EMPLOYEE_AGENT_ID = "agent_content_strategist";
@@ -105,6 +110,16 @@ export interface CustomerZeroSessionState {
   marketingWork?: MarketingWorkState;
   /** Pending email action (Customer Zero Email P0) — multi-turn send work. */
   pendingEmailWork?: import("./pending-email.js").PendingEmailWork;
+  /** Pending Calendar mutation; retained until the CEO approves or cancels. */
+  pendingCalendarWork?: {
+    summary: string;
+    startIso: string;
+    endIso: string;
+    timezone: string;
+    attendees: readonly string[];
+    status: "awaiting_approval" | "creating";
+    createdAt: string;
+  };
   /** UI/session locale — every generated visible text respects it. */
   locale: SupportedLocale;
   /** Onboarding intake (Fase 2). */
@@ -442,9 +457,11 @@ export function resetCustomerZeroSessionsForTest(): void {
 export async function hydrateSessionToolState(
   session: CustomerZeroSession,
 ): Promise<void> {
-  if (session.state.toolHydrated) return;
-  session.state.toolHydrated = true;
+  // The session cache is only a projection. Re-read durable evidence on
+  // every hydration so a refresh, login, or callback cannot leave a stale
+  // connected state in memory.
   const records = await session.toolState.listForOrg(session.organizationId);
+  session.state.toolHydrated = true;
 
   if (!records.some((record) => record.toolId === "mautic")) {
     const bootstrap = buildMauticBootstrapRecord(session.organizationId);
@@ -487,32 +504,34 @@ export async function hydrateSessionToolState(
  */
 async function reconcileGoogleConnectionsFromDurableTokens(
   session: CustomerZeroSession,
-  existingRecords: readonly OrganizationToolState[],
+  existingRecords: OrganizationToolState[],
 ): Promise<void> {
-  let operational = false;
-  try {
-    const { hasOperationalGoogleIdentityForOrg } = await import(
-      "./credential-resolver.js"
-    );
-    operational = await hasOperationalGoogleIdentityForOrg(
-      session.organizationId,
-    );
-  } catch {
-    // Credential resolver not wired (test env) — nothing to reconcile.
-    return;
-  }
-  if (!operational) return;
-  const googleToolIds = ["gmail", "google_workspace", "google_calendar", "google_drive"];
+  const summaries = await getGoogleTokenStore().listForOrg(session.organizationId);
+  const capabilityByTool: Readonly<Record<string, GoogleCapability>> = {
+    gmail: "email.read",
+    google_calendar: "calendar.read",
+    google_workspace: "drive.read",
+    google_drive: "drive.read",
+  };
+  const googleToolIds = Object.keys(capabilityByTool);
   for (const toolId of googleToolIds) {
     const existing = existingRecords.find((r) => r.toolId === toolId);
-    if (
-      existing &&
-      existing.status === "connected" &&
-      existing.configSource === "oauth:google"
-    ) {
-      continue;
-    }
-    const verifiedAt = new Date().toISOString();
+    const capability = capabilityByTool[toolId];
+    if (!capability) continue;
+    // An OAuth handshake is an intentional transient state. Do not let a
+    // background capability reconciliation erase it before the callback has
+    // had a chance to validate its nonce.
+    if (session.state.connections.get(toolId)?.status === "connecting") continue;
+    if (!summaries.length && !existing) continue;
+    const operational = summaries.some(
+      (summary) =>
+        summary.hasRefreshToken &&
+        Boolean(summary.operationalVerifiedAt) &&
+        hasOperationalGoogleCapability(summary, capability),
+    );
+    const status: OrganizationToolState["status"] = operational
+      ? "connected"
+      : "needs_connection";
     const tool = TOOL_CATALOG.find((entry) => entry.id === toolId);
     const label = tool?.label ?? toolId;
     const record: OrganizationToolState = {
@@ -521,10 +540,17 @@ async function reconcileGoogleConnectionsFromDurableTokens(
       label,
       ...(tool?.capability ? { capability: tool.capability } : {}),
       declared: true,
-      status: "connected",
+      status,
       configSource: "oauth:google",
-      verifiedAt,
-      health: "operational",
+      ...(operational
+        ? (() => {
+            const verifiedAt = summaries.find((s) =>
+              hasOperationalGoogleCapability(s, capability),
+            )?.operationalVerifiedAt;
+            return verifiedAt ? { verifiedAt } : {};
+          })()
+        : {}),
+      health: operational ? "operational" : "down",
     };
     try {
       await session.toolState.upsert(record);
@@ -537,8 +563,11 @@ async function reconcileGoogleConnectionsFromDurableTokens(
       const connection = buildConnectionStateWithLifecycle(
         tool,
         session.state.locale,
-        "connected",
-        { configSource: "oauth:google", verifiedAt },
+        status,
+        {
+          configSource: "oauth:google",
+          ...(record.verifiedAt ? { verifiedAt: record.verifiedAt } : {}),
+        },
       );
       session.state.connections.set(toolId, connection);
     }

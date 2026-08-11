@@ -24,6 +24,8 @@
 import type { SupportedLocale } from "./locale.js";
 import {
   getGoogleTokenStore,
+  googleApiFetch,
+  hasGrantedScope,
   refreshGoogleToken,
 } from "./google-tokens.js";
 
@@ -49,13 +51,18 @@ export const GMAIL_SCOPES: readonly string[] = [
  * corresponding capability is required.
  */
 export const GOOGLE_CALENDAR_SCOPES: readonly string[] = [
+  "openid",
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
   "https://www.googleapis.com/auth/calendar.readonly",
   "https://www.googleapis.com/auth/calendar.events",
 ];
 
 export const GOOGLE_DRIVE_SCOPES: readonly string[] = [
+  "openid",
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
   "https://www.googleapis.com/auth/drive.readonly",
-  "https://www.googleapis.com/auth/drive.file",
 ];
 
 /** Full scope set the unified Google connection will eventually
@@ -241,6 +248,7 @@ export interface GmailOAuthStartInput {
   readonly locale: SupportedLocale;
   readonly redirectUri: string;
   readonly clientId: string;
+  readonly scopes?: readonly string[];
 }
 
 export interface GmailOAuthStartOutput {
@@ -253,7 +261,7 @@ export interface GmailOAuthStartOutput {
  * The state is bound to (organizationId, userId, intent, returnPath)
  * and expires in 10 minutes.
  */
-export async function startGmailOAuth(
+export async function startGoogleOAuth(
   input: GmailOAuthStartInput,
 ): Promise<GmailOAuthStartOutput> {
   const nonce = generateNonce();
@@ -273,7 +281,7 @@ export async function startGmailOAuth(
     client_id: input.clientId,
     redirect_uri: input.redirectUri,
     response_type: "code",
-    scope: GMAIL_SCOPES.join(" "),
+    scope: (input.scopes ?? GMAIL_SCOPES).join(" "),
     access_type: "offline",
     prompt: "consent",
     include_granted_scopes: "true",
@@ -282,6 +290,9 @@ export async function startGmailOAuth(
   const authorizationUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
   return { authorizationUrl, state: nonce };
 }
+
+/** Backward-compatible Gmail name; the OAuth state/token architecture is shared. */
+export const startGmailOAuth = startGoogleOAuth;
 
 export interface GmailOAuthCallbackInput {
   readonly code: string;
@@ -338,7 +349,10 @@ export async function completeGmailOAuth(
   await getGoogleOAuthStateStore().consume(input.state);
 
   // 2. Code exchange.
-  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+  // This legacy function is kept for the older unit/dev API. The production
+  // route uses completeGoogleOAuthCallback, which owns durable persistence.
+  const previous = gmailTokenStore.get(input.organizationId, input.userId);
+  const tokenResponse = await googleApiFetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -386,9 +400,11 @@ export async function completeGmailOAuth(
   // GMAIL_SCOPES only when the response carries no scope string — a
   // rare but possible response shape.
   const grantedScopes = (tokenJson.scope ?? "").trim();
-  const scopes = grantedScopes
-    ? grantedScopes.split(/\s+/).filter(Boolean)
-    : [...GMAIL_SCOPES];
+  const scopes = Array.from(new Set([
+    ...(previous?.scopes ?? []),
+    ...(grantedScopes ? grantedScopes.split(/\s+/).filter(Boolean) : GMAIL_SCOPES),
+  ]));
+  const refreshToken = tokenJson.refresh_token?.trim() || previous?.refreshToken || "";
 
   const tokens: GmailTokens = {
     accessToken: tokenJson.access_token,
@@ -396,7 +412,7 @@ export async function completeGmailOAuth(
     // one on a reconnect. The synchronous in-memory store is only
     // used in tests; production goes through the async
     // `getGoogleTokenStore()`.
-    refreshToken: tokenJson.refresh_token ?? "",
+    refreshToken,
     expiresAt,
     scopes,
     email: profile.email,
@@ -435,7 +451,7 @@ export class GmailOAuthError extends Error {
 async function fetchGmailIdentity(
   accessToken: string,
 ): Promise<{ email: string; displayName: string }> {
-  const response = await fetch(
+  const response = await googleApiFetch(
     "https://www.googleapis.com/oauth2/v2/userinfo",
     {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -500,7 +516,7 @@ export class GmailAdapter {
   /** Returns the current tokens, refreshing if necessary. Reads
    *  from the durable Google token store; falls back to the legacy
    *  in-memory store when no durable row exists (dev / tests). */
-  private async getTokens(): Promise<GmailTokens | null> {
+  private async getTokens(requiredScope?: string): Promise<GmailTokens | null> {
     const durable = await getGoogleTokenStore().get(
       this.input.organizationId,
       this.input.userId,
@@ -521,6 +537,7 @@ export class GmailAdapter {
       email: durable.email,
       displayName: durable.displayName ?? "",
     };
+    if (requiredScope && !hasGrantedScope(tokens.scopes, requiredScope)) return null;
     if (new Date(tokens.expiresAt).getTime() - 60_000 > Date.now()) {
       return tokens;
     }
@@ -572,7 +589,9 @@ export class GmailAdapter {
   }
 
   async getIdentity(): Promise<GmailAdapterResult<EmailIdentity>> {
-    const tokens = await this.getTokens();
+    const tokens = await this.getTokens(
+      "https://www.googleapis.com/auth/gmail.readonly",
+    );
     if (!tokens) return fail("Gmail no está conectado.", "auth");
     return ok({
       email: tokens.email,
@@ -591,7 +610,7 @@ export class GmailAdapter {
     const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
     url.searchParams.set("q", query);
     url.searchParams.set("maxResults", String(maxResults));
-    const response = await fetch(url.toString(), {
+    const response = await googleApiFetch(url.toString(), {
       headers: { Authorization: `Bearer ${tokens.accessToken}` },
     });
     if (!response.ok) {
@@ -611,11 +630,13 @@ export class GmailAdapter {
   }
 
   async getThread(threadId: string): Promise<GmailAdapterResult<EmailThread>> {
-    const tokens = await this.getTokens();
+    const tokens = await this.getTokens(
+      "https://www.googleapis.com/auth/gmail.readonly",
+    );
     if (!tokens) return fail("Gmail no está conectado.", "auth");
     if (!threadId) return fail("Hilo vacío.", "invalid_response");
     const url = `https://gmail.googleapis.com/gmail/v1/users/me/threads/${encodeURIComponent(threadId)}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Date`;
-    const response = await fetch(url, {
+    const response = await googleApiFetch(url, {
       headers: { Authorization: `Bearer ${tokens.accessToken}` },
     });
     if (!response.ok) {
@@ -666,7 +687,9 @@ export class GmailAdapter {
     bodyText: string;
     threadId?: string;
   }): Promise<GmailAdapterResult<EmailDraft>> {
-    const tokens = await this.getTokens();
+    const tokens = await this.getTokens(
+      "https://www.googleapis.com/auth/gmail.compose",
+    );
     if (!tokens) return fail("Gmail no está conectado.", "auth");
     const sanitized = sanitizeEmailInputs(input);
     if ("error" in sanitized) {
@@ -679,7 +702,7 @@ export class GmailAdapter {
       body: sanitized.bodyText,
       ...(sanitized.threadId ? { threadId: sanitized.threadId } : {}),
     });
-    const response = await fetch(
+    const response = await googleApiFetch(
       "https://gmail.googleapis.com/gmail/v1/users/me/drafts",
       {
         method: "POST",
@@ -713,7 +736,9 @@ export class GmailAdapter {
     bodyText: string;
     threadId?: string;
   }): Promise<GmailAdapterResult<EmailSendResult>> {
-    const tokens = await this.getTokens();
+    const tokens = await this.getTokens(
+      "https://www.googleapis.com/auth/gmail.send",
+    );
     if (!tokens) return fail("Gmail no está conectado.", "auth");
     const sanitized = sanitizeEmailInputs(input);
     if ("error" in sanitized) {
@@ -726,7 +751,7 @@ export class GmailAdapter {
       body: sanitized.bodyText,
       ...(sanitized.threadId ? { threadId: sanitized.threadId } : {}),
     });
-    const response = await fetch(
+    const response = await googleApiFetch(
       "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
       {
         method: "POST",
@@ -758,12 +783,14 @@ export class GmailAdapter {
     state: "connected" | "needs_attention" | "error";
     message: string;
   }> {
-    const tokens = gmailTokenStore.get(this.input.organizationId, this.input.userId);
+    const tokens = await this.getTokens(
+      "https://www.googleapis.com/auth/gmail.readonly",
+    );
     if (!tokens) {
       return { state: "needs_attention", message: "Gmail no está conectado." };
     }
     try {
-      const response = await fetch(
+      const response = await googleApiFetch(
         "https://gmail.googleapis.com/gmail/v1/users/me/profile",
         { headers: { Authorization: `Bearer ${tokens.accessToken}` } },
       );
@@ -780,8 +807,11 @@ export class GmailAdapter {
   }
 
   /** Disconnect — drops the tokens for this (org, user). */
-  disconnect(): void {
+  async disconnect(): Promise<void> {
+    // Keep the legacy test/dev projection synchronous; the durable delete is
+    // still awaited before the caller resolves.
     gmailTokenStore.remove(this.input.organizationId, this.input.userId);
+    await getGoogleTokenStore().remove(this.input.organizationId, this.input.userId);
   }
 }
 

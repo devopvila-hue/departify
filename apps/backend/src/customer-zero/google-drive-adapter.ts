@@ -12,6 +12,12 @@
  */
 
 import { gmailTokenStore } from "./gmail-adapter.js";
+import {
+  getGoogleTokenStore,
+  googleApiFetch,
+  hasGrantedScope,
+  refreshGoogleToken,
+} from "./google-tokens.js";
 
 /* ----------------------------------------------------------------------------
  * Normalized types.
@@ -55,7 +61,7 @@ export interface DriveAdapterInput {
 export interface DriveAdapterResult<T> {
   readonly success: boolean;
   readonly value?: T;
-  readonly errorCode?: "auth" | "unavailable" | "rate_limit" | "invalid_response";
+  readonly errorCode?: "auth" | "unavailable" | "rate_limit" | "invalid_response" | "unsupported";
   readonly message?: string;
 }
 
@@ -73,13 +79,44 @@ export class GoogleDriveAdapter {
   constructor(private readonly input: DriveAdapterInput) {}
 
   private async getAccessToken(): Promise<string | null> {
+    const durable = await getGoogleTokenStore().get(
+      this.input.organizationId,
+      this.input.userId,
+    );
+    if (durable) {
+      if (!hasGrantedScope(durable.scopes, "https://www.googleapis.com/auth/drive.readonly")) {
+        return null;
+      }
+      if (new Date(durable.expiresAt).getTime() - 60_000 > Date.now()) {
+        return durable.accessToken;
+      }
+      if (!durable.refreshToken) return null;
+      try {
+        const next = await refreshGoogleToken({
+          refreshToken: durable.refreshToken,
+          clientId: process.env["GOOGLE_OAUTH_CLIENT_ID"] ?? "",
+          clientSecret: process.env["GOOGLE_OAUTH_CLIENT_SECRET"] ?? "",
+        });
+        await getGoogleTokenStore().put({
+          ...durable,
+          accessToken: next.accessToken,
+          expiresAt: next.expiresAt,
+          scopes: Array.from(new Set([...durable.scopes, ...next.scopes])),
+        });
+        return next.accessToken;
+      } catch {
+        return null;
+      }
+    }
+    // Legacy in-memory fallback is retained for deterministic unit tests and
+    // local development. Production always uses the durable row above.
     const tokens = gmailTokenStore.get(this.input.organizationId, this.input.userId);
     if (!tokens) return null;
     if (new Date(tokens.expiresAt).getTime() - 60_000 > Date.now()) {
       return tokens.accessToken;
     }
     try {
-      const response = await fetch("https://oauth2.googleapis.com/token", {
+      const response = await googleApiFetch("https://oauth2.googleapis.com/token", {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
@@ -121,7 +158,7 @@ export class GoogleDriveAdapter {
       pageSize: String(input.pageSize ?? 20),
       fields: "files(id,name,mimeType,size,modifiedTime,webViewLink,owners(emailAddress))",
     });
-    const response = await fetch(
+    const response = await googleApiFetch(
       `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
@@ -165,7 +202,7 @@ export class GoogleDriveAdapter {
     const params = new URLSearchParams({
       fields: "id,name,mimeType,size,modifiedTime,webViewLink,owners(emailAddress)",
     });
-    const meta = await fetch(
+    const meta = await googleApiFetch(
       `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(input.fileId)}?${params.toString()}`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
@@ -191,7 +228,32 @@ export class GoogleDriveAdapter {
       ...(data.webViewLink ? { webViewLink: data.webViewLink } : {}),
       ...(data.owners?.[0]?.emailAddress ? { ownerEmail: data.owners[0].emailAddress } : {}),
     };
-    return ok(result);
+    const mimeType = result.mimeType;
+    const isGoogleDoc = mimeType === "application/vnd.google-apps.document";
+    const isPlainText = mimeType === "text/plain" || mimeType.startsWith("text/");
+    const isPdf = mimeType === "application/pdf";
+    if (isPdf) {
+      return fail(
+        "Este PDF está localizado, pero todavía no puedo extraer su texto de forma fiable.",
+        "unsupported",
+      );
+    }
+    if (!isGoogleDoc && !isPlainText) return ok(result);
+    const contentUrl = isGoogleDoc
+      ? `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(input.fileId)}/export?mimeType=text%2Fplain`
+      : `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(input.fileId)}?alt=media`;
+    const contentResponse = await googleApiFetch(contentUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!contentResponse.ok) {
+      if (contentResponse.status === 401) return fail("Google rechazó la autorización.", "auth");
+      if (contentResponse.status >= 500) return fail("Google no responde.", "unavailable");
+      return fail(`No he podido leer el contenido (${contentResponse.status}).`, "invalid_response");
+    }
+    const preview = (await contentResponse.text())
+      .replace(new RegExp(String.fromCharCode(0), "g"), "")
+      .slice(0, 12_000);
+    return ok({ ...result, preview });
   }
 
   async createFile(input: DriveCreateInput): Promise<DriveAdapterResult<DriveFile>> {
@@ -205,7 +267,7 @@ export class GoogleDriveAdapter {
     const closeDelim = `\r\n--${boundary}--`;
     const metadata = JSON.stringify({ name, mimeType });
     const body = `${delimiter}Content-Type: application/json; charset=UTF-8\r\n\r\n${metadata}${delimiter}Content-Type: ${mimeType}\r\n\r\n${input.content ?? ""}${closeDelim}`;
-    const response = await fetch(
+    const response = await googleApiFetch(
       "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,size,modifiedTime,webViewLink,owners(emailAddress)",
       {
         method: "POST",

@@ -15,7 +15,9 @@
  */
 
 import type { CustomerZeroSession } from "./customer-zero-session.js";
-import { hasOperationalGoogleIdentityForOrg } from "./credential-resolver.js";
+import {
+  hasOperationalGoogleCapabilityForOrg,
+} from "./credential-resolver.js";
 import { getGoogleTokenStore } from "./google-tokens.js";
 import {
   getCorporateEmailStore,
@@ -64,7 +66,7 @@ export async function resolveOperationalEmailProvider(
   } catch {
     // Store not wired (dev/test) — fall through to Google.
   }
-  if (await hasOperationalGoogleIdentityForOrg(organizationId)) {
+  if (await hasOperationalGoogleCapabilityForOrg(organizationId, "email.read")) {
     return "google";
   }
   return null;
@@ -127,6 +129,15 @@ export async function sendEmail(
       providerMessageId: null,
       sentAt: null,
       error: "google_not_configured",
+    };
+  }
+  if (!(await hasOperationalGoogleCapabilityForOrg(organizationId, "email.send"))) {
+    return {
+      ok: false,
+      provider: "google",
+      providerMessageId: null,
+      sentAt: null,
+      error: "google_send_not_authorized",
     };
   }
 

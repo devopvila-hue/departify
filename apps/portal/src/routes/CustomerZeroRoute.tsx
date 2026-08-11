@@ -433,7 +433,9 @@ function ConfirmationStep(props: {
   onConfirm: (corrections: CompanyCorrections) => void;
 }) {
   const { understanding, entering, onConfirm } = props;
-  const [companyName, setCompanyName] = useState(understanding.companyName);
+  const [companyName, setCompanyName] = useState(
+    understanding.companyName ?? "",
+  );
   const [description, setDescription] = useState(
     understanding.description ?? "",
   );
@@ -497,14 +499,14 @@ function ConfirmationStep(props: {
         />
       </label>
 
-      {understanding.products.length > 0 && (
+      {(understanding.products ?? []).length > 0 && (
         <p className="customer-zero__muted">
-          Lo que ofrecéis: {understanding.products.join(", ")}
+          Lo que ofrecéis: {(understanding.products ?? []).join(", ")}
         </p>
       )}
-      {understanding.customers.length > 0 && (
+      {(understanding.customers ?? []).length > 0 && (
         <p className="customer-zero__muted">
-          Vuestros clientes: {understanding.customers.join(", ")}
+          Vuestros clientes: {(understanding.customers ?? []).join(", ")}
         </p>
       )}
 

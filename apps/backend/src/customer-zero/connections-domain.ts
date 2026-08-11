@@ -233,7 +233,6 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
     capabilities: [
       { id: "drive.read", nameEs: "Leer archivos de Drive", nameEn: "Read Drive files" },
       { id: "drive.search", nameEs: "Buscar en Drive", nameEn: "Search Drive" },
-      { id: "drive.create", nameEs: "Crear archivos en Drive", nameEn: "Create Drive files" },
     ],
   },
   // Customer Zero 03 — Google Calendar.
@@ -263,7 +262,6 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
     capabilities: [
       { id: "drive.read", nameEs: "Leer archivos de Drive", nameEn: "Read Drive files" },
       { id: "drive.search", nameEs: "Buscar en Drive", nameEn: "Search Drive" },
-      { id: "drive.create", nameEs: "Crear archivos en Drive", nameEn: "Create Drive files" },
     ],
   },
 ];

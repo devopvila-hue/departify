@@ -96,9 +96,18 @@ export function deriveGmailReadPlan(message: string): GmailReadPlan {
 
   // Search by sender or topic.
   if (/(?:^|\W)(busca|buscar|search|find|encuentra|localiza)(?:\W|$)/.test(lower)) {
+    const sender = lower.match(/\b(?:de|from)\s+([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})\b/i)?.[1];
+    const senderName = lower.match(/\b(?:de|from)\s+([\p{L}][\p{L} .'-]{1,60}?)(?:\s+(?:y|and|sobre|about)|[?.!,]|$)/iu)?.[1]?.trim();
+    const topic = lower.match(/\b(?:sobre|about|con el asunto|subject)\s+([^?.!]+)$/i)?.[1]?.trim();
     return {
       intent: "search",
-      query: "in:inbox newer_than:30d",
+      query: sender
+        ? `from:${sender} newer_than:365d`
+        : senderName
+          ? `from:${senderName} newer_than:365d`
+        : topic
+          ? `in:anywhere newer_than:365d {subject:${topic} ${topic}}`
+          : "in:inbox newer_than:30d",
       maxResults: 5,
     };
   }

@@ -27,12 +27,23 @@ interface ConnectionsPayload {
   connections: ToolConnectionView[];
   cards: ConnectionCardView[];
   unmappedTools: string[];
+  google?: {
+    connected: boolean;
+    email: string | null;
+    displayName: string | null;
+    capabilities: {
+      email: "connected" | "activate" | "needs_attention";
+      calendar: "connected" | "activate" | "needs_attention";
+      drive: "connected" | "activate" | "needs_attention";
+    };
+  } | null;
 }
 
 export function ConnectionsRoute() {
   const { organizationId } = useOrg();
   const [cards, setCards] = useState<ConnectionCardView[]>([]);
   const [unmapped, setUnmapped] = useState<string[]>([]);
+  const [google, setGoogle] = useState<ConnectionsPayload["google"]>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -41,6 +52,7 @@ export function ConnectionsRoute() {
     if (data) {
       setCards(data.cards ?? []);
       setUnmapped(data.unmappedTools ?? []);
+      setGoogle(data.google ?? null);
     }
   }, [organizationId]);
 
@@ -115,6 +127,17 @@ export function ConnectionsRoute() {
         ))
       )}
 
+      {google && (
+        <GoogleIdentitySection
+          google={google}
+          onActivate={(capability) => {
+            const toolId = capability === "calendar" ? "google_calendar" : capability === "drive" ? "google_drive" : "gmail";
+            const card = cards.find((candidate) => candidate.id === toolId);
+            if (card) void runAction(card);
+          }}
+        />
+      )}
+
       {/* Customer Zero Email P0 — the Correo capability, provider-first.
           The CEO sees ONE capability with providers, never "Sincronizar
           Gmail" as the product itself. */}
@@ -137,6 +160,36 @@ export function ConnectionsRoute() {
         </Card>
       )}
     </div>
+  );
+}
+
+function GoogleIdentitySection(props: {
+  google: NonNullable<ConnectionsPayload["google"]>;
+  onActivate: (capability: "email" | "calendar" | "drive") => void;
+}) {
+  const { google } = props;
+  const label = (capability: "email" | "calendar" | "drive") => {
+    const state = google.capabilities[capability];
+    if (state === "connected") return "✓ Disponible";
+    if (state === "needs_attention") return "Revisar conexión";
+    return capability === "calendar" ? "Dar acceso a Calendar" : capability === "drive" ? "Dar acceso a Drive" : "Dar acceso a Correo";
+  };
+  return (
+    <Card title="Google">
+      <p className="dfy-muted">{google.email ? `Conectado como: ${google.email}` : "Cuenta de Google conectada"}</p>
+      <div className="dfy-connection-card__actions">
+        {(["email", "calendar", "drive"] as const).map((capability) => {
+          const state = google.capabilities[capability];
+          return state === "connected" ? (
+            <Badge key={capability} tone="success">{label(capability)}</Badge>
+          ) : (
+            <button key={capability} type="button" className="dfy-button dfy-button--small" onClick={() => props.onActivate(capability)}>
+              {label(capability)}
+            </button>
+          );
+        })}
+      </div>
+    </Card>
   );
 }
 

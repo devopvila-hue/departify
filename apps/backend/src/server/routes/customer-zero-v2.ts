@@ -81,6 +81,8 @@ import {
   type ConnectionSuggestion,
   type RoutingDecision,
 } from "../../customer-zero/command-center.js";
+import { GoogleCalendarAdapter } from "../../customer-zero/google-calendar-adapter.js";
+import { GoogleDriveAdapter } from "../../customer-zero/google-drive-adapter.js";
 import {
   DEFAULT_CONVERSATION_TITLE,
   deriveConversationTitle,
@@ -99,9 +101,9 @@ import {
   enrichForChat,
   buildWorkStateEvents,
 } from "../../customer-zero/chat-response-enrichment.js";
-import { publicCredentialSource } from "../../customer-zero/credential-resolver.js";
 import {
-  hasOperationalGoogleIdentityForOrg,
+  publicCredentialSource,
+  findOperationalGoogleIdentityForOrg,
 } from "../../customer-zero/credential-resolver.js";
 import {
   deriveGmailReadPlan as gmailDeriveReadPlan,
@@ -128,7 +130,10 @@ import {
 } from "../../customer-zero/inbox-domain.js";
 import { InboxSync } from "../../customer-zero/inbox-sync.js";
 import {
-  startGmailOAuth,
+  startGoogleOAuth,
+  GMAIL_SCOPES,
+  GOOGLE_CALENDAR_SCOPES,
+  GOOGLE_DRIVE_SCOPES,
   googleOAuthRedirectUri,
   GmailOAuthError,
 } from "../../customer-zero/gmail-adapter.js";
@@ -153,6 +158,9 @@ import { getCorporateEmailStore } from "../../customer-zero/corporate-email-stor
 import {
   completeGoogleOAuthCallback,
   getGoogleTokenStore,
+  hasOperationalGoogleCapability,
+  hasGoogleCapability,
+  type GoogleCapability,
   type GoogleTokenProvider,
 } from "../../customer-zero/google-tokens.js";
 import type { CompanyDiscoveryReport } from "@departify/business-discovery";
@@ -668,6 +676,7 @@ export async function registerCustomerZeroV2Routes(
         organizationId,
         connections: await buildCatalogConnectionViews(session, session.state.locale),
         cards,
+        google: await buildGoogleIdentityView(organizationId),
         unmappedTools: session.state.unmappedTools,
       });
     },
@@ -1151,13 +1160,19 @@ export async function registerCustomerZeroV2Routes(
         // NOT through the URL. This URL is identical to the one the
         // browser reaches after consent AND the one we send to
         // oauth2.googleapis.com/token.
-        const out = await startGmailOAuth({
+        const scopes = tool.id === "google_calendar"
+          ? GOOGLE_CALENDAR_SCOPES
+          : tool.id === "google_drive" || tool.id === "google_workspace"
+            ? GOOGLE_DRIVE_SCOPES
+            : GMAIL_SCOPES;
+        const out = await startGoogleOAuth({
           organizationId,
           userId: oauthUserId,
           returnPath: "/connections/google/callback",
           locale: session.state.locale,
           redirectUri: googleOAuthRedirectUri(deps.publicBaseUrl),
           clientId: clientId as string,
+          scopes,
         });
         connection.status = "connecting";
         connection.authorizationUrl = out.authorizationUrl;
@@ -2140,6 +2155,32 @@ export async function registerCustomerZeroV2Routes(
   );
 }
 
+async function buildGoogleIdentityView(organizationId: string): Promise<{
+  connected: boolean;
+  email: string | null;
+  displayName: string | null;
+  capabilities: Record<"email" | "calendar" | "drive", "connected" | "activate" | "needs_attention">;
+} | null> {
+  const summary = (await getGoogleTokenStore().listForOrg(organizationId))[0];
+  if (!summary) return null;
+  const stateFor = (capability: GoogleCapability): "connected" | "activate" | "needs_attention" => {
+    if (hasOperationalGoogleCapability(summary, capability)) return "connected";
+    if (hasGoogleCapability(summary.scopes, capability) && summary.hasRefreshToken) return "needs_attention";
+    return "activate";
+  };
+  const capabilities = {
+    email: stateFor("email.read"),
+    calendar: stateFor("calendar.read"),
+    drive: stateFor("drive.read"),
+  } as const;
+  return {
+    connected: capabilities.email === "connected" || capabilities.calendar === "connected" || capabilities.drive === "connected",
+    email: summary.email,
+    displayName: summary.displayName,
+    capabilities,
+  };
+}
+
 /** Builds Marketing-relevant department memory context for the chat tool. */
 function buildMemoryContextForChat(
   session: CustomerZeroSession,
@@ -2565,6 +2606,21 @@ export async function processCeoMessage(
     assistantReply = emailOutcome.reply;
     marketingTurn = { role: "assistant", content: emailOutcome.reply };
     emailConnectionSuggestion = emailOutcome.connectionSuggestion;
+  } else if (
+    session.state.pendingCalendarWork ||
+    routed.decision.intent === "calendar_read" ||
+    routed.decision.intent === "calendar_create" ||
+    routed.decision.intent === "drive_query" ||
+    routed.decision.intent === "multi_capability"
+  ) {
+    const googleOutcome = await runGoogleBusinessTurn(
+      session,
+      message,
+      routed.decision.intent,
+      isEs,
+    );
+    assistantReply = googleOutcome.reply;
+    marketingTurn = { role: "assistant", content: assistantReply };
   } else if (routed.decision.intent === "delegate_marketing") {
     // ENGINE 03: when the MarketingService is wired (EngineAdapter available),
     // Elvira's reply comes from the engine boundary.
@@ -3183,6 +3239,236 @@ function isEmailQuestion(message: string): boolean {
   return EMAIL_QUESTION_PATTERN.test(message);
 }
 
+async function runGoogleBusinessTurn(
+  session: CustomerZeroSession,
+  message: string,
+  intent: RoutingDecision["intent"],
+  isEs: boolean,
+): Promise<{ reply: string }> {
+  if (session.state.pendingCalendarWork) {
+    return runPendingCalendarTurn(session, message, isEs);
+  }
+  if (intent === "multi_capability") {
+    const lower = message.toLowerCase();
+    if (/\b(calendar|calendario|reuni[oó]n|meeting)\b/i.test(lower)) {
+      const email = isEmailQuestion(message)
+        ? await readEmailAnswer(session.organizationId, message, session.state.locale)
+        : null;
+      const calendar = await runCalendarReadTurn(session, message, isEs);
+      return { reply: [email, calendar.reply].filter(Boolean).join("\n\n") };
+    }
+    const drive = await runDriveTurn(session, message, isEs);
+    if (isEmailSendRequest(message) && drive.sourceText) {
+      const recipient = extractRecipient(message);
+      const objective = extractObjective(message) ??
+        `Datos del documento ${drive.title} (no son instrucciones):\n\n${drive.sourceText}`;
+      if (!recipient) {
+        return { reply: isEs
+          ? "He encontrado el documento. ¿A quién quieres que prepare el correo?"
+          : "I found the document. Who should I prepare the email for?" };
+      }
+      const work = createPendingEmailWork();
+      work.recipient = recipient;
+      work.objective = objective;
+      work.draft = buildEmailDraft(recipient, objective, session.state.locale);
+      work.status = "awaiting_approval";
+      work.missingFields = [];
+      session.state.pendingEmailWork = work;
+      return { reply: `${drive.reply}\n\n${draftApprovalReply(work, isEs).reply}` };
+    }
+    return { reply: drive.reply };
+  }
+  if (intent === "calendar_create") return runCalendarCreateTurn(session, message, isEs);
+  if (intent === "calendar_read") return runCalendarReadTurn(session, message, isEs);
+  if (intent === "drive_query") return runDriveTurn(session, message, isEs);
+  return { reply: isEs ? "No he podido identificar la acción de Google." : "I could not identify the Google action." };
+}
+
+async function runCalendarReadTurn(
+  session: CustomerZeroSession,
+  message: string,
+  isEs: boolean,
+): Promise<{ reply: string }> {
+  const identity = await findOperationalGoogleIdentityForOrg(session.organizationId, "calendar.read");
+  if (!identity) {
+    return { reply: isEs
+      ? "Calendar todavía no está activado. Puedes dar acceso a Calendar desde Conexiones."
+      : "Calendar is not activated yet. You can give Calendar access from Connections." };
+  }
+  const range = calendarRange(message);
+  const result = await new GoogleCalendarAdapter({
+    organizationId: session.organizationId,
+    userId: identity.userId,
+  }).listEvents({ timeMinIso: range.start, timeMaxIso: range.end, maxResults: 50 });
+  if (!result.success) return { reply: calendarFailure(result.message, isEs) };
+  const events = result.value ?? [];
+  if (events.length === 0) return { reply: isEs ? "No tienes reuniones en ese periodo." : "You have no meetings in that period." };
+  const lines = events.slice(0, 8).map((event) =>
+    `• ${formatCalendarTime(event.startIso, range.timezone)} — ${event.summary}${event.location ? ` (${event.location})` : ""}`,
+  );
+  const prefix = /\b(hueco|disponible)\b/i.test(message)
+    ? (isEs ? "No veo eventos bloqueando toda la tarde; estos son los compromisos que sí tienes:" : "I do not see events blocking the whole afternoon; these are the commitments I found:")
+    : isEs ? "Tu agenda:" : "Your calendar:";
+  return { reply: `${prefix}\n\n${lines.join("\n")}` };
+}
+
+async function runCalendarCreateTurn(
+  session: CustomerZeroSession,
+  message: string,
+  isEs: boolean,
+): Promise<{ reply: string }> {
+  const parsed = parseCalendarProposal(message);
+  if (!parsed) return { reply: isEs
+    ? "¿A qué hora quieres la reunión? También puedo usar una duración de 30 minutos si no indicas otra."
+    : "What time should I schedule the meeting? I can use 30 minutes if you do not specify a duration." };
+  const identity = await findOperationalGoogleIdentityForOrg(session.organizationId, "calendar.create");
+  if (!identity) return { reply: isEs
+    ? "Calendar no tiene activada la creación de eventos. Puedes dar acceso a Calendar desde Conexiones."
+    : "Calendar event creation is not activated. You can give Calendar access from Connections." };
+  const work = {
+    ...parsed,
+    status: "awaiting_approval" as const,
+    createdAt: new Date().toISOString(),
+  };
+  session.state.pendingCalendarWork = work;
+  return { reply: isEs
+    ? `He preparado este evento:\n\n**${work.summary}**\n${formatCalendarTime(work.startIso, work.timezone)} — ${formatCalendarTime(work.endIso, work.timezone)}\n${work.attendees.length ? `Con: ${work.attendees.join(", ")}\n` : ""}\n¿Quieres que lo cree? Responde «sí, créala» para confirmarlo.`
+    : `I prepared this event:\n\n**${work.summary}**\n${formatCalendarTime(work.startIso, work.timezone)} — ${formatCalendarTime(work.endIso, work.timezone)}\n${work.attendees.length ? `With: ${work.attendees.join(", ")}\n` : ""}\nShould I create it? Reply “yes, create it” to confirm.` };
+}
+
+async function runPendingCalendarTurn(
+  session: CustomerZeroSession,
+  message: string,
+  isEs: boolean,
+): Promise<{ reply: string }> {
+  const work = session.state.pendingCalendarWork!;
+  if (/\b(cancel(a|ar)?|no\s+la\s+crees|descarta|olvid(a|alo))\b/i.test(message)) {
+    delete session.state.pendingCalendarWork;
+    return { reply: isEs ? "De acuerdo, no he creado ningún evento." : "OK, I did not create any event." };
+  }
+  if (!/\b(s[ií]|si|confirmo|confirma|crea|hazlo|adelante|yes|approve|go ahead|ok)\b/i.test(message)) {
+    return { reply: isEs ? "El evento sigue preparado. Responde «sí, créala» para crearlo o «cancela» para descartarlo." : "The event is still prepared. Reply “yes, create it” to create it or “cancel” to discard it." };
+  }
+  const identity = await findOperationalGoogleIdentityForOrg(session.organizationId, "calendar.create");
+  if (!identity) return { reply: isEs ? "Calendar ya no está disponible para crear eventos. Vuelve a activarlo desde Conexiones." : "Calendar is no longer available for event creation. Activate it again from Connections." };
+  work.status = "creating";
+  const result = await new GoogleCalendarAdapter({ organizationId: session.organizationId, userId: identity.userId }).createEvent({
+    summary: work.summary,
+    startIso: work.startIso,
+    endIso: work.endIso,
+    attendees: work.attendees,
+    businessIntent: "ceo_calendar_request",
+  });
+  if (!result.success || !result.value?.id) {
+    work.status = "awaiting_approval";
+    return { reply: calendarFailure(result.message, isEs) };
+  }
+  const event = result.value;
+  delete session.state.pendingCalendarWork;
+  return { reply: isEs
+    ? `Evento creado: **${event.summary}**, ${formatCalendarTime(event.startIso, work.timezone)}. Google confirmó el evento.`
+    : `Event created: **${event.summary}**, ${formatCalendarTime(event.startIso, work.timezone)}. Google confirmed the event.` };
+}
+
+async function runDriveTurn(
+  session: CustomerZeroSession,
+  message: string,
+  isEs: boolean,
+): Promise<{ reply: string; sourceText?: string; title?: string }> {
+  const identity = await findOperationalGoogleIdentityForOrg(session.organizationId, "drive.search");
+  if (!identity) return { reply: isEs
+    ? "Drive todavía no está activado. Puedes dar acceso a Drive desde Conexiones."
+    : "Drive is not activated yet. You can give Drive access from Connections." };
+  const query = extractDriveQuery(message);
+  const adapter = new GoogleDriveAdapter({ organizationId: session.organizationId, userId: identity.userId });
+  const found = await adapter.searchFiles({ query, pageSize: 10 });
+  if (!found.success) return { reply: driveFailure(found.message, isEs) };
+  const files = found.value ?? [];
+  if (!files.length) return { reply: isEs ? `No he encontrado documentos relacionados con «${query}».` : `I found no documents related to “${query}”.` };
+  const first = files[0]!;
+  const read = await adapter.readFile({ fileId: first.id });
+  if (!read.success) return { reply: `${formatDriveList(files, isEs)}\n\n${driveFailure(read.message, isEs)}` };
+  const preview = read.value?.preview;
+  const content = preview ? preview.slice(0, 4000) : "";
+  return {
+    reply: `${formatDriveList(files, isEs)}\n\n${isEs ? `Esto es lo que he podido leer de «${first.name}»:\n\n${content || "El archivo está localizado, pero no contiene texto extraíble en este formato."}` : `Here is what I could read from “${first.name}”:\n\n${content || "The file is located, but this format has no extractable text."}`}`,
+    ...(content ? { sourceText: content, title: first.name } : {}),
+  };
+}
+
+function calendarRange(message: string): { start: string; end: string; timezone: string } {
+  const timezone = businessTimezone();
+  const now = new Date();
+  const base = localDateParts(now, timezone);
+  const dayOffset = /\b(ma[nñ]ana|tomorrow)\b/i.test(message) ? 1 : 0;
+  const startDay = addLocalDays(base, dayOffset);
+  const isWeek = /\b(semana|week)\b/i.test(message);
+  const start = zonedDate(startDay, 0, 0, timezone);
+  const end = isWeek ? zonedDate(addLocalDays(startDay, 7), 23, 59, timezone) : zonedDate(addLocalDays(startDay, 1), 0, 0, timezone);
+  return { start: start.toISOString(), end: end.toISOString(), timezone };
+}
+
+function parseCalendarProposal(message: string): null | { summary: string; startIso: string; endIso: string; timezone: string; attendees: readonly string[] } {
+  const time = message.match(/\b(?:a\s+las|las|at)\s+(\d{1,2})(?::(\d{2}))?\b/i);
+  if (!time) return null;
+  const timezone = businessTimezone();
+  const base = localDateParts(new Date(), timezone);
+  const date = addLocalDays(base, /\b(ma[nñ]ana|tomorrow)\b/i.test(message) ? 1 : 0);
+  const hour = Number(time[1]);
+  const minute = Number(time[2] ?? 0);
+  const start = zonedDate(date, hour, minute, timezone);
+  const duration = message.match(/(\d+)\s*(?:minutos?|minutes?)/i);
+  const end = new Date(start.getTime() + Number(duration?.[1] ?? 30) * 60_000);
+  const attendees = Array.from(message.matchAll(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g), (match) => match[0]!);
+  const summary = message.match(/\b(?:con|with)\s+([^,.;]+?)(?:\s+(?:ma[nñ]ana|tomorrow|a\s+las|las|at)\b|$)/i)?.[1]?.trim() || "Reunión";
+  return { summary: summary.slice(0, 160), startIso: start.toISOString(), endIso: end.toISOString(), timezone, attendees };
+}
+
+function businessTimezone(): string {
+  // Customer Zero's existing organization/departments default is
+  // Europe/Madrid. Prefer an explicit deployment setting and never inherit
+  // Railway's process UTC implicitly.
+  return (process.env["DEPARTIFY_TIMEZONE"] ?? "Europe/Madrid").trim() || "Europe/Madrid";
+}
+
+function localDateParts(date: Date, timezone: string): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
+  return { year: Number(parts.find((part) => part.type === "year")?.value), month: Number(parts.find((part) => part.type === "month")?.value), day: Number(parts.find((part) => part.type === "day")?.value) };
+}
+
+function addLocalDays(value: { year: number; month: number; day: number }, days: number): { year: number; month: number; day: number } {
+  const date = new Date(Date.UTC(value.year, value.month - 1, value.day + days));
+  return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate() };
+}
+
+function zonedDate(value: { year: number; month: number; day: number }, hour: number, minute: number, timezone: string): Date {
+  const candidate = Date.UTC(value.year, value.month - 1, value.day, hour, minute);
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).formatToParts(new Date(candidate));
+  const represented = Date.UTC(Number(parts.find((part) => part.type === "year")?.value), Number(parts.find((part) => part.type === "month")?.value) - 1, Number(parts.find((part) => part.type === "day")?.value), Number(parts.find((part) => part.type === "hour")?.value), Number(parts.find((part) => part.type === "minute")?.value));
+  return new Date(candidate - (represented - candidate));
+}
+
+function formatCalendarTime(iso: string, timezone: string): string {
+  return new Intl.DateTimeFormat("es-ES", { timeZone: timezone, dateStyle: "short", timeStyle: "short" }).format(new Date(iso));
+}
+
+function calendarFailure(message: string | undefined, isEs: boolean): string {
+  return isEs ? `No he podido consultar Calendar ahora mismo${message ? `: ${message}` : "."}` : `I could not query Calendar right now${message ? `: ${message}` : "."}`;
+}
+
+function extractDriveQuery(message: string): string {
+  return message.replace(/.*?\b(?:sobre|acerca de|de|about|for|relacionados? con)\b\s*/i, "").replace(/\b(en|in)\s+(drive|google\s+drive)\b/i, "").replace(/[¿?!.]/g, "").trim() || "documento";
+}
+
+function formatDriveList(files: readonly { name: string; modifiedTime: string }[], isEs: boolean): string {
+  const lines = files.slice(0, 5).map((file) => `• ${file.name}${file.modifiedTime ? ` — ${new Date(file.modifiedTime).toLocaleDateString(isEs ? "es-ES" : "en-US")}` : ""}`);
+  return isEs ? `He encontrado estos documentos:\n\n${lines.join("\n")}` : `I found these documents:\n\n${lines.join("\n")}`;
+}
+
+function driveFailure(message: string | undefined, isEs: boolean): string {
+  return isEs ? `No he podido consultar Drive${message ? `: ${message}` : "."}` : `I could not query Drive${message ? `: ${message}` : "."}`;
+}
+
 /**
  * Customer Zero Email P0 — the multi-turn email pipeline.
  *
@@ -3500,10 +3786,7 @@ async function runGmailRead(
   // path. The durable store is keyed by (org, user); we pick the
   // first operational row for the org. The adapter itself uses
   // getTokens() which queries the durable store.
-  const summaries = await getGoogleTokenStore().listForOrg(organizationId);
-  const target = summaries.find(
-    (s) => s.hasRefreshToken && s.operationalVerifiedAt,
-  );
+  const target = await findOperationalGoogleIdentityForOrg(organizationId, "email.read");
   if (!target) return null;
   const adapter = new GmailAdapter(
     { organizationId, userId: target.userId },
@@ -3566,7 +3849,6 @@ async function buildCatalogConnectionViews(
   locale: SupportedLocale,
 ): Promise<ToolConnectionView[]> {
   const connected = session.state.connections;
-  const googleOperational = await googleOperationalFor(session.organizationId);
   return TOOL_CATALOG.map((tool) => {
     const connection = connected.get(tool.id);
     const category = locale === "en" ? tool.categoryEn : tool.categoryEs;
@@ -3583,24 +3865,9 @@ async function buildCatalogConnectionViews(
         action: "prepare",
       };
     }
-    let lifecycle: ToolLifecycleStatus =
+    const lifecycle: ToolLifecycleStatus =
       connection.lifecycle ??
       (connection.status === "connected" ? "connected" : "needs_connection");
-    const googleToolIds = new Set([
-      "gmail",
-      "google_workspace",
-      "google_calendar",
-      "google_drive",
-    ]);
-    if (
-      googleToolIds.has(tool.id) &&
-      googleOperational &&
-      lifecycle !== "connected"
-    ) {
-      // Promote from needs_connection to connected because the
-      // durable refresh-token row is operational.
-      lifecycle = "connected";
-    }
     // Semantic consistency: a tool with no implemented connector can never be
     // "needs_connection" (the CEO has no mechanism to connect it). It is
     // SELECTED. CONNECTED/CONFIGURED are kept as-is defensively.
@@ -3625,30 +3892,10 @@ async function buildCatalogConnectionViews(
   });
 }
 
-/**
- * Cached lookup of the durable Google identity for an organization.
- * The connection card and the chat pipeline share this single
- * source of truth.
- */
-const googleOperationalCache = new Map<
-  string,
-  { operational: boolean; ts: number }
->();
-async function googleOperationalFor(
-  organizationId: string,
-): Promise<boolean> {
-  const cached = googleOperationalCache.get(organizationId);
-  if (cached && Date.now() - cached.ts < 5_000) return cached.operational;
-  const operational = await hasOperationalGoogleIdentityForOrg(
-    organizationId,
-  );
-  googleOperationalCache.set(organizationId, { operational, ts: Date.now() });
-  return operational;
-}
-
 /** Test support: clears the operational-state cache between cases. */
 export function resetGoogleOperationalCacheForTest(): void {
-  googleOperationalCache.clear();
+  // Kept as a no-op for existing test callers. Durable tool state is the
+  // authority; a process-local cache must never promote a connection.
 }
 
 /** Only real actions: Mautic can verify/connect; everything else may be

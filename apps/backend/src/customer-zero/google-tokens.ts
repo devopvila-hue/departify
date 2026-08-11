@@ -44,6 +44,19 @@ export type GoogleTokenProvider =
   | "google_calendar"
   | "google_drive";
 
+/** OAuth scopes required by the business capabilities we expose. */
+export const GOOGLE_CAPABILITY_SCOPES = {
+  "email.read": ["https://www.googleapis.com/auth/gmail.readonly"],
+  "email.compose": ["https://www.googleapis.com/auth/gmail.compose"],
+  "email.send": ["https://www.googleapis.com/auth/gmail.send"],
+  "calendar.read": ["https://www.googleapis.com/auth/calendar.readonly"],
+  "calendar.create": ["https://www.googleapis.com/auth/calendar.events"],
+  "drive.search": ["https://www.googleapis.com/auth/drive.readonly"],
+  "drive.read": ["https://www.googleapis.com/auth/drive.readonly"],
+} as const;
+
+export type GoogleCapability = keyof typeof GOOGLE_CAPABILITY_SCOPES;
+
 /** Persisted Google token row. NEVER serialized to the portal. */
 export interface GoogleTokenRecord {
   readonly organizationId: string;
@@ -57,6 +70,8 @@ export interface GoogleTokenRecord {
   readonly displayName: string | null;
   readonly operationalVerifiedAt: string | null;
   readonly operationalProbeError: string | null;
+  /** Capabilities covered by the last successful bounded probes. */
+  readonly operationalCapabilities?: readonly GoogleCapability[];
 }
 
 /**
@@ -75,6 +90,7 @@ export interface GoogleTokenSummary {
   readonly displayName: string | null;
   readonly operationalVerifiedAt: string | null;
   readonly operationalProbeError: string | null;
+  readonly operationalCapabilities?: readonly GoogleCapability[];
 }
 
 export interface GoogleTokenStore {
@@ -107,6 +123,9 @@ export function summarize(record: GoogleTokenRecord): GoogleTokenSummary {
     displayName: record.displayName,
     operationalVerifiedAt: record.operationalVerifiedAt,
     operationalProbeError: record.operationalProbeError,
+    ...(record.operationalCapabilities
+      ? { operationalCapabilities: record.operationalCapabilities }
+      : {}),
   };
 }
 
@@ -158,7 +177,10 @@ class InMemoryGoogleTokenStore implements GoogleTokenStore {
   }
 
   async put(record: GoogleTokenRecord): Promise<void> {
-    this.map.set(this.key(record.organizationId, record.userId), record);
+    this.map.set(this.key(record.organizationId, record.userId), {
+      ...record,
+      provider: "gmail",
+    });
   }
 
   async get(
@@ -189,6 +211,9 @@ class InMemoryGoogleTokenStore implements GoogleTokenStore {
           displayName: rec.displayName,
           operationalVerifiedAt: rec.operationalVerifiedAt,
           operationalProbeError: rec.operationalProbeError,
+          ...(rec.operationalCapabilities
+            ? { operationalCapabilities: rec.operationalCapabilities }
+            : {}),
         });
       }
     }
@@ -232,6 +257,7 @@ interface GoogleTokenRow {
   display_name: string | null;
   operational_verified_at: string | null;
   operational_probe_error: string | null;
+  operational_capabilities?: string[] | null;
   updated_at: string;
 }
 
@@ -253,13 +279,17 @@ export class SupabaseGoogleTokenStore implements GoogleTokenStore {
   }
 
   async put(record: GoogleTokenRecord): Promise<void> {
+    // The provider field is retained for backwards-compatible row decoding,
+    // but credentials are one Google identity. Never create a second row for
+    // Calendar or Drive.
+    const canonicalProvider: GoogleTokenProvider = "gmail";
     const { error } = await this.admin
       .from("google_oauth_tokens")
       .upsert(
         {
           organization_id: record.organizationId,
           user_id: record.userId,
-          provider: record.provider,
+          provider: canonicalProvider,
           access_token: record.accessToken,
           refresh_token: record.refreshToken,
           expires_at: record.expiresAt,
@@ -268,9 +298,10 @@ export class SupabaseGoogleTokenStore implements GoogleTokenStore {
           display_name: record.displayName,
           operational_verified_at: record.operationalVerifiedAt,
           operational_probe_error: record.operationalProbeError,
+          operational_capabilities: record.operationalCapabilities ?? null,
           updated_at: new Date().toISOString(),
         },
-        { onConflict: "organization_id,user_id,provider" },
+        { onConflict: "organization_id,user_id" },
       );
     if (error) throw error;
   }
@@ -302,6 +333,9 @@ export class SupabaseGoogleTokenStore implements GoogleTokenStore {
       displayName: row.display_name,
       operationalVerifiedAt: row.operational_verified_at,
       operationalProbeError: row.operational_probe_error,
+      ...(row.operational_capabilities
+        ? { operationalCapabilities: row.operational_capabilities as GoogleCapability[] }
+        : {}),
     };
   }
 
@@ -335,6 +369,9 @@ export class SupabaseGoogleTokenStore implements GoogleTokenStore {
         displayName: r.display_name,
         operationalVerifiedAt: r.operational_verified_at,
         operationalProbeError: r.operational_probe_error,
+        ...(r.operational_capabilities
+          ? { operationalCapabilities: r.operational_capabilities as GoogleCapability[] }
+          : {}),
       };
     });
   }
@@ -358,7 +395,7 @@ export class SupabaseGoogleTokenStore implements GoogleTokenStore {
  */
 const GOOGLE_CALL_TIMEOUT_MS = 15_000;
 
-function googleFetch(
+export function googleApiFetch(
   url: string,
   init: RequestInit = {},
   timeoutMs = GOOGLE_CALL_TIMEOUT_MS,
@@ -387,7 +424,7 @@ export interface RefreshOutput {
 export async function refreshGoogleToken(
   input: RefreshInput,
 ): Promise<RefreshOutput> {
-  const response = await googleFetch("https://oauth2.googleapis.com/token", {
+  const response = await googleApiFetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -496,9 +533,13 @@ export function mergeTokenExchange(input: MergeInput): MergeOutput {
   // If Google did not return scopes (unusual), fall back to whatever
   // was granted previously. If nothing, leave the granted-scopes list
   // empty — the capability surface will reflect that honestly.
-  const scopes = grantedScopes.length > 0
-    ? grantedScopes
-    : [...input.previousScopes];
+  // Incremental consent must never remove an already granted capability. In
+  // practice Google usually returns the union, but preserving the union here
+  // also keeps the invariant true for providers/test doubles that omit it.
+  const scopes = Array.from(new Set([
+    ...input.previousScopes,
+    ...grantedScopes.map(normalizeGoogleScope),
+  ]));
   return {
     accessToken: input.exchange.access_token,
     refreshToken,
@@ -506,6 +547,18 @@ export function mergeTokenExchange(input: MergeInput): MergeOutput {
     scopes,
     hasRefreshToken: Boolean(refreshToken),
   };
+}
+
+function normalizeGoogleScope(scope: string): string {
+  const aliases: Readonly<Record<string, string>> = {
+    "gmail.readonly": "https://www.googleapis.com/auth/gmail.readonly",
+    "gmail.compose": "https://www.googleapis.com/auth/gmail.compose",
+    "gmail.send": "https://www.googleapis.com/auth/gmail.send",
+    "calendar.readonly": "https://www.googleapis.com/auth/calendar.readonly",
+    "calendar.events": "https://www.googleapis.com/auth/calendar.events",
+    "drive.readonly": "https://www.googleapis.com/auth/drive.readonly",
+  };
+  return aliases[scope] ?? scope;
 }
 
 /* ----------------------------------------------------------------------------
@@ -562,6 +615,41 @@ export async function probeGmailOperational(
       operational: false,
       verifiedAt: now,
       error,
+    };
+  }
+}
+
+/** Bounded generic Google probe used by incremental Calendar/Drive consent. */
+export async function probeGoogleOperational(
+  accessToken: string,
+  scopes: readonly string[],
+  fetchImpl: typeof fetch = fetch,
+  focus: GoogleTokenProvider = "gmail",
+): Promise<GmailOperationalProbeResult> {
+  if (focus === "gmail" && scopes.includes("https://www.googleapis.com/auth/gmail.readonly")) {
+    return probeGmailOperational(accessToken, fetchImpl);
+  }
+  const now = new Date().toISOString();
+  const calendar = focus === "google_calendar" ||
+    (focus === "gmail" && (scopes.includes("https://www.googleapis.com/auth/calendar.readonly") ||
+      scopes.includes("https://www.googleapis.com/auth/calendar.events")));
+  const url = calendar
+    ? "https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=1&singleEvents=true"
+    : "https://www.googleapis.com/drive/v3/files?pageSize=1&fields=files(id)";
+  try {
+    const response = await fetchImpl(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(GOOGLE_CALL_TIMEOUT_MS),
+    });
+    return response.ok
+      ? { operational: true, verifiedAt: now, error: null }
+      : { operational: false, verifiedAt: now, error: `google_probe_${response.status}` };
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : "unknown";
+    return {
+      operational: false,
+      verifiedAt: now,
+      error: /abor|timeout/i.test(message) ? "google_probe_timeout" : message,
     };
   }
 }
@@ -663,7 +751,7 @@ export async function validateOAuthState(
 async function fetchGoogleIdentity(
   accessToken: string,
 ): Promise<{ email: string; displayName: string }> {
-  const response = await googleFetch(
+  const response = await googleApiFetch(
     "https://www.googleapis.com/oauth2/v2/userinfo",
     { headers: { Authorization: `Bearer ${accessToken}` } },
   );
@@ -708,7 +796,7 @@ export async function completeGoogleOAuthCallback(
   checkpoint("google_oauth_state_valid", { organizationId: input.organizationId });
 
   // 2. Code exchange (bounded — never hang the callback request).
-  const tokenResponse = await googleFetch("https://oauth2.googleapis.com/token", {
+  const tokenResponse = await googleApiFetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -778,9 +866,11 @@ export async function completeGoogleOAuthCallback(
   // here does not silently flip the connection to "operational".
   // A failed probe still persists the token; the connection card
   // surfaces a recovery action instead.
-  const probe = await probeGmailOperational(
+  const probe = await probeGoogleOperational(
     merged.accessToken,
+    merged.scopes,
     input.probeFetcher,
+    input.provider,
   );
   checkpoint(
     probe.operational
@@ -793,7 +883,7 @@ export async function completeGoogleOAuthCallback(
   const record: GoogleTokenRecord = {
     organizationId: input.organizationId,
     userId: input.userId,
-    provider: input.provider,
+    provider: "gmail",
     accessToken: merged.accessToken,
     refreshToken: merged.refreshToken,
     expiresAt: merged.expiresAt,
@@ -802,6 +892,22 @@ export async function completeGoogleOAuthCallback(
     displayName: identity.displayName,
     operationalVerifiedAt: probe.operational ? probe.verifiedAt : null,
     operationalProbeError: probe.operational ? null : probe.error,
+    ...(probe.operational
+      ? {
+          operationalCapabilities: Array.from(new Set([
+            ...(previous?.operationalCapabilities ?? []),
+            ...(input.provider === "gmail"
+              ? ["email.read" as GoogleCapability]
+              : input.provider === "google_calendar"
+                ? ["calendar.read" as GoogleCapability]
+                : input.provider === "google_drive" || input.provider === "google_workspace"
+                  ? ["drive.search" as GoogleCapability, "drive.read" as GoogleCapability]
+                  : []),
+          ])),
+        }
+      : previous?.operationalCapabilities
+        ? { operationalCapabilities: previous.operationalCapabilities }
+        : {}),
   };
   await store.put(record);
   checkpoint("google_oauth_credential_persisted", {
@@ -819,7 +925,7 @@ export async function completeGoogleOAuthCallback(
       reread &&
         reread.organizationId === input.organizationId &&
         reread.userId === input.userId &&
-        reread.provider === input.provider &&
+        reread.provider === "gmail" &&
         reread.accessToken === merged.accessToken,
     );
   } catch {
@@ -918,6 +1024,34 @@ export function gmailCapabilitiesFromScopes(
   return Array.from(out);
 }
 
+export function hasGoogleCapability(
+  scopes: readonly string[],
+  capability: GoogleCapability,
+): boolean {
+  return GOOGLE_CAPABILITY_SCOPES[capability].every((scope) => scopes.includes(scope));
+}
+
+export function hasOperationalGoogleCapability(
+  summary: Pick<GoogleTokenSummary, "hasRefreshToken" | "operationalVerifiedAt" | "scopes" | "operationalCapabilities">,
+  capability: GoogleCapability,
+): boolean {
+  if (!summary.hasRefreshToken || !summary.operationalVerifiedAt) return false;
+  if (!hasGoogleCapability(summary.scopes, capability)) return false;
+  // Older durable rows only have a Gmail probe. Keep Gmail capabilities
+  // compatible when their granted scopes were present; Calendar and Drive
+  // still need explicit evidence from their own probe.
+  return summary.operationalCapabilities
+    ? summary.operationalCapabilities.includes(capability)
+    : capability.startsWith("email.");
+}
+
+export function googleCapabilitiesFromScopes(
+  scopes: readonly string[],
+): readonly GoogleCapability[] {
+  return (Object.keys(GOOGLE_CAPABILITY_SCOPES) as GoogleCapability[]).filter((capability) =>
+    hasGoogleCapability(scopes, capability),
+  );
+}
+
 
 export type { GmailTokens };
-

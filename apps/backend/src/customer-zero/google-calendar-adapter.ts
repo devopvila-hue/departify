@@ -15,6 +15,12 @@
  */
 
 import { gmailTokenStore } from "./gmail-adapter.js";
+import {
+  getGoogleTokenStore,
+  googleApiFetch,
+  hasGrantedScope,
+  refreshGoogleToken,
+} from "./google-tokens.js";
 
 /* ----------------------------------------------------------------------------
  * Normalized types.
@@ -73,7 +79,36 @@ function fail<T>(
 export class GoogleCalendarAdapter {
   constructor(private readonly input: CalendarAdapterInput) {}
 
-  private async getAccessToken(): Promise<string | null> {
+  private async getAccessToken(requiredScope?: string): Promise<string | null> {
+    const durable = await getGoogleTokenStore().get(
+      this.input.organizationId,
+      this.input.userId,
+    );
+    if (durable) {
+      if (requiredScope && !hasGrantedScope(durable.scopes, requiredScope)) return null;
+      if (new Date(durable.expiresAt).getTime() - 60_000 > Date.now()) {
+        return durable.accessToken;
+      }
+      if (!durable.refreshToken) return null;
+      try {
+        const next = await refreshGoogleToken({
+          refreshToken: durable.refreshToken,
+          clientId: process.env["GOOGLE_OAUTH_CLIENT_ID"] ?? "",
+          clientSecret: process.env["GOOGLE_OAUTH_CLIENT_SECRET"] ?? "",
+        });
+        await getGoogleTokenStore().put({
+          ...durable,
+          accessToken: next.accessToken,
+          expiresAt: next.expiresAt,
+          scopes: Array.from(new Set([...durable.scopes, ...next.scopes])),
+        });
+        return next.accessToken;
+      } catch {
+        return null;
+      }
+    }
+    // Legacy in-memory fallback is retained for deterministic unit tests and
+    // local development. Production always has the durable row above.
     const tokens = gmailTokenStore.get(this.input.organizationId, this.input.userId);
     if (!tokens) return null;
     if (new Date(tokens.expiresAt).getTime() - 60_000 > Date.now()) {
@@ -94,7 +129,9 @@ export class GoogleCalendarAdapter {
     readonly timeMaxIso: string;
     readonly maxResults?: number;
   }): Promise<CalendarAdapterResult<readonly CalendarEvent[]>> {
-    const accessToken = await this.getAccessToken();
+    const accessToken = await this.getAccessToken(
+      "https://www.googleapis.com/auth/calendar.readonly",
+    );
     if (!accessToken) return fail("Google no está conectado.", "auth");
     const params = new URLSearchParams({
       timeMin: input.timeMinIso,
@@ -103,7 +140,7 @@ export class GoogleCalendarAdapter {
       orderBy: "startTime",
       maxResults: String(input.maxResults ?? 25),
     });
-    const response = await fetch(
+    const response = await googleApiFetch(
       `https://www.googleapis.com/calendar/v3/calendars/primary/events?${params.toString()}`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
@@ -137,10 +174,12 @@ export class GoogleCalendarAdapter {
   }
 
   async getEvent(eventId: string): Promise<CalendarAdapterResult<CalendarEvent>> {
-    const accessToken = await this.getAccessToken();
+    const accessToken = await this.getAccessToken(
+      "https://www.googleapis.com/auth/calendar.readonly",
+    );
     if (!accessToken) return fail("Google no está conectado.", "auth");
     if (!eventId) return fail("ID de evento vacío.", "invalid_response");
-    const response = await fetch(
+    const response = await googleApiFetch(
       `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
@@ -154,7 +193,9 @@ export class GoogleCalendarAdapter {
   async createEvent(
     input: CreateEventInput,
   ): Promise<CalendarAdapterResult<CalendarEvent>> {
-    const accessToken = await this.getAccessToken();
+    const accessToken = await this.getAccessToken(
+      "https://www.googleapis.com/auth/calendar.events",
+    );
     if (!accessToken) return fail("Google no está conectado.", "auth");
     const body: Record<string, unknown> = {
       summary: input.summary.slice(0, 998),
@@ -169,7 +210,7 @@ export class GoogleCalendarAdapter {
     if (input.businessIntent) {
       body.extendedProperties = { private: { businessIntent: input.businessIntent } };
     }
-    const response = await fetch(
+    const response = await googleApiFetch(
       "https://www.googleapis.com/calendar/v3/calendars/primary/events",
       {
         method: "POST",
@@ -191,7 +232,9 @@ export class GoogleCalendarAdapter {
     eventId: string,
     patch: Partial<CreateEventInput>,
   ): Promise<CalendarAdapterResult<CalendarEvent>> {
-    const accessToken = await this.getAccessToken();
+    const accessToken = await this.getAccessToken(
+      "https://www.googleapis.com/auth/calendar.events",
+    );
     if (!accessToken) return fail("Google no está conectado.", "auth");
     if (!eventId) return fail("ID de evento vacío.", "invalid_response");
     const body: Record<string, unknown> = {};
@@ -201,7 +244,7 @@ export class GoogleCalendarAdapter {
     if (patch.startIso) body.start = { dateTime: patch.startIso };
     if (patch.endIso) body.end = { dateTime: patch.endIso };
     if (patch.attendees) body.attendees = patch.attendees.map((email) => ({ email }));
-    const response = await fetch(
+    const response = await googleApiFetch(
       `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}`,
       {
         method: "PATCH",
@@ -286,7 +329,7 @@ async function refreshGoogleAccessToken(
   if (!clientId || !clientSecret) {
     throw new Error("Google OAuth client credentials not configured");
   }
-  const response = await fetch("https://oauth2.googleapis.com/token", {
+  const response = await googleApiFetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({

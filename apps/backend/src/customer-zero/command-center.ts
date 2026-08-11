@@ -174,6 +174,10 @@ export interface RoutingDecision {
     | "direct_response"
     | "delegate_marketing"
     | "email_action"
+    | "calendar_read"
+    | "calendar_create"
+    | "drive_query"
+    | "multi_capability"
     | "request_approval"
     | "request_connection"
     | "explain_work"
@@ -285,6 +289,27 @@ const ROUTING_RULES: readonly RoutingRule[] = [
     rationale:
       "The CEO is asking to send/compose an email — an email capability action, never a generic marketing chat turn.",
     match: (input) => isEmailSendRequest(input.message),
+  },
+  {
+    intent: "multi_capability",
+    rationale:
+      "The request combines Google business information sources or a source lookup with a follow-up action.",
+    match: (input) => isMultiCapabilityRequest(input.message),
+  },
+  {
+    intent: "calendar_create",
+    rationale: "The CEO is asking to create a calendar event; this is an approval-gated Google action.",
+    match: (input) => isCalendarCreateRequest(input.message),
+  },
+  {
+    intent: "calendar_read",
+    rationale: "The CEO is asking about meetings, calendar entries, or availability.",
+    match: (input) => isCalendarReadRequest(input.message),
+  },
+  {
+    intent: "drive_query",
+    rationale: "The CEO is asking to find or read a Drive document.",
+    match: (input) => isDriveRequest(input.message),
   },
   {
     intent: "external_tool_query",
@@ -604,6 +629,22 @@ function buildRuleOutcome(
           input.locale,
           "Voy a preparar el correo. Dame un momento.",
           "I'll prepare the email. Give me a moment.",
+        ),
+      };
+    case "calendar_read":
+    case "calendar_create":
+    case "drive_query":
+    case "multi_capability":
+      return {
+        decision: {
+          intent: rule.intent,
+          departments: [],
+          rationale: rule.rationale,
+        },
+        reply: t(
+          input.locale,
+          "Voy a consultar tus herramientas de Google.",
+          "I’ll check your Google tools.",
         ),
       };
     case "external_tool_query":
@@ -996,6 +1037,32 @@ export function isEmailReadQuestion(message: string): boolean {
   return /\b(cu[aá]l(?:es)?\s+deber[ií]a(?:mos|s)?\s+(contestar|responder)|contestar(?:los)?\s+primero|responder(?:los)?\s+primero)\b/i.test(
     lower,
   );
+}
+
+export function isCalendarReadRequest(message: string): boolean {
+  if (/\bqu[eé]\s+tengo\s+(hoy|ma[nñ]ana|esta\s+semana|this\s+week|tomorrow|today)\b/i.test(message)) return true;
+  return /\b(calendar|calendario|reuni[oó]n|reuniones|cita|hueco|disponible|agenda)\b/i.test(message) &&
+    /\b(qu[eé]|qu[eé]\s+tengo|hoy|ma[nñ]ana|semana|pr[oó]xima|siguiente|hueco|disponible|cu[aá]ndo|when|today|tomorrow|this week|next meeting)\b/i.test(message);
+}
+
+export function isCalendarCreateRequest(message: string): boolean {
+  return /\b(agenda|agendar|a[nñ]ade|a[nñ]adir|crea|crear|pon|poner|programa|programar|schedule|book)\b/i.test(message) &&
+    /\b(reuni[oó]n|evento|cita|meeting|event)\b/i.test(message);
+}
+
+export function isDriveRequest(message: string): boolean {
+  const hasSource = /\b(drive|documento|documentos|archivo|archivos|plan\s+de\s+marketing|google\s+docs?)\b/i.test(message);
+  const hasAction = /\b(busca|buscar|encuentra|encontrar|lee|leer|dice|informaci[oó]n|reciente?s?|recent|search|find|read|what does)\b/i.test(message);
+  return hasSource && hasAction;
+}
+
+export function isMultiCapabilityRequest(message: string): boolean {
+  const lower = message.toLowerCase();
+  const email = /\b(correo|correo\s+de|email|gmail|mail)\b/i.test(lower);
+  const calendar = /\b(calendar|calendario|reuni[oó]n|reuniones|cita|meeting)\b/i.test(lower);
+  const drive = /\b(drive|documento|documentos|archivo|plan\s+de\s+marketing)\b/i.test(lower);
+  return (email && calendar) ||
+    (drive && /\b(prepara|preparar|escribe|redacta|env[ií]a|correo|email)\b/i.test(lower));
 }
 
 /**

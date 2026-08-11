@@ -156,7 +156,6 @@ export function normalizeReplyForChat(reply: string): string {
   // portal ever allows HTML rendering by accident. Today's renderer
   // uses textContent — this is a belt-and-braces guard.
   normalized = normalized
-    .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
   // Defensive: revert over-escape on the asterisks we already

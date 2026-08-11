@@ -28,7 +28,12 @@
  * model context.
  */
 
-import { getGoogleTokenStore, type GoogleTokenSummary } from "./google-tokens.js";
+import {
+  getGoogleTokenStore,
+  hasOperationalGoogleCapability,
+  type GoogleCapability,
+  type GoogleTokenSummary,
+} from "./google-tokens.js";
 
 export type CredentialProvider = "mautic" | "gmail" | "resend" | "google";
 
@@ -270,6 +275,37 @@ export async function hasOperationalGoogleIdentityForOrg(
     if (s.hasRefreshToken && s.operationalVerifiedAt) return true;
   }
   return false;
+}
+
+/**
+ * Capability-specific operational truth. A Gmail probe does not make
+ * Calendar or Drive available: the required granted scope and the durable
+ * operational probe must both be present.
+ */
+export async function hasOperationalGoogleCapabilityForOrg(
+  organizationId: string,
+  capability: GoogleCapability,
+): Promise<boolean> {
+  const summaries = await getGoogleTokenStore().listForOrg(organizationId);
+  return summaries.some(
+    (summary) =>
+      summary.hasRefreshToken &&
+      Boolean(summary.operationalVerifiedAt) &&
+      hasOperationalGoogleCapability(summary, capability),
+  );
+}
+
+export async function findOperationalGoogleIdentityForOrg(
+  organizationId: string,
+  capability: GoogleCapability,
+): Promise<GoogleTokenSummary | null> {
+  const summaries = await getGoogleTokenStore().listForOrg(organizationId);
+  return summaries.find(
+    (summary) =>
+      summary.hasRefreshToken &&
+      Boolean(summary.operationalVerifiedAt) &&
+      hasOperationalGoogleCapability(summary, capability),
+  ) ?? null;
 }
 
 /** True when the org has at least one persisted Google token row. */
