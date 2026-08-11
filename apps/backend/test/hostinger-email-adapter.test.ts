@@ -6,6 +6,7 @@ import {
 } from "../src/customer-zero/hostinger-email-adapter.js";
 import { InboxSync } from "../src/customer-zero/inbox-sync.js";
 import { InMemoryInboxStore } from "../src/customer-zero/inbox-domain.js";
+import { GmailAdapter, gmailTokenStore } from "../src/customer-zero/gmail-adapter.js";
 
 function jsonResponse(body: unknown, sessionId?: string): Response {
   const headers = new Headers({ "content-type": "application/json" });
@@ -83,6 +84,57 @@ describe("Hostinger Email MCP adapter", () => {
       "tools/call",
     ]);
     expect(JSON.stringify(calls)).not.toContain("secret-token");
+  });
+
+  it("uses Hostinger's discovered API proxy tools for real mailbox reads", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        method?: string;
+        params?: { name?: string; arguments?: { path?: string } };
+      };
+      if (body.method === "initialize") return jsonResponse({ result: {} }, "session-api");
+      if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+      if (body.method === "tools/list") {
+        return jsonResponse({ result: { tools: [
+          { name: "email_api_docs", description: "Return API documentation", inputSchema: { type: "object", properties: {} } },
+          { name: "email_call_api_read", description: "Read from the Hostinger Email API", inputSchema: { type: "object", properties: { method: {}, path: {}, path_params: {}, query_params: {}, body: {}, headers: {} }, required: ["method", "path"] } },
+          { name: "email_call_api_write", description: "Create or modify through the Hostinger Email API", inputSchema: { type: "object", properties: { method: {}, path: {}, path_params: {}, query_params: {}, body: {}, headers: {} }, required: ["method", "path"] } },
+          { name: "email_call_api_delete", description: "Delete through the Hostinger Email API", inputSchema: { type: "object", properties: { method: {}, path: {} }, required: ["method", "path"] } },
+          { name: "email_list_operations", description: "List available email operations", inputSchema: { type: "object", properties: {} } },
+          { name: "email_describe_operation", description: "Describe an email operation", inputSchema: { type: "object", properties: {} } },
+        ] } });
+      }
+      if (body.method === "tools/call" && body.params?.name === "email_call_api_read") {
+        const path = body.params.arguments?.path ?? "";
+        if (path === "/api/v1/me") {
+          return jsonResponse({ result: { content: [{ type: "text", text: JSON.stringify({ status: 200, body: { data: { mailboxes: [{ resourceId: "AC1", address: "ventas@empresa.com" }] } } }) }] } });
+        }
+        return jsonResponse({ result: { content: [{ type: "text", text: JSON.stringify({ status: 200, body: { data: [{ uid: 42, path: "INBOX", date: "2026-08-11T12:00:00.000Z", flags: ["\\Flagged"], unseen: true, subject: "Consulta", from: { address: "cliente@empresa.com", name: "Cliente" }, to: [], cc: [], messageId: "<host-42@example.com>" }], pagination: { total: 1 } } }) }] } });
+      }
+      if (body.method === "tools/call" && body.params?.name === "email_call_api_write") {
+        return jsonResponse({ result: { content: [{ type: "text", text: JSON.stringify({ status: 200, body: { data: [{ uid: 42, path: "INBOX", date: "2026-08-11T12:00:00.000Z", flags: [], unseen: true, subject: "Consulta", from: { address: "cliente@empresa.com", name: "Cliente" }, to: [], cc: [], messageId: "<host-42@example.com>" }] } }) }] } });
+      }
+      throw new Error(`unexpected MCP call: ${String(body.method)} ${String(body.params?.name)}`);
+    }) as unknown as typeof fetch;
+    const adapter = new HostingerEmailAdapter({ token: "secret-token", fetchImpl });
+    const mapping = await adapter.discover();
+    expect(mapping.capabilities).toMatchObject({
+      "email.read": "email_call_api_read",
+      "email.search": "email_call_api_write",
+      "email.mailboxes.list": "email_call_api_read",
+    });
+    expect(mapping.capabilities["email.send"]).toBeUndefined();
+    await expect(adapter.listMailboxes()).resolves.toEqual(["ventas@empresa.com"]);
+    await expect(adapter.readRecentMessages(5)).resolves.toMatchObject([{
+      providerMessageId: "<host-42@example.com>",
+      mailbox: "ventas@empresa.com",
+      unread: true,
+      flagged: true,
+    }]);
+    await expect(adapter.searchMessages("consulta", 5)).resolves.toMatchObject([{
+      providerMessageId: "<host-42@example.com>",
+      mailbox: "ventas@empresa.com",
+    }]);
   });
 
   it("maps only capabilities represented by discovered tools", () => {
@@ -168,5 +220,61 @@ describe("Hostinger Email MCP adapter", () => {
     const items = await store.list({ organizationId: "org-hostinger" });
     expect(items[0]).toMatchObject({ source: "hostinger", sourceMessageId: "host-inbox-1", subject: "Consulta de precio" });
     delete process.env.HOSTINGER_EMAIL_MCP_TOKEN;
+  });
+
+  it("syncs Gmail and Hostinger together and preserves Gmail when Hostinger fails", async () => {
+    process.env.HOSTINGER_EMAIL_MCP_TOKEN = "secret-token";
+    gmailTokenStore.put("org-both", "ceo-both", {
+      accessToken: "gmail-access",
+      refreshToken: "gmail-refresh",
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      scopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+      email: "ceo@example.com",
+      displayName: "CEO",
+    });
+    vi.spyOn(HostingerEmailAdapter.prototype, "verify").mockResolvedValue({
+      tools: [],
+      capabilities: { "email.read": "email_call_api_read" },
+    });
+    vi.spyOn(HostingerEmailAdapter.prototype, "readRecentMessages").mockResolvedValue([{
+      provider: "hostinger",
+      providerMessageId: "host-1",
+      from: { email: "cliente@empresa.com" },
+      to: [{ email: "ventas@empresa.com" }],
+      cc: [],
+      subject: "Hostinger message",
+      preview: "Contenido",
+      receivedAt: "2026-08-11T12:00:00.000Z",
+      unread: true,
+      flagged: false,
+    }]);
+    vi.spyOn(GmailAdapter.prototype, "searchMessages").mockResolvedValue({
+      success: true,
+      value: [{
+        id: "gmail-1",
+        threadId: "gmail-thread-1",
+        from: { email: "gmail@example.com" },
+        to: [{ email: "ceo@example.com" }],
+        subject: "Gmail message",
+        snippet: "Contenido",
+        date: "2026-08-11T12:01:00.000Z",
+        isUnread: false,
+      }],
+    });
+    const store = new InMemoryInboxStore();
+    const result = await new InboxSync(store).run({ organizationId: "org-both", userId: "ceo-both" });
+    expect(result.imported).toBe(2);
+    await expect(store.list({ organizationId: "org-both" })).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "hostinger", sourceMessageId: "host-1" }),
+      expect.objectContaining({ source: "gmail", sourceMessageId: "gmail-1" }),
+    ]));
+
+    vi.spyOn(HostingerEmailAdapter.prototype, "readRecentMessages").mockRejectedValue(new Error("provider unavailable"));
+    const resilientStore = new InMemoryInboxStore();
+    const resilient = await new InboxSync(resilientStore).run({ organizationId: "org-both", userId: "ceo-both" });
+    expect(resilient.imported).toBe(1);
+    await expect(resilientStore.list({ organizationId: "org-both" })).resolves.toEqual([
+      expect.objectContaining({ source: "gmail", sourceMessageId: "gmail-1" }),
+    ]);
   });
 });

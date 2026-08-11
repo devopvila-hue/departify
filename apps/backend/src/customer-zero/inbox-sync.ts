@@ -16,8 +16,8 @@
  */
 
 import { GmailAdapter, gmailTokenStore } from "./gmail-adapter.js";
-import { HostingerEmailAdapter, type NormalizedEmailMessage } from "./hostinger-email-adapter.js";
-import { resolveOperationalEmailProvider } from "./email-capability.js";
+import { HostingerEmailAdapter, probeHostingerEmail, type NormalizedEmailMessage } from "./hostinger-email-adapter.js";
+import { hasOperationalGoogleCapabilityForOrg } from "./credential-resolver.js";
 import {
   buildPreview,
   classifyInboxItem,
@@ -52,28 +52,38 @@ export class InboxSync {
       input.sinceIso ??
       new Date(Date.now() - DEFAULT_LOOKBACK_MS).toISOString();
     const maxResults = input.maxResults ?? 25;
-    // Production resolves from the durable capability projection. Keep the
-    // adapter's legacy in-memory fallback for isolated development/test
-    // callers that seed Gmail directly without wiring a token store.
-    const resolvedProvider = await resolveOperationalEmailProvider(input.organizationId);
-    const provider = resolvedProvider ?? (
-      gmailTokenStore.get(input.organizationId, input.userId) ? "google" : null
-    );
-    const messages: readonly (import("./gmail-adapter.js").EmailMessage | NormalizedEmailMessage)[] =
-      provider === "hostinger"
-        ? await new HostingerEmailAdapter().readRecentMessages(maxResults)
-        : provider === "google"
-          ? await this.readGmail(input, sinceIso, maxResults)
-          : [];
+    // Each provider is resolved independently. A provider outage must not
+    // hide successful messages from another connected provider.
+    const providerReads = await Promise.allSettled([
+      this.readHostinger(maxResults),
+      this.readGmailIfOperational(input, sinceIso, maxResults),
+    ]);
+    const messages: readonly {
+      readonly provider: "gmail" | "hostinger";
+      readonly message: import("./gmail-adapter.js").EmailMessage | NormalizedEmailMessage;
+    }[] = providerReads.flatMap((result, index) => {
+      const provider = index === 0 ? "hostinger" : "gmail";
+      if (result.status === "fulfilled") {
+        return result.value.map((message) => ({ provider, message }));
+      }
+      console.warn(`[inbox-sync] ${JSON.stringify({
+        event: "provider_sync_failed",
+        provider,
+        category: result.reason instanceof Error && "category" in result.reason
+          ? String((result.reason as { category?: unknown }).category ?? "provider_error")
+          : "provider_error",
+      })}`);
+      return [];
+    });
 
     let imported = 0;
     let classified = 0;
     let highImportance = 0;
-    for (const message of messages) {
+    for (const entry of messages) {
       const item = await this.normalizeAndPersist(
         input.organizationId,
-        message,
-        provider === "hostinger" ? "hostinger" : "gmail",
+        entry.message,
+        entry.provider,
       );
       if (item) {
         imported += 1;
@@ -149,5 +159,27 @@ export class InboxSync {
     );
     const search = await adapter.searchMessages(`after:${sinceIso}`, maxResults);
     return search.success && search.value ? search.value : [];
+  }
+
+  private async readGmailIfOperational(
+    input: InboxSyncInput,
+    sinceIso: string,
+    maxResults: number,
+  ): Promise<readonly import("./gmail-adapter.js").EmailMessage[]> {
+    const durableOperational = await hasOperationalGoogleCapabilityForOrg(
+      input.organizationId,
+      "email.read",
+    );
+    const legacyOperational = Boolean(gmailTokenStore.get(input.organizationId, input.userId));
+    if (!durableOperational && !legacyOperational) return [];
+    return this.readGmail(input, sinceIso, maxResults);
+  }
+
+  private async readHostinger(
+    maxResults: number,
+  ): Promise<readonly NormalizedEmailMessage[]> {
+    const status = await probeHostingerEmail();
+    if (status.state !== "connected" || !status.capabilities.includes("email.read")) return [];
+    return new HostingerEmailAdapter().readRecentMessages(maxResults);
   }
 }

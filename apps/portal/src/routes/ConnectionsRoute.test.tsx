@@ -139,4 +139,33 @@ describe("ConnectionsRoute — 5-state cards", () => {
       screen.getAllByRole("button", { name: /configurar/i }).length,
     ).toBeGreaterThanOrEqual(1);
   });
+
+  it("renders a genuinely operational Hostinger business email card", async () => {
+    mockFetch(() => ({
+      connections: [],
+      cards: [
+        {
+          id: "hostinger_email",
+          name: "Correo empresarial",
+          category: "Correo",
+          categoryId: "email",
+          logoMark: "H",
+          brandColor: "#673de6",
+          state: "connected",
+          stateLabel: "Conectado",
+          configSource: null,
+          verifiedAt: "2026-08-11T00:00:00.000Z",
+          capabilities: [],
+          actionLabel: "Comprobar conexión",
+          description: "Hostinger Email · Tu buzón de empresa.",
+        },
+      ],
+      unmappedTools: [],
+    }));
+    mount(<ConnectionsRoute />);
+
+    expect(await screen.findByText("Correo empresarial")).toBeInTheDocument();
+    expect(await screen.findByText(/Hostinger Email/)).toBeInTheDocument();
+    expect(await screen.findByText("Conectado")).toBeInTheDocument();
+  });
 });

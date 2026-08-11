@@ -7,8 +7,8 @@ import { Card, EmptyState, Badge } from "@/components/primitives";
 /**
  * Inbox — Customer Zero 03.
  *
- * Unified business intake surface. Today the inbox imports Gmail
- * messages through /api/customer-zero/:org/inbox/sync. Other
+ * Unified business intake surface. The inbox imports normalized messages
+ * from every connected email provider through /api/customer-zero/:org/inbox/sync. Other
  * channels (lead, campaign_response, form, support) share the
  * same shape and will populate this view when their adapters are
  * wired.
@@ -92,7 +92,7 @@ export function InboxRoute() {
             disabled={syncing}
             onClick={() => void sync()}
           >
-            {syncing ? "Sincronizando…" : "Sincronizar Gmail"}
+            {syncing ? "Sincronizando…" : "Sincronizar correo"}
           </button>
         </div>
       </section>
@@ -120,7 +120,7 @@ export function InboxRoute() {
         <Card>
           <EmptyState
             title="Aún no hay nada en el inbox"
-            description="Cuando lleguen mensajes importantes los verás aquí. Sincroniza Gmail para importar los recientes."
+            description="Cuando lleguen mensajes importantes los verás aquí. Sincroniza tus cuentas de correo para importar los mensajes recientes."
           />
         </Card>
       ) : (

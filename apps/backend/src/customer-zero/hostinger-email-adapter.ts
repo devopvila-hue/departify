@@ -57,6 +57,16 @@ export interface HostingerToolMapping {
   readonly tools: readonly HostingerMcpTool[];
 }
 
+interface HostingerMailbox {
+  readonly resourceId: string;
+  readonly address: string;
+}
+
+interface HostingerApiProxyResult {
+  readonly status?: number;
+  readonly body?: unknown;
+}
+
 export interface HostingerConnectionStatus {
   readonly configured: boolean;
   readonly state: "not_connected" | "connected" | "needs_attention" | "error";
@@ -107,6 +117,7 @@ export class HostingerEmailAdapter {
   private requestId = 0;
   private sessionId: string | null = null;
   private mapping: HostingerToolMapping | null = null;
+  private mailboxes: readonly HostingerMailbox[] | null = null;
 
   constructor(options?: Partial<HostingerTransportOptions>) {
     const credentials = resolveHostingerCredentials();
@@ -141,18 +152,68 @@ export class HostingerEmailAdapter {
 
   async listMailboxes(): Promise<readonly string[]> {
     const tool = await this.toolFor("email.mailboxes.list");
+    if (isApiProxyTool(tool)) {
+      return (await this.listMailboxRecords()).map((mailbox) => mailbox.address);
+    }
     const result = await this.callTool(tool, buildArguments(tool, {}));
     return extractStringList(result, ["mailboxes", "mailbox", "name", "email", "address"]);
   }
 
   async readRecentMessages(maxResults = 5): Promise<readonly NormalizedEmailMessage[]> {
     const tool = await this.toolFor("email.read", "email.search");
+    if (isApiProxyTool(tool)) {
+      const mailboxes = await this.listMailboxRecords();
+      const messages: NormalizedEmailMessage[] = [];
+      for (const mailbox of mailboxes) {
+        const response = await this.callApi(
+          tool,
+          "GET",
+          "/api/v1/mailboxes/{mailboxResourceId}/folders/{folder}/messages",
+          { mailboxResourceId: mailbox.resourceId, folder: "INBOX" },
+          { page: 1, perPage: Math.min(maxResults, 100), sort: "-uid" },
+        );
+        assertSuccessfulApiResponse(response);
+        messages.push(
+          ...normalizeMessages(apiBody(response)).map((message) => ({
+            ...message,
+            mailbox: mailbox.address,
+            folder: message.folder ?? "INBOX",
+          })),
+        );
+        if (messages.length >= maxResults) break;
+      }
+      return messages.slice(0, maxResults);
+    }
     const result = await this.callTool(tool, buildArguments(tool, { limit: maxResults, maxResults }));
     return normalizeMessages(result);
   }
 
   async searchMessages(query: string, maxResults = 5): Promise<readonly NormalizedEmailMessage[]> {
     const tool = await this.toolFor("email.search", "email.read");
+    if (isApiProxyTool(tool)) {
+      const mailboxes = await this.listMailboxRecords();
+      const messages: NormalizedEmailMessage[] = [];
+      for (const mailbox of mailboxes) {
+        const response = await this.callApi(
+          tool,
+          "POST",
+          "/api/v1/mailboxes/{mailboxResourceId}/folders/{folder}/messages/search",
+          { mailboxResourceId: mailbox.resourceId, folder: "INBOX" },
+          { page: 1, perPage: Math.min(maxResults, 100), sort: "-uid" },
+          { text: query },
+        );
+        assertSuccessfulApiResponse(response);
+        messages.push(
+          ...normalizeMessages(apiBody(response)).map((message) => ({
+            ...message,
+            mailbox: mailbox.address,
+            folder: message.folder ?? "INBOX",
+          })),
+        );
+        if (messages.length >= maxResults) break;
+      }
+      return messages.slice(0, maxResults);
+    }
     const result = await this.callTool(
       tool,
       buildArguments(tool, { query, search: query, q: query, limit: maxResults, maxResults }),
@@ -257,6 +318,44 @@ export class HostingerEmailAdapter {
     return unwrapToolResult(result);
   }
 
+  private async callApi(
+    tool: HostingerMcpTool,
+    method: "GET" | "POST",
+    path: string,
+    pathParams: Readonly<Record<string, unknown>>,
+    queryParams: Readonly<Record<string, unknown>>,
+    body?: Readonly<Record<string, unknown>>,
+  ): Promise<HostingerApiProxyResult> {
+    const result = await this.callTool(
+      tool,
+      buildArguments(tool, {
+        method,
+        path,
+        path_params: pathParams,
+        query_params: queryParams,
+        ...(body ? { body } : {}),
+      }),
+    );
+    if (!result || typeof result !== "object") {
+      throw new HostingerEmailError("MCP_TOOL_CALL_FAILED", "Hostinger devolvió una respuesta inválida.");
+    }
+    return result as HostingerApiProxyResult;
+  }
+
+  private async listMailboxRecords(): Promise<readonly HostingerMailbox[]> {
+    if (this.mailboxes) return this.mailboxes;
+    const tool = await this.toolFor("email.mailboxes.list");
+    if (!isApiProxyTool(tool)) {
+      const result = await this.callTool(tool, buildArguments(tool, {}));
+      this.mailboxes = extractMailboxes(result);
+      return this.mailboxes;
+    }
+    const response = await this.callApi(tool, "GET", "/api/v1/me", {}, {});
+    assertSuccessfulApiResponse(response);
+    this.mailboxes = extractMailboxes(apiBody(response));
+    return this.mailboxes;
+  }
+
   private async sendHttp(payload: Readonly<Record<string, unknown>>, failureCategory: HostingerErrorCategory = "MCP_CONNECTION_FAILED"): Promise<JsonRpcResponse> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), CALL_TIMEOUT_MS);
@@ -322,6 +421,16 @@ export function mapDiscoveredCapabilities(tools: readonly HostingerMcpTool[]): R
       const existing = result[capability];
       if (!existing || score > toolScore(existing, tools)) result[capability] = tool.name;
     };
+    if (tool.name === "email_call_api_read") {
+      assign("email.read", 5);
+      assign("email.mailboxes.list", 5);
+      assign("email.folders.list", 5);
+    }
+    if (tool.name === "email_call_api_write") {
+      // Hostinger's search endpoint is POST but remains read-only. The
+      // adapter sends only the discovered search operation through this proxy.
+      assign("email.search", 5);
+    }
     if (/(mailbox|mailboxes)/.test(text) && /(list|get|show|read)/.test(text)) assign("email.mailboxes.list", 4);
     if (/folder/.test(text) && /(list|get|show)/.test(text)) assign("email.folders.list", 4);
     if (/webhook/.test(text)) assign("email.webhooks.manage", 4);
@@ -332,6 +441,28 @@ export function mapDiscoveredCapabilities(tools: readonly HostingerMcpTool[]): R
     if (/\bmove\b/.test(text) && /(mail|message|email)/.test(text)) assign("email.move", 5);
     if (/(flag|star)/.test(text) && /(mail|message|email)/.test(text)) assign("email.flag", 5);
     if (/(delete|remove|trash)/.test(text) && /(mail|message|email)/.test(text)) assign("email.delete", 5);
+  }
+
+  // Hostinger's current production server exposes generic API proxy tools in
+  // addition to documentation/discovery tools. Prefer the exact proxy names
+  // over broad description matching; the latter can otherwise select a docs
+  // tool for a real operation. The adapter currently implements read/search
+  // through these proxies. Sending remains unadvertised until its 204-only
+  // provider response can be represented by a verified Departify receipt.
+  const apiRead = tools.find((tool) => tool.name === "email_call_api_read");
+  const apiWrite = tools.find((tool) => tool.name === "email_call_api_write");
+  if (apiRead) {
+    result["email.read"] = apiRead.name;
+    result["email.mailboxes.list"] = apiRead.name;
+    result["email.folders.list"] = apiRead.name;
+  }
+  if (apiWrite) {
+    result["email.search"] = apiWrite.name;
+    delete result["email.send"];
+    delete result["email.move"];
+    delete result["email.flag"];
+    delete result["email.webhooks.manage"];
+    delete result["email.delete"];
   }
   return result;
 }
@@ -435,7 +566,7 @@ function normalizeMessages(value: unknown): readonly NormalizedEmailMessage[] {
 function normalizeMessage(value: unknown): NormalizedEmailMessage | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
-  const id = extractString(record, ["providerMessageId", "messageId", "message_id", "id"]);
+  const id = extractIdentifier(record, ["providerMessageId", "messageId", "message_id", "id", "uid"]);
   if (!id) return null;
   const address = (candidate: unknown): { email: string; displayName?: string } => {
     if (typeof candidate === "string") return { email: candidate };
@@ -459,9 +590,57 @@ function normalizeMessage(value: unknown): NormalizedEmailMessage | null {
     preview: extractString(record, ["preview", "snippet", "body", "text"]) ?? "",
     receivedAt: extractString(record, ["receivedAt", "received_at", "date", "timestamp"]) ?? new Date().toISOString(),
     ...(extractString(record, ["sentAt", "sent_at"]) ? { sentAt: extractString(record, ["sentAt", "sent_at"])! } : {}),
-    unread: Boolean(record.unread ?? record.isUnread ?? record.is_unread),
-    flagged: Boolean(record.flagged ?? record.isFlagged ?? record.is_flagged),
+    unread: Boolean(record.unread ?? record.isUnread ?? record.is_unread ?? record.unseen),
+    flagged: Boolean(record.flagged ?? record.isFlagged ?? record.is_flagged ?? (Array.isArray(record.flags) && record.flags.includes("\\Flagged"))),
   };
+}
+
+function isApiProxyTool(tool: HostingerMcpTool): boolean {
+  return tool.name === "email_call_api_read" || tool.name === "email_call_api_write";
+}
+
+function apiBody(response: HostingerApiProxyResult): unknown {
+  if (typeof response.body !== "string") return response.body;
+  try {
+    return JSON.parse(response.body) as unknown;
+  } catch {
+    return response.body;
+  }
+}
+
+function assertSuccessfulApiResponse(response: HostingerApiProxyResult): void {
+  if (typeof response.status === "number" && (response.status < 200 || response.status >= 300)) {
+    throw new HostingerEmailError("MCP_TOOL_CALL_FAILED", "Hostinger no ha podido completar la lectura.");
+  }
+}
+
+function extractMailboxes(value: unknown): readonly HostingerMailbox[] {
+  if (!value || typeof value !== "object") return [];
+  const record = value as Record<string, unknown>;
+  const data = record.data && typeof record.data === "object"
+    ? record.data as Record<string, unknown>
+    : record;
+  const list = Array.isArray(data.mailboxes) ? data.mailboxes : [];
+  return list
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object"))
+    .map((item) => ({
+      resourceId: extractString(item, ["resourceId", "resource_id", "id"]) ?? "",
+      address: extractString(item, ["address", "email", "mail"]) ?? "",
+    }))
+    .filter((item) => item.resourceId.length > 0 && item.address.length > 0);
+}
+
+function extractIdentifier(value: unknown, keys: readonly string[]): string | null {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    if (typeof candidate === "number" && Number.isFinite(candidate)) return String(candidate);
+  }
+  return null;
 }
 
 function findArray(value: unknown): readonly unknown[] | null {

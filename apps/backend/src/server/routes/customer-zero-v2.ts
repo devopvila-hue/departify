@@ -693,6 +693,11 @@ export async function registerCustomerZeroV2Routes(
       const hostingerCardIndex = cards.findIndex((card) => card.id === "hostinger_email");
       if (hostingerCardIndex >= 0) {
         cards[hostingerCardIndex] = buildHostingerCard(hostinger, session.state.locale);
+      } else {
+        // Environment-backed providers have no durable tool-state row until
+        // the first explicit connection action. They still belong in the
+        // canonical portal catalog, with live status from the provider probe.
+        cards.push(buildHostingerCard(hostinger, session.state.locale));
       }
       const catalog = await buildCatalogConnectionViews(session, session.state.locale);
       const hostingerCatalogIndex = catalog.findIndex((entry) => entry.toolId === "hostinger_email");
@@ -2328,7 +2333,7 @@ function buildHostingerCard(
   });
   return {
     id: definition.id,
-    name: definition.name,
+    name: es ? "Correo empresarial" : "Business email",
     category: es ? definition.categoryEs : definition.categoryEn,
     categoryId: definition.category,
     logoMark: definition.logoMark,
@@ -2347,7 +2352,9 @@ function buildHostingerCard(
     actionLabel: state === "connected"
       ? es ? "Comprobar conexión" : "Check connection"
       : es ? "Configurar" : "Set up",
-    description: es ? definition.descriptionEs ?? null : definition.descriptionEn ?? null,
+    description: es
+      ? `Hostinger Email · ${definition.descriptionEs ?? "Correo de empresa"}`
+      : `Hostinger Email · ${definition.descriptionEn ?? "Business email"}`,
   };
 }
 
@@ -2359,7 +2366,7 @@ function buildHostingerCatalogView(
   const configured = status.configured;
   return {
     toolId: "hostinger_email",
-    label: "Correo de empresa",
+    label: locale === "en" ? "Business email" : "Correo empresarial",
     capability: "email.read",
     category: locale === "en" ? "Email" : "Correo",
     domains: ["email"],
