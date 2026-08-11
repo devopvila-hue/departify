@@ -1179,6 +1179,7 @@ export async function registerCustomerZeroV2Routes(
         const out = await startGoogleOAuth({
           organizationId,
           userId: oauthUserId,
+          requestedToolId: tool.id as "gmail" | "google_workspace" | "google_calendar" | "google_drive",
           returnPath,
           locale: session.state.locale,
           redirectUri: googleOAuthRedirectUri(deps.publicBaseUrl),
@@ -1188,6 +1189,12 @@ export async function registerCustomerZeroV2Routes(
         connection.status = "connecting";
         connection.authorizationUrl = out.authorizationUrl;
         connection.oauthState = out.state;
+        request.log.info({
+          event: "google_oauth_start",
+          organizationId,
+          requestedToolId: tool.id,
+          returnPath,
+        });
         await persistToolState(session, toolStateFromConnection(session, connection));
         return reply.code(200).send({ organizationId, connection });
       }
@@ -1250,7 +1257,30 @@ export async function registerCustomerZeroV2Routes(
         toolId: string;
       };
       const session = await requireSession(organizationId, deps);
-      const connection = session.state.connections.get(toolId);
+      const { state } = (request.body ?? {}) as { state?: string };
+      // Google uses one registered callback URL for every shared capability.
+      // Resolve the initiating catalog tool from the durable, validated state
+      // when the portal calls /connections/google/callback. The path itself
+      // is never trusted as the capability selector.
+      let effectiveToolId = toolId;
+      if (toolId === "google") {
+        if (!state) {
+          return reply.code(400).send({
+            organizationId,
+            error: { code: "MISSING_CODE_OR_STATE", message: "code and state are required." },
+          });
+        }
+        const binding = await getGoogleOAuthStateStore().get(state);
+        const requested = binding?.requestedToolId;
+        if (!binding || binding.organizationId !== organizationId || binding.userId !== (request.authUser?.id ?? organizationId)) {
+          return reply.code(401).send({
+            organizationId,
+            error: { code: "invalid_state", message: "OAuth state missing or expired." },
+          });
+        }
+        effectiveToolId = requested ?? "gmail";
+      }
+      const connection = session.state.connections.get(effectiveToolId);
       if (!connection) {
         return reply.code(404).send({ error: "Connection not started." });
       }
@@ -1273,7 +1303,7 @@ export async function registerCustomerZeroV2Routes(
         "google_calendar",
         "google_drive",
       ]);
-      if (googleTools.has(toolId)) {
+      if (googleTools.has(effectiveToolId)) {
         const clientId = process.env["GOOGLE_OAUTH_CLIENT_ID"]?.trim();
         const clientSecret = process.env["GOOGLE_OAUTH_CLIENT_SECRET"]?.trim();
         if (!clientId || !clientSecret) {
@@ -1286,11 +1316,11 @@ export async function registerCustomerZeroV2Routes(
             },
           });
         }
-        const { code, state } = (request.body ?? {}) as {
+        const { code, state: callbackState } = (request.body ?? {}) as {
           code?: string;
           state?: string;
         };
-        if (!code || !state) {
+        if (!code || !callbackState) {
           return reply.code(400).send({
             organizationId,
             error: { code: "MISSING_CODE_OR_STATE", message: "code and state are required." },
@@ -1318,17 +1348,17 @@ export async function registerCustomerZeroV2Routes(
         //   7. Marks the connection operational ONLY when the probe
         //      succeeded AND a refresh token is persisted.
         const provider: GoogleTokenProvider =
-          toolId === "gmail"
+          effectiveToolId === "gmail"
             ? "gmail"
-            : toolId === "google_workspace"
+            : effectiveToolId === "google_workspace"
               ? "google_workspace"
-              : toolId === "google_calendar"
+              : effectiveToolId === "google_calendar"
                 ? "google_calendar"
                 : "google_drive";
         try {
           const tokenResult = await completeGoogleOAuthCallback({
             code,
-            state,
+            state: callbackState,
             organizationId,
             userId: oauthUserId,
             clientId,
@@ -1343,6 +1373,8 @@ export async function registerCustomerZeroV2Routes(
                     organizationId: s.organizationId,
                     userId: s.userId,
                     ...(s.returnPath ? { returnPath: s.returnPath } : {}),
+                    ...(s.requestedToolId ? { requestedToolId: s.requestedToolId } : {}),
+                    ...(s.consumed ? { consumed: true } : {}),
                   }
                 : null;
             },
@@ -1395,6 +1427,13 @@ export async function registerCustomerZeroV2Routes(
               : ["GOOGLE_OAUTH_REFRESH_TOKEN"];
           }
           await persistToolState(session, toolStateFromConnection(session, connection));
+
+          request.log.info({
+            event: "google_oauth_return_context_restored",
+            organizationId,
+            requestedToolId: effectiveToolId,
+            returnPath: tokenResult.returnPath ?? null,
+          });
 
           return reply.code(200).send({
             organizationId,

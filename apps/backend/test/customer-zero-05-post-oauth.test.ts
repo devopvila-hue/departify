@@ -132,6 +132,20 @@ function mockGoogleFetch(options?: {
         },
       );
     }
+    if (url.includes("www.googleapis.com/calendar/v3/calendars/primary/events")) {
+      return new Response(
+        JSON.stringify({
+          items: [{
+            id: "event-1",
+            summary: "Reunión de prueba",
+            start: { dateTime: "2026-08-11T16:00:00+02:00" },
+            end: { dateTime: "2026-08-11T16:30:00+02:00" },
+            status: "confirmed",
+          }],
+        }),
+        { status: options?.probeStatus ?? 200, headers: { "content-type": "application/json" } },
+      );
+    }
     if (url.includes("gmail.googleapis.com/gmail/v1/users/me/messages")) {
       // Message detail fetch (contains ?format=metadata).
       if (url.includes("format=metadata")) {
@@ -589,6 +603,83 @@ describe("P0 — post-OAuth HTTP: connect → callback → /conexiones", () => {
       payload: { returnPath: "https://evil.example" },
     });
     expect(rejected.statusCode).toBe(400);
+  });
+
+  it("Calendar incremental consent uses the shared Google identity and returns to onboarding", async () => {
+    const org = await startOrg();
+    await getGoogleTokenStore().put({
+      organizationId: org,
+      userId: "user-a",
+      provider: "gmail",
+      accessToken: "access-gmail",
+      refreshToken: "refresh-gmail",
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      scopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+      email: "ceo@departify.app",
+      displayName: "CEO",
+      operationalVerifiedAt: new Date().toISOString(),
+      operationalProbeError: null,
+      operationalCapabilities: ["email.read"],
+    });
+
+    const connect = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/google_calendar/connect`,
+      payload: { returnPath: "/" },
+    });
+    expect(connect.statusCode).toBe(200);
+    const state = connect.json().connection.oauthState as string;
+    expect((await getGoogleOAuthStateStore().get(state))?.requestedToolId).toBe("google_calendar");
+
+    mockGoogleFetch({
+      tokenScope: [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/calendar.events",
+      ].join(" "),
+    });
+    const callback = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/google/callback`,
+      payload: { code: "calendar-code", state },
+    });
+    expect(callback.statusCode).toBe(200);
+    expect(callback.json().connection.toolId).toBe("google_calendar");
+    expect(callback.json().connection.status).toBe("connected");
+    expect(callback.json().returnPath).toBe("/");
+
+    const connections = await authedInject({
+      method: "GET",
+      url: `/api/customer-zero/${org}/connections`,
+    });
+    const google = connections.json().google;
+    expect(google.email).toBe("ceo@departify.app");
+    expect(google.capabilities.email).toBe("connected");
+    expect(google.capabilities.calendar).toBe("connected");
+    expect((connections.json().connections as Array<{ toolId: string; state: string }>)
+      .find((entry) => entry.toolId === "google_calendar")?.state).toBe("connected");
+
+    mockGoogleFetch({});
+    const chat = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "mis proximos eventos del calendar" },
+    });
+    expect(chat.statusCode).toBe(200);
+    expect(chat.json().reply).toContain("Reunión de prueba");
+  });
+
+  it("Calendar read without its granted capability offers authorization instead of delegating", async () => {
+    const org = await startOrg();
+    const chat = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "mis proximos eventos del calendar" },
+    });
+    expect(chat.statusCode).toBe(200);
+    expect(chat.json().reply).toMatch(/Calendar todavía no está activado/i);
+    expect(chat.json().reply).not.toMatch(/Lo paso a Elvira|Marketing/i);
   });
 
   it("O: failed probe → NOT falsely connected; blocked with recovery reason", async () => {

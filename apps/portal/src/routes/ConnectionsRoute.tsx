@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 
-import { api, type ConnectionCardView, type ToolConnectionView } from "@/app/api";
+import { api, rememberGoogleOAuthReturnPath, type ConnectionCardView, type ToolConnectionView } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import { Badge, Card, EmptyState } from "@/components/primitives";
 
@@ -76,6 +76,7 @@ export function ConnectionsRoute() {
       const out = await api.connect(organizationId, card.id, returnPath);
       const authorizationUrl = out?.connection?.authorizationUrl;
       if (authorizationUrl) {
+        rememberGoogleOAuthReturnPath(returnPath);
         window.location.href = authorizationUrl;
         return;
       }

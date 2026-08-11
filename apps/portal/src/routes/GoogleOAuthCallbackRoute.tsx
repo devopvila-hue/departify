@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { api } from "@/app/api";
+import { api, readGoogleOAuthReturnPath } from "@/app/api";
 import { useOrg, readStoredOrganizationId } from "@/app/org-context";
 
 /**
@@ -19,9 +19,9 @@ import { useOrg, readStoredOrganizationId } from "@/app/org-context";
  *     exposure of credentials, codes or provider payloads.
  *   - backend unreachable → friendly copy, no stack trace.
  *
- * On success the CEO lands back on /conexiones (replace: true so the
- * /connections/google/callback URL does not become a browser-history
- * entry it could re-execute on back-navigation).
+ * On success the CEO returns to the bounded origin recorded by the backend
+ * state (replace: true so the callback URL cannot be replayed by back
+ * navigation).
  */
 const GOOGLE_ERROR_COPY: Record<string, { es: string; en: string }> = {
   access_denied: {
@@ -150,7 +150,7 @@ export function GoogleOAuthCallbackRoute() {
         const returnPath =
           out.returnPath === "/" || out.returnPath === "/conexiones" || out.returnPath === "/chat"
             ? out.returnPath
-            : "/conexiones";
+            : readGoogleOAuthReturnPath();
         navigate(returnPath, { replace: true });
         return;
       }
@@ -177,7 +177,7 @@ export function GoogleOAuthCallbackRoute() {
         </p>
         {status === "error" && (
           <div className="dfy-hero__actions">
-            <a href="/conexiones" className="dfy-button">
+            <a href={readGoogleOAuthReturnPath()} className="dfy-button">
               {navigator.language.startsWith("es")
                 ? "Volver a Conexiones"
                 : "Back to Connections"}

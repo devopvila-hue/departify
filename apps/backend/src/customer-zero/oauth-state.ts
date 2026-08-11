@@ -2,7 +2,7 @@
  * Durable OAuth state store — Phase P-B.
  *
  * The Google OAuth handshake binds each authorization attempt to its
- * (organization, user, intent, returnPath) through a random `state`
+ * (organization, user, requested capability, returnPath) through a random `state`
  * nonce. In Railway the backend may run several replicas and every
  * deploy restarts instances: an in-memory state store breaks the
  * handshake between the `connect` request and the `callback` request
@@ -20,7 +20,7 @@
  * Privacy contract:
  *   - The nonce is a random opaque value; the row never carries the
  *     authorization code, tokens or the client secret.
- *   - Only the org/user binding + expiry are stored. Server-only via
+ *   - Only the org/user/capability binding + expiry are stored. Server-only via
  *     service role; RLS blocks authenticated roles entirely.
  */
 
@@ -33,6 +33,8 @@ export interface OAuthStateRecord {
   readonly organizationId: string;
   readonly userId: string;
   readonly connectionIntent: "marketing" | "admin";
+  /** The bounded Google catalog capability that started this handshake. */
+  readonly requestedToolId?: "gmail" | "google_workspace" | "google_calendar" | "google_drive";
   readonly returnPath: string;
   readonly createdAt: string;
   readonly expiresAt: string;
@@ -136,6 +138,7 @@ interface OAuthStateRow {
   organization_id: string;
   user_id: string;
   connection_intent: "marketing" | "admin";
+  requested_tool_id: OAuthStateRecord["requestedToolId"] | null;
   return_path: string | null;
   created_at: string;
   expires_at: string;
@@ -148,6 +151,7 @@ function toRecord(row: OAuthStateRow): OAuthStateRecord {
     organizationId: row.organization_id,
     userId: row.user_id,
     connectionIntent: row.connection_intent,
+    ...(row.requested_tool_id ? { requestedToolId: row.requested_tool_id } : {}),
     returnPath: row.return_path ?? "",
     createdAt: row.created_at,
     expiresAt: row.expires_at,
@@ -181,6 +185,7 @@ export class SupabaseOAuthStateStore implements OAuthStateStore {
           organization_id: state.organizationId,
           user_id: state.userId,
           connection_intent: state.connectionIntent,
+          requested_tool_id: state.requestedToolId ?? "gmail",
           return_path: state.returnPath,
           created_at: state.createdAt,
           expires_at: state.expiresAt,

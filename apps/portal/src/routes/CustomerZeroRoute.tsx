@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import {
   api,
+  rememberGoogleOAuthReturnPath,
   type CompanyCorrections,
   type ProgressiveDiscoveryView,
   type ProgressView,
@@ -297,6 +298,7 @@ export function CustomerZeroRoute() {
           : prev,
       );
       if (body.connection.authorizationUrl) {
+        rememberGoogleOAuthReturnPath("/");
         window.location.href = body.connection.authorizationUrl;
       }
     } catch (cause) {

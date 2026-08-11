@@ -241,7 +241,7 @@ describe("Google OAuth handshake — portal side", () => {
     );
     await waitFor(() => expect(path).toBe("/conexiones"));
     expect(successCalls[0]?.url).toBe(
-      "/api/customer-zero/org_moon/connections/gmail/callback",
+      "/api/customer-zero/org_moon/connections/google/callback",
     );
     // The outgoing request body must contain the OAuth code + state but
     // never a refresh_token, client_secret or access_token.
@@ -251,6 +251,33 @@ describe("Google OAuth handshake — portal side", () => {
     expect(serialized).not.toMatch(/refresh[_-]?token/i);
     expect(serialized).not.toMatch(/access[_-]?token/i);
     expect(serialized).not.toMatch(/client[_-]?secret/i);
+  });
+
+  it("callback success restores the durable onboarding origin instead of defaulting to connections", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          organizationId: "org_moon",
+          connection: { toolId: "google_calendar", status: "connected" },
+          returnPath: "/",
+        }),
+      }) as Response),
+    );
+    let path = "/connections/google/callback";
+    mountAt(
+      <>
+        <LocationReporter onChange={(p) => (path = p)} />
+        <Routes>
+          <Route path="/connections/google/callback" element={<GoogleOAuthCallbackRoute />} />
+          <Route path="/" element={<div data-testid="onboarding" />} />
+        </Routes>
+      </>,
+      "/connections/google/callback?code=calendar-code&state=calendar-state",
+    );
+    await waitFor(() => expect(path).toBe("/"));
   });
 
   it("I: callback with Google error=access_denied renders business copy and never calls the backend", async () => {

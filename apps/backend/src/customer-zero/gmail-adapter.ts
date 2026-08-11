@@ -249,6 +249,7 @@ export interface GmailOAuthStartInput {
   readonly redirectUri: string;
   readonly clientId: string;
   readonly scopes?: readonly string[];
+  readonly requestedToolId?: "gmail" | "google_workspace" | "google_calendar" | "google_drive";
 }
 
 export interface GmailOAuthStartOutput {
@@ -258,7 +259,7 @@ export interface GmailOAuthStartOutput {
 
 /**
  * Generate a fresh OAuth state and return the authorization URL.
- * The state is bound to (organizationId, userId, intent, returnPath)
+ * The state is bound to (organizationId, userId, requested tool, returnPath)
  * and expires in 10 minutes.
  */
 export async function startGoogleOAuth(
@@ -273,6 +274,7 @@ export async function startGoogleOAuth(
     organizationId: input.organizationId,
     userId: input.userId,
     connectionIntent: "marketing",
+    requestedToolId: input.requestedToolId ?? "gmail",
     returnPath: input.returnPath,
     createdAt: new Date().toISOString(),
     expiresAt,

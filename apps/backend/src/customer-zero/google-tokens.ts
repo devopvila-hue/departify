@@ -687,7 +687,13 @@ export interface CompleteGoogleOAuthInput {
   readonly identityProvider: "gmail";
   readonly stateNonceLookup: (
     nonce: string,
-  ) => Promise<{ organizationId: string; userId: string; returnPath?: string } | null>;
+  ) => Promise<{
+    organizationId: string;
+    userId: string;
+    returnPath?: string;
+    requestedToolId?: GoogleTokenProvider;
+    consumed?: boolean;
+  } | null>;
   readonly stateNonceConsume: (nonce: string) => Promise<void>;
   readonly nowMs?: number;
   readonly probeFetcher?: typeof fetch;
@@ -712,6 +718,7 @@ export interface CompleteGoogleOAuthResult {
   /** True when the probe succeeded AND a refresh token is persisted. */
   readonly operational: boolean;
   readonly returnPath?: string;
+  readonly requestedToolId?: GoogleTokenProvider;
 }
 
 /**
@@ -723,17 +730,27 @@ export interface CompleteGoogleOAuthResult {
 export async function validateOAuthState(
   stateLookup: (
     nonce: string,
-  ) => Promise<{ organizationId: string; userId: string; returnPath?: string } | null>,
+  ) => Promise<{
+    organizationId: string;
+    userId: string;
+    returnPath?: string;
+    requestedToolId?: GoogleTokenProvider;
+    consumed?: boolean;
+  } | null>,
   stateConsume: (nonce: string) => Promise<void>,
   input: { code: string; state: string; organizationId: string; userId: string },
-): Promise<{ returnPath?: string }> {
+): Promise<{ returnPath?: string; requestedToolId?: GoogleTokenProvider }> {
   const existing = await stateLookup(input.state);
   if (!existing) {
     const err = new Error("OAuth state missing or expired");
     (err as Error & { code?: string }).code = "invalid_state";
     throw err;
   }
-  await stateConsume(input.state);
+  if (existing.consumed) {
+    const err = new Error("OAuth state already used");
+    (err as Error & { code?: string }).code = "replay";
+    throw err;
+  }
   if (existing.organizationId !== input.organizationId) {
     const err = new Error(
       "OAuth state does not belong to this organization",
@@ -741,12 +758,16 @@ export async function validateOAuthState(
     (err as Error & { code?: string }).code = "org_mismatch";
     throw err;
   }
+  await stateConsume(input.state);
   if (existing.userId !== input.userId) {
     const err = new Error("OAuth state does not belong to this user");
     (err as Error & { code?: string }).code = "user_mismatch";
     throw err;
   }
-  return existing.returnPath ? { returnPath: existing.returnPath } : {};
+  return {
+    ...(existing.returnPath ? { returnPath: existing.returnPath } : {}),
+    ...(existing.requestedToolId ? { requestedToolId: existing.requestedToolId } : {}),
+  };
 }
 
 /** Fetch Google's userinfo for a freshly exchanged access token. */
@@ -882,6 +903,26 @@ export async function completeGoogleOAuthCallback(
   );
 
   // 6. Build the durable record and persist.
+  // A capability-specific re-consent must not erase previously verified
+  // Gmail evidence. Older rows may not have operationalCapabilities yet;
+  // infer only the safe read capability from the already-verified Gmail probe.
+  const inheritedOperationalCapabilities = previous?.operationalCapabilities ?? (
+    previous?.operationalVerifiedAt && hasGoogleCapability(previous.scopes, "email.read")
+      ? ["email.read" as GoogleCapability]
+      : []
+  );
+  const nextOperationalCapabilities = probe.operational
+    ? Array.from(new Set([
+        ...inheritedOperationalCapabilities,
+        ...(input.provider === "gmail"
+          ? ["email.read" as GoogleCapability]
+          : input.provider === "google_calendar"
+            ? ["calendar.read" as GoogleCapability]
+            : input.provider === "google_drive" || input.provider === "google_workspace"
+              ? ["drive.search" as GoogleCapability, "drive.read" as GoogleCapability]
+              : []),
+      ]))
+    : inheritedOperationalCapabilities;
   const record: GoogleTokenRecord = {
     organizationId: input.organizationId,
     userId: input.userId,
@@ -892,24 +933,16 @@ export async function completeGoogleOAuthCallback(
     scopes: merged.scopes,
     email: identity.email,
     displayName: identity.displayName,
-    operationalVerifiedAt: probe.operational ? probe.verifiedAt : null,
+    // A failed incremental probe must not demote a capability that was
+    // already verified successfully. The callback still returns
+    // operational=false for the newly requested capability.
+    operationalVerifiedAt: probe.operational
+      ? probe.verifiedAt
+      : previous?.operationalVerifiedAt ?? null,
     operationalProbeError: probe.operational ? null : probe.error,
-    ...(probe.operational
-      ? {
-          operationalCapabilities: Array.from(new Set([
-            ...(previous?.operationalCapabilities ?? []),
-            ...(input.provider === "gmail"
-              ? ["email.read" as GoogleCapability]
-              : input.provider === "google_calendar"
-                ? ["calendar.read" as GoogleCapability]
-                : input.provider === "google_drive" || input.provider === "google_workspace"
-                  ? ["drive.search" as GoogleCapability, "drive.read" as GoogleCapability]
-                  : []),
-          ])),
-        }
-      : previous?.operationalCapabilities
-        ? { operationalCapabilities: previous.operationalCapabilities }
-        : {}),
+    ...(nextOperationalCapabilities.length > 0
+      ? { operationalCapabilities: nextOperationalCapabilities }
+      : {}),
   };
   await store.put(record);
   checkpoint("google_oauth_credential_persisted", {
@@ -979,6 +1012,7 @@ export async function completeGoogleOAuthCallback(
     grantedScopes: merged.scopes,
     operational: probe.operational && Boolean(merged.refreshToken),
     ...(stateBinding.returnPath ? { returnPath: stateBinding.returnPath } : {}),
+    ...(stateBinding.requestedToolId ? { requestedToolId: stateBinding.requestedToolId } : {}),
   };
 }
 

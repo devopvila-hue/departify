@@ -1108,7 +1108,7 @@ export function isEmailReadFollowUp(message: string): boolean {
 export function isCalendarReadRequest(message: string): boolean {
   if (/\bqu[eé]\s+tengo\s+(hoy|ma[nñ]ana|esta\s+semana|this\s+week|tomorrow|today)\b/i.test(message)) return true;
   return /\b(calendar|calendario|reuni[oó]n|reuniones|cita|hueco|disponible|agenda)\b/i.test(message) &&
-    /\b(qu[eé]|qu[eé]\s+tengo|hoy|ma[nñ]ana|semana|pr[oó]xima|siguiente|hueco|disponible|cu[aá]ndo|when|today|tomorrow|this week|next meeting)\b/i.test(message);
+    /\b(qu[eé]|qu[eé]\s+tengo|hoy|ma[nñ]ana|semana|pr[oó]xim(?:o|a|os|as)|siguiente|hueco|disponible|cu[aá]ndo|when|today|tomorrow|this week|next meeting|eventos?)\b/i.test(message);
 }
 
 export function isCalendarCreateRequest(message: string): boolean {

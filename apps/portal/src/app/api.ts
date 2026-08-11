@@ -683,6 +683,29 @@ async function postJson<T>(url: string, body?: unknown): Promise<T | null> {
   }
 }
 
+export type GoogleOAuthReturnPath = "/" | "/conexiones" | "/chat";
+
+const GOOGLE_OAUTH_RETURN_CONTEXT_KEY = "departify_google_oauth_return_context";
+
+/** Safe, non-secret browser continuity hint for provider-side cancellation. */
+export function rememberGoogleOAuthReturnPath(path: GoogleOAuthReturnPath): void {
+  try {
+    window.sessionStorage.setItem(GOOGLE_OAUTH_RETURN_CONTEXT_KEY, path);
+  } catch {
+    /* session storage is an optional UX fallback; server state remains authoritative */
+  }
+}
+
+export function readGoogleOAuthReturnPath(): GoogleOAuthReturnPath {
+  try {
+    const value = window.sessionStorage.getItem(GOOGLE_OAUTH_RETURN_CONTEXT_KEY);
+    if (value === "/" || value === "/conexiones" || value === "/chat") return value;
+  } catch {
+    /* fall through to the safe default */
+  }
+  return "/conexiones";
+}
+
 export const api = {
   me: () => getJson<MeView>("/api/auth/me"),
   start: (payload: Record<string, unknown>) =>
@@ -806,7 +829,7 @@ export const api = {
     postJson<{ connection: ToolConnectionView }>(
       `/api/customer-zero/${org}/connections/${toolId}/declare`,
     ),
-  connect: (org: string, toolId: string, returnPath?: "/" | "/conexiones" | "/chat") =>
+  connect: (org: string, toolId: string, returnPath?: GoogleOAuthReturnPath) =>
     postJson<{ connection: ConnectionCard }>(
       `/api/customer-zero/${org}/connections/${toolId}/connect`,
       returnPath ? { returnPath } : undefined,
@@ -816,10 +839,10 @@ export const api = {
       { connection: ConnectionCard } & {
         identity?: { email: string };
         operational?: boolean;
-        returnPath?: "/" | "/conexiones" | "/chat";
+        returnPath?: GoogleOAuthReturnPath;
         error?: { code?: string; message?: string };
       }
-    >(`/api/customer-zero/${org}/connections/gmail/callback`, {
+    >(`/api/customer-zero/${org}/connections/google/callback`, {
       code,
       state,
     }),
