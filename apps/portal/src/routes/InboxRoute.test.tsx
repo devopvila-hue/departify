@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 import { OrgProvider } from "@/app/org-context";
+import { setApiAccessToken } from "@/app/api";
 import { InboxRoute } from "@/routes/InboxRoute";
 import { sanitizeEmailHtml } from "@/lib/sanitize-email-html";
 
@@ -14,6 +15,7 @@ describe("InboxRoute — provider-neutral email sync", () => {
   });
 
   afterEach(() => {
+    setApiAccessToken(null);
     vi.unstubAllGlobals();
     window.localStorage.clear();
   });
@@ -124,5 +126,59 @@ describe("InboxRoute — provider-neutral email sync", () => {
     expect(safe).not.toContain("script");
     expect(safe).not.toContain("style=");
     expect(safe).not.toContain("javascript:");
+  });
+
+  it("keeps the authenticated Inbox flow on the same API/session path", async () => {
+    setApiAccessToken("session-token");
+    const requests: Array<{ url: string; init?: RequestInit }> = [];
+    const item = {
+      id: "inbox-auth-1",
+      organizationId: "org-inbox",
+      source: "hostinger",
+      sourceMessageId: "message-1",
+      channel: "email",
+      category: "unknown",
+      subject: "Mensaje autenticado",
+      sender: { email: "sender@example.com" },
+      senderEmail: "sender@example.com",
+      preview: "Vista previa real",
+      receivedAt: "2026-08-11T10:00:00.000Z",
+      unread: true,
+      importance: 0,
+      departmentId: null,
+      isLead: false,
+      state: "classified",
+      relatedWorkItemId: null,
+      relatedConversationId: null,
+      plainText: "Contenido autenticado",
+      recipients: [],
+      cc: [],
+      attachments: [],
+    };
+    vi.stubGlobal("fetch", vi.fn((url: string, init?: RequestInit) => {
+      requests.push(init ? { url, init } : { url });
+      const response = url.includes("/inbox/inbox-auth-1")
+        ? { organizationId: "org-inbox", item }
+        : url.includes("/inbox/sync")
+          ? { organizationId: "org-inbox", imported: 1, classified: 1, highImportance: 0 }
+          : { organizationId: "org-inbox", items: [item] };
+      return Promise.resolve({ ok: true, status: 200, json: async () => response } as Response);
+    }));
+    render(
+      <MemoryRouter>
+        <OrgProvider><InboxRoute /></OrgProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Sincronizar correo" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Mensaje autenticado" }));
+    expect(await screen.findByText("Contenido autenticado")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Volver al inbox" }));
+
+    expect(requests.some((request) => request.url.includes("/inbox/sync"))).toBe(true);
+    expect(requests.some((request) => request.url.includes("/inbox/inbox-auth-1"))).toBe(true);
+    for (const request of requests) {
+      expect(new Headers(request.init?.headers).get("authorization")).toBe("Bearer session-token");
+    }
   });
 });
