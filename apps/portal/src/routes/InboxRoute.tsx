@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { JSX } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { api, type InboxItemView, type InboxCategory } from "@/app/api";
 import { useOrg } from "@/app/org-context";
@@ -30,6 +31,7 @@ const CATEGORIES: readonly { id: InboxCategory | "all"; label: string }[] = [
 
 export function InboxRoute() {
   const { organizationId } = useOrg();
+  const navigate = useNavigate();
   const [items, setItems] = useState<InboxItemView[]>([]);
   const [category, setCategory] = useState<InboxCategory | "all">("all");
   const [syncing, setSyncing] = useState(false);
@@ -69,7 +71,16 @@ export function InboxRoute() {
     setError(null);
     try {
       const result = await api.inboxToWork(organizationId, item.id);
-      if (result?.item && selected?.id === item.id) setSelected(result.item);
+      if (result?.item && result.task?.id) {
+        const projected = {
+          ...result.item,
+          taskId: result.task.id,
+          convertedToTask: true,
+          relatedWorkItemId: result.task.id,
+        };
+        setItems((current) => current.map((candidate) => candidate.id === item.id ? projected : candidate));
+        if (selected?.id === item.id) setSelected(projected);
+      }
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "No hemos podido crear la tarea.");
@@ -94,7 +105,13 @@ export function InboxRoute() {
       draftId: null,
       result: null,
       resultTone: null,
+      sending: false,
     });
+  }
+
+  function openTask(item: InboxItemView): void {
+    const taskId = taskIdFor(item);
+    if (taskId) navigate(`/tareas?taskId=${encodeURIComponent(taskId)}`);
   }
 
   async function prepareEmail(): Promise<void> {
@@ -127,6 +144,31 @@ export function InboxRoute() {
       result: result.reply,
       resultTone: result.status === "succeeded" ? "success" : result.status === "ambiguous" ? "warning" : "danger",
       draftId: result.status === "succeeded" ? null : composer.draftId,
+    });
+  }
+
+  async function sendQuickReply(): Promise<void> {
+    if (!organizationId || !composer || composer.mode !== "reply" || !composer.itemId || composer.sending || composer.result) return;
+    setError(null);
+    setComposer({ ...composer, sending: true });
+    const draft = await api.inboxReplyDraft(organizationId, composer.itemId, composer.body);
+    if (!draft || draft.error) {
+      setComposer({ ...composer, sending: false });
+      setError("No he podido preparar la respuesta. Inténtalo de nuevo.");
+      return;
+    }
+    const result = await api.inboxEmailApprove(organizationId, draft.draftId);
+    if (!result || result.error) {
+      setComposer({ ...composer, draftId: draft.draftId, sending: false });
+      setError("No he podido ejecutar la respuesta. El borrador se conserva para reintentarlo.");
+      return;
+    }
+    setComposer({
+      ...composer,
+      draftId: result.status === "succeeded" ? null : draft.draftId,
+      result: result.reply,
+      resultTone: result.status === "succeeded" ? "success" : result.status === "ambiguous" ? "warning" : "danger",
+      sending: false,
     });
   }
 
@@ -197,11 +239,15 @@ export function InboxRoute() {
             <button type="button" className="dfy-button dfy-button--small" onClick={() => setSelected(null)}>
               Volver al inbox
             </button>
-            <button type="button" className="dfy-button dfy-button--small" onClick={() => openReply(selected)}>
-              Responder
-            </button>
-            {selected.state === "in_work" ? (
-              <Badge tone="accent">Convertido en tarea</Badge>
+            {canReply(selected) && (
+              <button type="button" className="dfy-button dfy-button--small" onClick={() => openReply(selected)}>
+                Responder
+              </button>
+            )}
+            {taskIdFor(selected) ? (
+              <button type="button" className="dfy-button dfy-button--small" onClick={() => openTask(selected)}>
+                ✓ Ver tarea
+              </button>
             ) : (
               <button type="button" className="dfy-button dfy-button--small" onClick={() => void toWork(selected)} disabled={workingId !== null}>
                 {workingId === selected.id ? "Creando…" : "Convertir en tarea"}
@@ -245,8 +291,8 @@ export function InboxRoute() {
               </ul>
             </div>
           )}
-          {composer?.mode === "reply" && composer.itemId === selected.id && (
-            <EmailComposerView composer={composer} onChange={setComposer} onPrepare={() => void prepareEmail()} onApprove={() => void approveEmail()} />
+          {composer?.mode === "reply" && (
+            <EmailComposerView composer={composer} onChange={setComposer} onPrepare={() => void prepareEmail()} onApprove={() => void approveEmail()} onQuickSend={() => void sendQuickReply()} onCancel={() => setComposer(null)} />
           )}
         </Card>
       )}
@@ -254,7 +300,7 @@ export function InboxRoute() {
       {!selected && composer?.mode === "new" && (
         <Card className="dfy-inbox-composer">
           <h2>Nuevo correo</h2>
-          <EmailComposerView composer={composer} onChange={setComposer} onPrepare={() => void prepareEmail()} onApprove={() => void approveEmail()} />
+          <EmailComposerView composer={composer} onChange={setComposer} onPrepare={() => void prepareEmail()} onApprove={() => void approveEmail()} onQuickSend={() => void sendQuickReply()} onCancel={() => setComposer(null)} />
         </Card>
       )}
 
@@ -298,8 +344,10 @@ export function InboxRoute() {
                 </p>
               )}
               <div className="dfy-inbox-actions">
-                {item.state === "in_work" ? (
-                  <Badge tone="accent">En trabajo</Badge>
+                {taskIdFor(item) ? (
+                  <button type="button" className="dfy-button dfy-button--small" onClick={() => openTask(item)}>
+                    ✓ Ver tarea
+                  </button>
                 ) : (
                   <button
                     type="button"
@@ -310,7 +358,15 @@ export function InboxRoute() {
                     {workingId === item.id ? "Creando…" : "Convertir en tarea"}
                   </button>
                 )}
+                {canReply(item) && (
+                  <button type="button" className="dfy-button dfy-button--small dfy-button--ghost" onClick={() => openReply(item)}>
+                    Responder
+                  </button>
+                )}
               </div>
+              {composer?.mode === "reply" && composer.itemId === item.id && (
+                <EmailComposerView composer={composer} onChange={setComposer} onPrepare={() => void prepareEmail()} onApprove={() => void approveEmail()} onQuickSend={() => void sendQuickReply()} onCancel={() => setComposer(null)} quickReply />
+              )}
             </Card>
           ))}
         </div>
@@ -328,6 +384,7 @@ interface EmailComposer {
   draftId: string | null;
   result: string | null;
   resultTone: "success" | "warning" | "danger" | null;
+  sending?: boolean;
 }
 
 function EmailComposerView(props: {
@@ -335,6 +392,9 @@ function EmailComposerView(props: {
   onChange: (composer: EmailComposer) => void;
   onPrepare: () => void;
   onApprove: () => void;
+  onQuickSend: () => void;
+  onCancel: () => void;
+  quickReply?: boolean;
 }): JSX.Element {
   const { composer } = props;
   const approved = Boolean(composer.result);
@@ -352,12 +412,22 @@ function EmailComposerView(props: {
         Mensaje
         <textarea value={composer.body} disabled={Boolean(composer.draftId)} rows={6} onChange={(event) => props.onChange({ ...composer, body: event.target.value })} />
       </label>
-      {!composer.draftId && !approved && (
+      {props.quickReply && !approved && (
+        <div className="dfy-inbox-composer__approval">
+          <button type="button" className="dfy-button dfy-button--ghost dfy-button--small" onClick={props.onCancel} disabled={composer.sending}>
+            Cancelar
+          </button>
+          <button type="button" className="dfy-button dfy-button--small" onClick={props.onQuickSend} disabled={!composer.body || composer.sending}>
+            {composer.sending ? "Enviando…" : "Enviar"}
+          </button>
+        </div>
+      )}
+      {!props.quickReply && !composer.draftId && !approved && (
         <button type="button" className="dfy-button dfy-button--small" onClick={props.onPrepare} disabled={!composer.to || !composer.subject || !composer.body}>
           Preparar envío
         </button>
       )}
-      {composer.draftId && !approved && (
+      {!props.quickReply && composer.draftId && !approved && (
         <div className="dfy-inbox-composer__approval">
           <p className="dfy-muted">Borrador preparado. Confirma para enviarlo una sola vez.</p>
           <button type="button" className="dfy-button dfy-button--small" onClick={props.onApprove}>
@@ -368,6 +438,18 @@ function EmailComposerView(props: {
       {composer.result && <p className={`dfy-alert dfy-alert--${composer.resultTone ?? "danger"}`} role="status">{composer.result}</p>}
     </div>
   );
+}
+
+function taskIdFor(item: InboxItemView): string | null {
+  return item.taskId ?? (item.convertedToTask ? item.relatedWorkItemId : null);
+}
+
+function canReply(item: InboxItemView): boolean {
+  if (!item.sourceMessageId || !item.sender?.email && !item.senderEmail) return false;
+  if (item.source === "hostinger") {
+    return Boolean(item.provenance?.providerMessageUid && item.folder);
+  }
+  return item.source === "gmail" || item.source === "google";
 }
 
 function toneForCategory(

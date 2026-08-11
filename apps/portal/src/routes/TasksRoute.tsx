@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api, type CompanyStatus, type HeadIdentity, type MarketingWorkItem } from "@/app/api";
 import { useOrg } from "@/app/org-context";
@@ -16,6 +16,8 @@ import { TasksIcon } from "@/components/icons";
 export function TasksRoute() {
   const { organizationId } = useOrg();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const focusedTaskId = searchParams.get("taskId");
   const [status, setStatus] = useState<CompanyStatus | null>(null);
   const [departmentTasks, setDepartmentTasks] = useState<TaskListItem[]>([]);
   const [head, setHead] = useState<HeadIdentity | null>(null);
@@ -115,6 +117,7 @@ export function TasksRoute() {
               items={grouped.pending}
               head={head}
               runningItem={busy}
+              focusedTaskId={focusedTaskId}
               onAction={runItem}
               onOpen={openInChat}
               actionLabel="Aprobar"
@@ -127,6 +130,7 @@ export function TasksRoute() {
               items={grouped.active}
               head={head}
               runningItem={busy}
+              focusedTaskId={focusedTaskId}
               onAction={runItem}
               onOpen={openInChat}
               actionLabel="Que lo hagan"
@@ -139,6 +143,7 @@ export function TasksRoute() {
               items={grouped.blocked}
               head={head}
               runningItem={busy}
+              focusedTaskId={focusedTaskId}
               onAction={runItem}
               onOpen={openInChat}
               actionLabel="Pedir desbloqueo"
@@ -151,6 +156,7 @@ export function TasksRoute() {
               items={grouped.done}
               head={head}
               runningItem={busy}
+              focusedTaskId={focusedTaskId}
               onAction={runItem}
               onOpen={openInChat}
               actionLabel="Reabrir"
@@ -188,6 +194,7 @@ function TaskGroup(props: {
   items: TaskListItem[];
   head: HeadIdentity | null;
   runningItem: string | null;
+  focusedTaskId: string | null;
   onAction: (itemId: string, action: "execute" | "approve") => void;
   onOpen: (itemId: string, title: string) => void;
   actionLabel: string;
@@ -199,13 +206,14 @@ function TaskGroup(props: {
       <h2>{props.title}</h2>
       <ul className="dfy-task-list">
         {props.items.map((item) => (
-          <li key={item.id} className="dfy-task">
+            <li key={item.id} className={`dfy-task${item.id === props.focusedTaskId ? " dfy-task--focused" : ""}`}>
             <div className="dfy-task__head">
               <strong>{item.title}</strong>
               <span className={`dfy-task__status dfy-task__status--${item.status ?? "pending"}`}>
                 {labelForStatus(item.status ?? "pending")}
               </span>
             </div>
+            {item.id === props.focusedTaskId && <p className="dfy-muted dfy-muted--small">Tarea vinculada al correo</p>}
             <p className="dfy-muted">{item.description}</p>
             {item.result && <p className="dfy-task__result">{readable(item.result)}</p>}
             <div className="dfy-task__actions">

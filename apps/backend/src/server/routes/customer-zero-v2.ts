@@ -134,6 +134,7 @@ import { DepartmentWorkExecutor } from "../../customer-zero/department-work-exec
 import type { MarketingActivityRepository } from "../../customer-zero/marketing-repositories.js";
 import {
   InMemoryInboxStore,
+  type InboxItem,
   type InboxStore,
 } from "../../customer-zero/inbox-domain.js";
 import { InboxSync } from "../../customer-zero/inbox-sync.js";
@@ -918,7 +919,8 @@ export async function registerCustomerZeroV2Routes(
           : {}),
         limit: Number(request.query?.limit ?? 50),
       } as Parameters<typeof inboxStore.list>[0]);
-      return { organizationId, items };
+      const projectedItems = await Promise.all(items.map((item) => projectInboxItem(item)));
+      return { organizationId, items: projectedItems };
     },
   );
 
@@ -969,7 +971,7 @@ export async function registerCustomerZeroV2Routes(
       if (!item || item.organizationId !== organizationId) {
         return reply.code(404).send({ error: "inbox_item_not_found" });
       }
-      return { organizationId, item };
+      return { organizationId, item: await projectInboxItem(item) };
     },
   );
 
@@ -1093,7 +1095,7 @@ export async function registerCustomerZeroV2Routes(
         return {
           organizationId,
           task: existingTask,
-          item: await inboxStore.get(item.id),
+          item: await projectInboxItem((await inboxStore.get(item.id)) ?? item),
         };
       }
       const title = `${categoryLabel[item.category] ?? "Mensaje"}: ${item.subject || "(sin asunto)"}`;
@@ -1136,7 +1138,7 @@ export async function registerCustomerZeroV2Routes(
       return {
         organizationId,
         task,
-        item: updated,
+        item: await projectInboxItem(updated ?? item),
       };
     },
   );
@@ -5142,6 +5144,25 @@ function getWorkStore(): DepartmentWorkStore {
 
 function workStoreForRoutes(): DepartmentWorkStore {
   return getWorkStore();
+}
+
+/**
+ * Project the durable Inbox → DepartmentTask relationship into every Inbox
+ * response. `relatedWorkItemId` is a useful legacy link on the Inbox row, but
+ * the task's source is the canonical evidence that conversion actually
+ * happened. This keeps refreshes, resyncs and new sessions truthful.
+ */
+async function projectInboxItem(item: InboxItem): Promise<InboxItem & {
+  taskId: string | null;
+  convertedToTask: boolean;
+}> {
+  const task = await workStoreForRoutes().findTaskBySource(item.organizationId, item.id);
+  return {
+    ...item,
+    taskId: task?.id ?? null,
+    convertedToTask: Boolean(task),
+    ...(task ? { relatedWorkItemId: task.id, state: "in_work" as const } : {}),
+  };
 }
 
 function providerForInboxSource(source: string): EmailProvider | null {

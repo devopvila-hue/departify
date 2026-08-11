@@ -249,7 +249,15 @@ export interface InboxItemView {
   isLead: boolean;
   state: InboxItemState;
   relatedWorkItemId: string | null;
+  /** Durable DepartmentTask projection for this Inbox item. */
+  taskId: string | null;
+  convertedToTask: boolean;
   relatedConversationId: string | null;
+  provenance?: {
+    provider?: string;
+    providerMessageUid?: string;
+    rawEventId?: string;
+  };
 }
 
 export interface CeoOverview {

@@ -182,7 +182,7 @@ describe("InboxRoute — provider-neutral email sync", () => {
     }
   });
 
-  it("prepares and approves a provider-affine reply from message detail", async () => {
+  it("quick-replies from the Inbox card through the provider-affine workflow", async () => {
     const calls: string[] = [];
     const item = {
       id: "reply-item",
@@ -198,6 +198,8 @@ describe("InboxRoute — provider-neutral email sync", () => {
       preview: "¿Puedes revisarlo?",
       plainText: "¿Puedes revisarlo?",
       receivedAt: "2026-08-11T10:00:00.000Z",
+      folder: "INBOX",
+      provenance: { provider: "hostinger", providerMessageUid: "42" },
       unread: true,
       importance: 0,
       departmentId: null,
@@ -223,14 +225,53 @@ describe("InboxRoute — provider-neutral email sync", () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Consulta" }));
     fireEvent.click(await screen.findByRole("button", { name: "Responder" }));
-    fireEvent.change(screen.getByLabelText("Mensaje"), { target: { value: "Lo reviso." } });
-    fireEvent.click(screen.getByRole("button", { name: "Preparar envío" }));
-    expect(await screen.findByRole("button", { name: "Confirmar y enviar" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Confirmar y enviar" }));
+    fireEvent.change(await screen.findByLabelText("Mensaje"), { target: { value: "Lo reviso." } });
+    fireEvent.click(screen.getByRole("button", { name: "Enviar" }));
     expect(await screen.findByRole("status")).toHaveTextContent("Enviado a cliente@example.com.");
     expect(calls.some((url) => url.includes("/reply/draft"))).toBe(true);
     expect(calls.some((url) => url.includes("/inbox/email/approve"))).toBe(true);
+  });
+
+  it("hydrates an existing task relation and exposes Ver tarea instead of conversion", async () => {
+    const item = {
+      id: "already-task",
+      organizationId: "org-inbox",
+      source: "hostinger",
+      sourceMessageId: "provider-message-2",
+      channel: "email",
+      category: "administrative",
+      subject: "Test",
+      sender: { email: "sender@example.com" },
+      senderEmail: "sender@example.com",
+      preview: "Contenido del correo",
+      receivedAt: "2026-08-11T10:00:00.000Z",
+      folder: "INBOX",
+      provenance: { provider: "hostinger", providerMessageUid: "43" },
+      unread: false,
+      importance: 0.2,
+      departmentId: null,
+      isLead: false,
+      state: "in_work",
+      relatedWorkItemId: "task-existing",
+      taskId: "task-existing",
+      convertedToTask: true,
+      relatedConversationId: null,
+    };
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({ organizationId: "org-inbox", items: [item] }),
+    } as Response)));
+
+    render(
+      <MemoryRouter>
+        <OrgProvider><InboxRoute /></OrgProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("button", { name: "✓ Ver tarea" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Convertir en tarea" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Responder" })).toBeInTheDocument();
   });
 });

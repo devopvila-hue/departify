@@ -100,6 +100,14 @@ describe("CZ03 — Inbox → work bridge", () => {
     // The item is now linked and in_work.
     expect(body.item.state).toBe("in_work");
     expect(body.item.relatedWorkItemId).toBe(body.task.id);
+    expect(body.item.taskId).toBe(body.task.id);
+    expect(body.item.convertedToTask).toBe(true);
+
+    const inbox = await authedInject({ method: "GET", url: `/api/customer-zero/${org}/inbox` });
+    expect(inbox.statusCode).toBe(200);
+    expect(inbox.json().items).toEqual([
+      expect.objectContaining({ id: itemId, taskId: body.task.id, convertedToTask: true }),
+    ]);
   });
 
   it("rejects a work bridge for an item from another org", async () => {
@@ -131,6 +139,8 @@ describe("CZ03 — Inbox → work bridge", () => {
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
     expect(second.json().task.id).toBe(first.json().task.id);
+    expect(second.json().item.taskId).toBe(first.json().task.id);
+    expect(second.json().item.convertedToTask).toBe(true);
     const feed = await authedInject({ method: "GET", url: `/api/customer-zero/${org}/work-feed` });
     expect(feed.statusCode).toBe(200);
     expect(feed.json().tasks).toEqual([expect.objectContaining({ id: first.json().task.id, organizationId: org })]);
