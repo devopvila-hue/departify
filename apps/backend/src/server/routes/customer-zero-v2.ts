@@ -323,11 +323,41 @@ export async function registerCustomerZeroV2Routes(
       }
       let organizationId: string;
       try {
-        const organization = await deps.organizations.createOrganization(
-          body.companyName.trim(),
-          ownerId,
-        );
-        organizationId = organization.organizationId;
+        // Customer Zero P0 — CONTINUITY FOR EXISTING ORGANIZATIONS.
+        //
+        // Company DNA is new, so organizations that onboarded before it
+        // existed have no durable record. Those CEOs must complete the
+        // (now real) understanding + confirmation step — but they must
+        // NOT be given a brand-new organization to do it in. Their Gmail
+        // tokens, conversations, connections, inbox and Marketing state
+        // are all keyed by organization id; creating a second tenant
+        // would silently orphan every one of them.
+        //
+        // So: if the CEO already owns an organization that has no
+        // Company DNA yet, we ADOPT it and write the DNA there.
+        // A CEO who genuinely already has a ready company is not sent
+        // through /start by the portal at all.
+        const existing = await deps.organizations.listForUser(ownerId);
+        const dnaStoreForAdoption = resolveCompanyDnaStore(deps);
+        let adopted: string | null = null;
+        for (const organization of existing) {
+          const record = await dnaStoreForAdoption.get(
+            organization.organizationId,
+          );
+          if (!record) {
+            adopted = organization.organizationId;
+            break;
+          }
+        }
+        if (adopted) {
+          organizationId = adopted;
+        } else {
+          const organization = await deps.organizations.createOrganization(
+            body.companyName.trim(),
+            ownerId,
+          );
+          organizationId = organization.organizationId;
+        }
       } catch (cause) {
         request.log.error({ error: cause }, "Organization creation failed");
         return reply.code(500).send({

@@ -133,4 +133,44 @@ describe("P-B — authoritative onboarding handoff gate", () => {
     });
     expect(response.statusCode).not.toBe(409);
   });
+
+  it("P0. an existing organization is ADOPTED, never orphaned by a second tenant", async () => {
+    // Company DNA is new, so organizations that onboarded before it
+    // existed have no durable record. Those CEOs must complete the now
+    // real confirmation step — but their Gmail tokens, conversations,
+    // connections and Marketing state are keyed by organization id, so
+    // handing them a brand-new tenant would silently orphan all of it.
+    const fresh = new InMemoryCompanyDnaStore();
+    const tenant = makeFakeTenant();
+    const isolated = await buildServer(loadBackendConfig(), {
+      auth: tenant,
+      organizations: tenant,
+      toolState: new InMemoryToolStateStore(),
+      conversations: new InMemoryConversationStore(),
+      companyDna: fresh,
+    });
+
+    // user-a already owns "org-a" (pre-existing, no Company DNA).
+    const existing = await tenant.listForUser("user-a");
+    expect(existing.map((o) => o.organizationId)).toContain("org-a");
+
+    const response = await isolated.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: AUTH,
+      payload: {
+        companyName: "Acme Solar Valencia",
+        hasWebsite: false,
+        description: "Instalamos paneles solares en Valencia.",
+        goal: "20 reuniones/mes",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+
+    // The SAME organization is reused, and its DNA is written there.
+    expect(response.json().organizationId).toBe("org-a");
+    const record = await fresh.get("org-a");
+    expect(record?.companyName).toBe("Acme Solar Valencia");
+    await isolated.close();
+  });
 });
