@@ -14,7 +14,12 @@ import {
   approveMarketingWorkItemForSession,
 } from "../../customer-zero/customer-zero-session.js";
 import { isToolDiscoveryComplete } from "../../customer-zero/progressive-discovery.js";
-import { evaluateReadiness } from "../../customer-zero/context-readiness.js";
+import {
+  evaluateDurableReadiness,
+  markMilestone,
+  resolveCompanyDnaStore,
+} from "../../customer-zero/company-readiness.js";
+import { checkpoint } from "../../customer-zero/onboarding-checkpoints.js";
 import type { ServerDeps } from "../deps.js";
 import { curateMandatoryQuestions } from "../../customer-zero/questions.js";
 import { buildAnswersRawData } from "../../customer-zero/answers.js";
@@ -309,6 +314,34 @@ export async function registerCustomerZeroRoutes(
         });
       }
 
+      // Customer Zero P0 — THE HANDOFF GATE.
+      //
+      // Departify must not start working for a company before it
+      // actually understands the company. Every prerequisite below is
+      // read from DURABLE storage, so this cannot be satisfied by
+      // frontend progress or by process memory that a deploy erases.
+      //
+      // `departmentProvisioned` is deliberately excluded: this endpoint
+      // is what provisions it. Everything the CEO must have genuinely
+      // done, however, is required here.
+      const dnaStore = resolveCompanyDnaStore(deps);
+      const durable = await evaluateDurableReadiness(organizationId, dnaStore);
+      const blocking = durable.missing.filter((m) => m !== "department");
+      if (blocking.length > 0) {
+        checkpoint("context_readiness_blocked", organizationId, {
+          missing: blocking,
+        });
+        return reply.code(409).send({
+          error: {
+            code: "CONTEXT_NOT_READY",
+            message:
+              "Todavía no conocemos tu empresa lo suficiente para empezar a trabajar.",
+            requestId: request.id,
+            statusCode: 409,
+          },
+        });
+      }
+
       // Idempotent handoff: if the department already exists, do not
       // re-provision it (no contradictory state).
       const alreadyProvisioned = findMarketingDepartment(session);
@@ -338,6 +371,17 @@ export async function registerCustomerZeroRoutes(
             ? { code: result.errors[0].code, message: result.errors[0].message }
             : { code: "PREPARATION_FAILED", message: "Preparation failed." },
         });
+      }
+
+      // Provisioning is only recorded once it HONESTLY happened.
+      if (department) {
+        await markMilestone(
+          organizationId,
+          dnaStore,
+          "departmentProvisionedAt",
+          new Date().toISOString(),
+        );
+        checkpoint("customer_zero_handoff_completed", organizationId);
       }
 
       return reply.code(200).send({
@@ -740,28 +784,54 @@ export async function registerCustomerZeroRoutes(
     },
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
+      const dnaStore = resolveCompanyDnaStore(deps);
+      // Customer Zero P0 — readiness is evaluated from DURABLE storage,
+      // never from process memory. This is what makes the answer
+      // survive a Railway restart.
+      const durable = await evaluateDurableReadiness(organizationId, dnaStore);
       const session = getCustomerZeroSession(organizationId);
+
       if (!session) {
-        return reply.code(404).send({ error: "Session not found." });
+        // The in-memory session is gone (backend restart / new process).
+        // If the company is DURABLE we must NOT 404 — a 404 makes the
+        // portal wipe local state and drag the CEO back through
+        // onboarding, losing a company Departify genuinely knows.
+        if (!durable.record) {
+          return reply.code(404).send({ error: "Session not found." });
+        }
+        const record = durable.record;
+        return reply.code(200).send({
+          organizationId,
+          ...(record.website ? { url: record.website } : {}),
+          companyName: record.companyName,
+          gapCount: 0,
+          mandatoryQuestions: [],
+          locale: "es",
+          onboarding: {
+            companyName: record.companyName,
+            hasWebsite: Boolean(record.website),
+            ...(record.website ? { url: record.website } : {}),
+            ...(record.description ? { description: record.description } : {}),
+            ...(record.country ? { country: record.country } : {}),
+            ...(record.companySize ? { companySize: record.companySize } : {}),
+            goal: record.objective ?? "",
+          },
+          discoveryTranscript: [],
+          connections: [],
+          unmappedTools: [],
+          department: null,
+          contextReady: durable.ready,
+          contextMissing: durable.missing,
+          conversation: [],
+        });
       }
 
       const report = mostRecentReport(session);
       const department = findMarketingDepartment(session);
-      // Customer Zero hotfix — structural backend readiness gate. The
-      // gate is the single source of truth for whether the CEO may
-      // move past onboarding. The portal consults `contextReady` to
-      // route between CustomerZeroRoute and /chat.
-      const contextReady = evaluateReadiness({
-        hasIntake: Boolean(session.state.onboarding?.companyName),
-        hasCompanyDna:
-          Boolean(report) ||
-          Boolean(session.state.understood),
-        ceoConfirmed: isCeoConfirmed(session),
-        blockingDiscoveryComplete: isToolDiscoveryComplete(
-          session.state.discovery,
-        ),
-        departmentProvisioned: department !== null,
-      });
+      void report;
+      if (durable.ready) {
+        checkpoint("context_readiness_passed", organizationId);
+      }
       return reply.code(200).send({
         organizationId,
         ...(session.state.url ? { url: session.state.url } : {}),
@@ -780,8 +850,9 @@ export async function registerCustomerZeroRoutes(
         department,
         // Customer Zero readiness — portal uses this to decide whether to
         // route to CustomerZeroRoute (continue) or /chat (post-handoff).
-        contextReady: contextReady.ready,
-        contextMissing: contextReady.missing,
+        // DURABLE: the verdict does not depend on this in-memory session.
+        contextReady: durable.ready,
+        contextMissing: durable.missing,
         ...(session.state.marketingWork
           ? { marketingWork: session.state.marketingWork }
           : {}),
@@ -797,15 +868,21 @@ export async function registerCustomerZeroRoutes(
  * the "confirmation_complete" milestone (set when the CEO presses
  * "Confirmar" on the "Esto es lo que hemos entendido" screen).
  */
-function isCeoConfirmed(session: {
-  state: { progress?: { stages?: readonly { id: string; status: string }[] } };
-}): boolean {
-  const stages = session.state.progress?.stages ?? [];
-  return stages.some(
-    (m) => m.id === "confirmation" && m.status === "done",
-  );
-}
-
+/**
+ * Customer Zero P0 — the CEO confirmation predicate that used to live
+ * here has been DELETED, not fixed.
+ *
+ * It read `progress.stages` for a stage with id "confirmation" and
+ * status "done". No code ever created that stage, and "confirmation" was
+ * never a member of `ResearchStageId` — so it returned false for every
+ * organization that has ever existed, permanently pinning
+ * `contextReady` to false while the portal walked the CEO into the
+ * operational chat anyway.
+ *
+ * Confirmation is now a DURABLE fact on the Company DNA record
+ * (`ceoConfirmedAt`, invalidated by later corrections). See
+ * `company-readiness.ts`.
+ */
 function findMarketingDepartment(
   session: {
     departmentService: { list(): readonly DepartmentSnapshot[] };

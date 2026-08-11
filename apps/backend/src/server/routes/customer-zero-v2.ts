@@ -62,6 +62,7 @@ import {
 import type { MarketingService } from "../../customer-zero/marketing-service.js";
 import {
   isReadyForMarketing,
+  isToolDiscoveryComplete,
   noCrmOptionLabel,
   otherOptionLabel,
   selectNextQuestion,
@@ -156,6 +157,22 @@ import {
 } from "../../customer-zero/google-tokens.js";
 import type { CompanyDiscoveryReport } from "@departify/business-discovery";
 import type { ServerDeps } from "../deps.js";
+import {
+  evaluateDnaCompleteness,
+  type CompanyDnaStore,
+} from "../../customer-zero/company-dna.js";
+import {
+  projectIntakeToDna,
+  projectResearchToDna,
+  markMilestone,
+  applyCeoConfirmation,
+  readinessFactsFromRecord,
+  resolveCompanyDnaStore,
+  hydrateSessionFromCompanyDna,
+  type CeoCorrections,
+} from "../../customer-zero/company-readiness.js";
+import { evaluateReadiness as evaluateReadinessReport } from "../../customer-zero/context-readiness.js";
+import { checkpoint } from "../../customer-zero/onboarding-checkpoints.js";
 import {
   buildDeclaredToolState,
   humanLifecycleLabel,
@@ -350,8 +367,23 @@ export async function registerCustomerZeroV2Routes(
         hasWebsite ? "website" : "description",
       );
 
+      // Customer Zero P0 — the company becomes DURABLE at the very first
+      // step. From here on a reload or a backend restart can reconstruct
+      // who this company is without asking the CEO to start over.
+      const dnaStore = resolveCompanyDnaStore(deps);
+      const now = new Date().toISOString();
+      await dnaStore.upsert(
+        projectIntakeToDna(
+          organizationId,
+          session.state.onboarding,
+          now,
+          await dnaStore.get(organizationId),
+        ),
+      );
+      checkpoint("customer_zero_started", organizationId);
+
       // The research runs in the background: the UI follows the REAL stages.
-      void runResearch(session, locale).catch(() => {
+      void runResearch(session, locale, dnaStore).catch(() => {
         /* progress already carries the failure */
       });
 
@@ -496,6 +528,34 @@ export async function registerCustomerZeroV2Routes(
       }
 
       const gapsAfter = mostRecentReport(session)?.gaps.length ?? gapsBefore;
+
+      // Customer Zero P0 — the CEO's answers are durable business facts,
+      // and completing the BLOCKING questions is a durable milestone.
+      // Only blocking facts can gate readiness; useful/optional answers
+      // enrich the record without ever holding the CEO at the door.
+      const dnaStore = resolveCompanyDnaStore(deps);
+      const record = await dnaStore.get(organizationId);
+      if (record) {
+        const declaredTools = [...session.state.connections.keys()];
+        const enriched = {
+          ...record,
+          // Tools the CEO DECLARED. This is a business fact and never a
+          // claim that the tool is connected — real connection health
+          // lives in the tool state store.
+          ...(declaredTools.length > 0 ? { declaredTools } : {}),
+        };
+        await dnaStore.upsert(enriched);
+        if (isToolDiscoveryComplete(session.state.discovery)) {
+          await markMilestone(
+            organizationId,
+            dnaStore,
+            "blockingDiscoveryCompletedAt",
+            new Date().toISOString(),
+          );
+          checkpoint("blocking_discovery_completed", organizationId);
+        }
+      }
+
       return reply.code(200).send({
         ...buildConversationPayload(session),
         gapsBefore,
@@ -1540,6 +1600,131 @@ export async function registerCustomerZeroV2Routes(
     },
   );
 
+  // ------------------------------------------------------------------
+  // CEO CONFIRMATION — Customer Zero P0.
+  //
+  // The step that did not exist. Before this, `ceoConfirmed` was read
+  // from a research stage id ("confirmation") that no code ever set and
+  // that was not even a member of `ResearchStageId` — so the readiness
+  // gate could never pass for ANY company, while the portal walked the
+  // CEO into the operational chat regardless.
+  //
+  // These two endpoints make the confirmation real and durable:
+  //   GET  .../understanding — what we understood, in business language
+  //   POST .../confirm       — the CEO corrects and confirms it
+  // ------------------------------------------------------------------
+  server.get(
+    "/api/customer-zero/:organizationId/understanding",
+    {
+      schema: {
+        tags: ["customer-zero"],
+        summary: "What Departify understood about the company, for CEO review",
+        params: {
+          type: "object",
+          required: ["organizationId"],
+          properties: { organizationId: { type: "string" } },
+        },
+        response: {
+          200: { type: "object", additionalProperties: true },
+          404: { type: "object", properties: { error: { type: "string" } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId } = request.params as { organizationId: string };
+      const store = resolveCompanyDnaStore(deps);
+      const record = await store.get(organizationId);
+      if (!record) {
+        return reply.code(404).send({ error: "Company not found." });
+      }
+      const readiness = readinessFactsFromRecord(record);
+      const completeness = evaluateDnaCompleteness(record);
+      // Business language only. No JSON schemas, no DNA internals, no
+      // "context compiler" — the CEO sees understanding, not plumbing.
+      return reply.code(200).send({
+        organizationId,
+        companyName: record.companyName,
+        ...(record.description ? { description: record.description } : {}),
+        ...(record.objective ? { objective: record.objective } : {}),
+        ...(record.geography
+          ? { geography: record.geography }
+          : record.country
+            ? { geography: record.country }
+            : {}),
+        products: record.products,
+        customers: record.customers,
+        ...(record.positioning ? { positioning: record.positioning } : {}),
+        ...(record.businessModel ? { businessModel: record.businessModel } : {}),
+        declaredTools: record.declaredTools,
+        uncertainties: record.uncertainties,
+        provenance: record.provenance,
+        confirmed: readiness.ceoConfirmed,
+        missing: completeness.missing,
+      });
+    },
+  );
+
+  server.post(
+    "/api/customer-zero/:organizationId/confirm",
+    {
+      schema: {
+        tags: ["customer-zero"],
+        summary: "The CEO corrects and confirms the company understanding",
+        params: {
+          type: "object",
+          required: ["organizationId"],
+          properties: { organizationId: { type: "string" } },
+        },
+        body: {
+          type: "object",
+          properties: {
+            companyName: { type: "string" },
+            description: { type: "string" },
+            objective: { type: "string" },
+            geography: { type: "string" },
+            products: { type: "array", items: { type: "string" } },
+            customers: { type: "array", items: { type: "string" } },
+            declaredTools: { type: "array", items: { type: "string" } },
+          },
+          additionalProperties: false,
+        },
+        response: {
+          200: { type: "object", additionalProperties: true },
+          404: { type: "object", properties: { error: { type: "string" } } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId } = request.params as { organizationId: string };
+      const corrections = (request.body ?? {}) as CeoCorrections;
+      const store = resolveCompanyDnaStore(deps);
+      const record = await store.get(organizationId);
+      if (!record) {
+        return reply.code(404).send({ error: "Company not found." });
+      }
+      // Corrections are merged FIRST, then the confirmation is stamped —
+      // so the confirmation always refers to the facts we actually
+      // stored, never to a version the CEO never saw.
+      const confirmed = applyCeoConfirmation(
+        record,
+        corrections,
+        new Date().toISOString(),
+      );
+      await store.upsert(confirmed);
+      checkpoint("ceo_confirmation_completed", organizationId);
+      checkpoint("company_dna_persisted", organizationId);
+
+      const facts = readinessFactsFromRecord(confirmed);
+      const readiness = evaluateReadinessReport(facts);
+      return reply.code(200).send({
+        organizationId,
+        confirmed: true,
+        contextReady: readiness.ready,
+        contextMissing: readiness.missing,
+      });
+    },
+  );
+
   server.get(
     "/api/customer-zero/:organizationId/handoff",
     {
@@ -1993,6 +2178,7 @@ function inferTitleFromMessage(message: string): string {
 async function runResearch(
   session: CustomerZeroSession,
   locale: SupportedLocale,
+  dnaStore: CompanyDnaStore,
 ): Promise<void> {
   const progress = session.state.progress;
   if (!progress) return;
@@ -2000,6 +2186,7 @@ async function runResearch(
   if (!onboarding) return;
 
   try {
+    checkpoint("research_started", session.organizationId);
     startStage(progress, "fetch");
     let interpreted: InterpretedBusiness;
     if (onboarding.hasWebsite && onboarding.url) {
@@ -2094,6 +2281,19 @@ async function runResearch(
       ),
     );
     void report;
+
+    // Customer Zero P0 — the research output becomes DURABLE Company DNA.
+    // Only what the research genuinely found is written: an
+    // interpretation that discovered no products leaves `products`
+    // empty and the gap surfaces honestly through the completeness
+    // contract instead of being papered over.
+    const existing = await dnaStore.get(session.organizationId);
+    if (existing) {
+      await dnaStore.upsert(
+        projectResearchToDna(existing, interpreted, new Date().toISOString()),
+      );
+    }
+    checkpoint("research_completed", session.organizationId);
     completeProgress(progress);
   } catch (cause) {
     failProgress(
@@ -2143,6 +2343,11 @@ export async function requireSession(
     ...(deps.conversations ? { conversations: deps.conversations } : {}),
   });
   await hydrateSessionToolState(session);
+  // Customer Zero P0 — rebuild the company understanding from DURABLE
+  // storage. After a Railway restart the session Map is empty; without
+  // this the department context compiler would rebuild an empty company
+  // and Elvira would greet a CEO she no longer recognises.
+  await hydrateSessionFromCompanyDna(session, resolveCompanyDnaStore(deps));
   // STATE-MACHINE INVARIANT: "connecting" is only valid while the OAuth
   // state nonce is alive (10 minutes). If a Google connection is still
   // "connecting" with a missing/expired/consumed nonce (the callback

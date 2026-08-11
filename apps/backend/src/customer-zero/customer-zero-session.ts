@@ -123,6 +123,12 @@ export interface CustomerZeroSessionState {
   understood?: Readonly<Record<string, unknown>>;
   /** Whether durable tool/connection state was hydrated (Phase P-B). */
   toolHydrated?: boolean;
+  /**
+   * Whether the durable Company DNA was rehydrated into this session
+   * (Customer Zero P0). This is what lets the company understanding
+   * survive a backend restart instead of dying with the process.
+   */
+  dnaHydrated?: boolean;
   /** The organization's current/selected conversation (Phase P-B part 15). */
   currentConversationId?: string;
   /** Marketing Director's diagnosis of the business. */
