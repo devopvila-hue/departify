@@ -139,27 +139,19 @@ export function workStatesForTurn(input: EnrichmentInput): readonly WorkState[] 
  * literal text. We strip those so the portal can apply its own
  * renderer without surprises.
  *
- * SECURITY: we deliberately do NOT translate to HTML here. The
- * portal renders only the textual content (no HTML), and any
- * HTML-looking input is escaped.
+ * SECURITY: we deliberately do NOT translate to HTML here. The portal's
+ * markdown renderer escapes text at its DOM boundary. Keeping plain text
+ * here is important for business data such as `Google <no-reply@…>`.
  */
 export function normalizeReplyForChat(reply: string): string {
   if (typeof reply !== "string" || reply.length === 0) return reply ?? "";
   // Collapse runs of `*` (engine often emits **bold** literally).
   // Keep the readable text between them.
-  let normalized = reply
+  const normalized = reply
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/\*([^*\s][^*]*?)\*/g, "$1")
     .replace(/__([^_]+)__/g, "$1")
     .replace(/_([^_\s][^_]*?)_/g, "$1");
-  // Escape characters that could be interpreted as raw HTML if the
-  // portal ever allows HTML rendering by accident. Today's renderer
-  // uses textContent — this is a belt-and-braces guard.
-  normalized = normalized
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-  // Defensive: revert over-escape on the asterisks we already
-  // removed, since we don't need HTML entities for plain text.
   return normalized;
 }
 

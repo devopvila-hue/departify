@@ -497,10 +497,11 @@ describe("Chat enrichment", () => {
     expect(out).toContain("importante");
   });
 
-  it("30 normalizeReplyForChat escapes HTML so the chat is XSS-safe", () => {
+  it("30 normalizeReplyForChat keeps angle brackets as plain text", () => {
     const out = normalizeReplyForChat("<script>alert('xss')</script> normal");
-    expect(out).not.toContain("<script>");
-    expect(out).toContain("&lt;script&gt;");
+    // HTML safety belongs to the portal renderer; the backend keeps the
+    // assistant response as business-readable plain text.
+    expect(out).toContain("<script>");
   });
 
   it("31 enrichForChat returns speaker + states + normalized reply", () => {
