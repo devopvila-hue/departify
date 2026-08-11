@@ -147,6 +147,8 @@ import {
   isEmailSendRequest,
   isEmailApprovalResponse,
   isEmailCancellation,
+  isEmailFailureQuestion,
+  isEmailEditRequest,
   buildEmailDraft,
   missingFieldsCopy,
   type PendingEmailWork,
@@ -2677,7 +2679,37 @@ export async function processCeoMessage(
   // multi-turn — a follow-up like "Son A, B y C" continues the SAME
   // pending email instead of falling into a generic route or timing out
   // into the generic red error.
-  if (routed.decision.intent === "email_action" || session.state.pendingEmailWork) {
+  const pendingEmail = session.state.pendingEmailWork;
+  const pendingEmailInfoContinuation = Boolean(
+    pendingEmail?.status === "awaiting_info" && (
+      Boolean(extractRecipient(message)) ||
+      Boolean(extractObjective(message)) ||
+      /^(?:que|son|diciendo|con)\b/i.test(message.trim())
+    ),
+  );
+  const emailOwnsPendingTurn = Boolean(
+    pendingEmail && (
+      routed.decision.intent === "email_action" ||
+      isEmailApprovalResponse(message) ||
+      isEmailCancellation(message) ||
+      isEmailFailureQuestion(message) ||
+      isEmailEditRequest(message) ||
+      pendingEmailInfoContinuation
+    ),
+  );
+  const newBusinessIntentEscapesEmail = Boolean(
+    pendingEmail &&
+    !emailOwnsPendingTurn &&
+    !pendingEmailInfoContinuation && isExplicitNewBusinessIntent(message, routed.decision.intent),
+  );
+  if (newBusinessIntentEscapesEmail) {
+    // A pending draft is not a conversational trap. Explicit new business
+    // work takes the normal capability route; cancellation remains handled
+    // by runEmailTurn so it can acknowledge the discarded draft.
+    delete session.state.pendingEmailWork;
+  }
+
+  if (routed.decision.intent === "email_action" || emailOwnsPendingTurn) {
     const emailOutcome = await runEmailTurn(session, message, isEs);
     assistantReply = emailOutcome.reply;
     marketingTurn = { role: "assistant", content: emailOutcome.reply };
@@ -3093,6 +3125,22 @@ export async function processCeoMessage(
     pendingToolId: routed.pendingToolId ?? null,
     conversationId: conversation.id,
   };
+}
+
+function isExplicitNewBusinessIntent(
+  message: string,
+  intent: RoutingDecision["intent"],
+): boolean {
+  if (![
+    "calendar_read",
+    "calendar_create",
+    "drive_query",
+    "multi_capability",
+    "external_tool_query",
+    "knowledge_query",
+  ].includes(intent)) return false;
+  return /\b(?:calendar|calendario|drive|google\s+drive|email|emails?|correo|correos?|tareas?|reuni[oó]n|eventos?)\b/i.test(message) &&
+    /\b(?:mira|mirar|accede?|acceder|consulta|consultar|busca|buscar|encuentra|mis|tengo|qu[eé]|cu[aá]les|agenda|pon|dime|lee|leer)\b/i.test(message);
 }
 
 /** Resolves (and creates when needed) the conversation a turn belongs to. */
@@ -3640,7 +3688,11 @@ async function runEmailTurn(
   }
 
   // Awaiting approval → accept approve / cancel / new-info.
-  if (work.status === "awaiting_approval" || work.status === "draft_ready") {
+  if (
+    work.status === "awaiting_approval" ||
+    work.status === "draft_ready" ||
+    work.status === "failed"
+  ) {
     if (isEmailCancellation(message)) {
       work.status = "cancelled";
       delete session.state.pendingEmailWork;
@@ -3654,16 +3706,24 @@ async function runEmailTurn(
     if (isEmailApprovalResponse(message)) {
       return sendPendingEmail(session, work, isEs);
     }
-    // Not an approval: treat the message as additional objective info
-    // and rebuild the draft.
-    const objective = extractObjective(message) ?? message;
-    work.objective = objective.trim();
-    recomputeMissingFields(work);
-    if (work.missingFields.length === 0) {
-      work.draft = buildEmailDraft(work.recipient!, work.objective!, locale);
+    if (isEmailFailureQuestion(message) && work.status === "failed") {
+      return {
+        reply: explainEmailSendFailure(work.sendError, isEs),
+        connectionSuggestion: null,
+      };
+    }
+    if (isEmailEditRequest(message)) {
+      work.status = "editing";
+      applyEmailEdit(work, message);
       work.status = "awaiting_approval";
       return draftApprovalReply(work, isEs);
     }
+    return {
+      reply: isEs
+        ? "Tengo el borrador preparado. Responde «sí» para enviarlo, dime un cambio concreto o escribe «olvida mail» para cancelarlo."
+        : "The draft is ready. Reply \"yes\" to send it, tell me a specific change, or say \"cancel\" to discard it.",
+      connectionSuggestion: null,
+    };
   }
 
   // Awaiting info → absorb the continuation into the missing fields.
@@ -3687,6 +3747,10 @@ async function runEmailTurn(
     // Everything gathered → build the draft and ask for approval.
     work.draft = buildEmailDraft(work.recipient!, work.objective!, locale);
     work.status = "awaiting_approval";
+    return draftApprovalReply(work, isEs);
+  }
+
+  if (work.status === "editing") {
     return draftApprovalReply(work, isEs);
   }
 
@@ -3769,6 +3833,17 @@ async function sendPendingEmail(
       connectionSuggestion: null,
     };
   }
+  if (work.status === "sending") {
+    return {
+      reply: isEs
+        ? "El envío ya está en curso; no enviaré el correo dos veces."
+        : "The send is already in progress; I won't send the email twice.",
+      connectionSuggestion: null,
+    };
+  }
+  // Set the state before the first awaited operation. A repeated approval
+  // arriving concurrently therefore cannot start a second provider call.
+  work.status = "sending";
   const operational = await isEmailCapabilityOperational(organizationId);
   if (!operational) {
     work.status = "awaiting_approval";
@@ -3779,7 +3854,6 @@ async function sendPendingEmail(
       connectionSuggestion: buildEmailConnectionSuggestion(isEs),
     };
   }
-  work.status = "sending";
   const outcome = await sendEmail(session, {
     to: work.draft.to,
     subject: work.draft.subject,
@@ -3794,6 +3868,7 @@ async function sendPendingEmail(
       sentAt: outcome.sentAt ?? new Date().toISOString(),
       providerMessageId: outcome.providerMessageId,
     };
+    work.sendError = null;
     delete session.state.pendingEmailWork;
     return {
       reply: isEs
@@ -3803,11 +3878,74 @@ async function sendPendingEmail(
     };
   }
   // Failed send: keep the draft, surface an actionable recovery.
-  work.status = "awaiting_approval";
+  work.status = "failed";
+  work.sendError = outcome.error ?? "send_failed";
   const hint = isEs
-    ? "No he podido enviar el correo ahora mismo. Vuelve a intentarlo en unos minutos; el borrador sigue preparado."
-    : "I couldn't send the email right now. Try again in a few minutes; the draft is still ready.";
+    ? `No he podido enviar el correo. ${describeEmailSendFailure(work.sendError, true)} Puedes responder «sí» para reintentarlo; el borrador sigue preparado.`
+    : `I couldn't send the email. ${describeEmailSendFailure(work.sendError, false)} You can reply "yes" to retry; the draft is still ready.`;
   return { reply: hint, connectionSuggestion: null };
+}
+
+function explainEmailSendFailure(error: string | null, isEs: boolean): string {
+  return isEs
+    ? `${describeEmailSendFailure(error, true)} El borrador sigue preparado para reintentarlo.`
+    : `${describeEmailSendFailure(error, false)} The draft is still ready to retry.`;
+}
+
+function describeEmailSendFailure(error: string | null, isEs: boolean): string {
+  switch (error) {
+    case "google_send_not_authorized":
+      return isEs
+        ? "No se pudo enviar porque tu conexión de Google todavía no tiene autorización para enviar correos."
+        : "The email could not be sent because your Google connection is not authorized to send email yet.";
+    case "google_not_configured":
+      return isEs
+        ? "No se pudo enviar porque el servicio de correo de Google no está configurado correctamente."
+        : "The email could not be sent because Google email is not configured correctly.";
+    case "auth":
+      return isEs
+        ? "Google rechazó la autorización durante el envío."
+        : "Google rejected the authorization during the send.";
+    case "rate_limit":
+      return isEs
+        ? "Google limitó temporalmente el envío."
+        : "Google temporarily rate-limited the send.";
+    case "invalid_response":
+    case "send_failed":
+    default:
+      return isEs
+        ? "El envío falló y no tengo un motivo más específico todavía."
+        : "The send failed and I don't have a more specific reason yet.";
+  }
+}
+
+function applyEmailEdit(work: PendingEmailWork, message: string): void {
+  if (!work.draft) return;
+  const draft = work.draft;
+  const subject = message.match(/cambia(?:r)?\s+(?:el\s+)?asunto\s+a\s+(.+)$/i)?.[1]?.trim();
+  if (subject) {
+    work.draft = { ...draft, subject };
+    return;
+  }
+  const addition = message.match(/a[nñ]ade(?:\s+que)?\s*:?\s*(.+)$/i)?.[1]?.trim();
+  if (addition) {
+    work.draft = { ...draft, body: `${draft.body}\n\n${addition}` };
+    return;
+  }
+  const opening = message.match(/pon\s+(.+?)\s+al\s+principio$/i)?.[1]?.trim();
+  if (opening) {
+    work.draft = { ...draft, body: `${opening}\n\n${draft.body}` };
+    return;
+  }
+  if (/hazlo\s+m[aá]s\s+corto/i.test(message)) {
+    const paragraphs = draft.body.split(/\n\s*\n/);
+    work.draft = { ...draft, body: paragraphs.slice(0, 2).join("\n\n") };
+    return;
+  }
+  if (/quita\s+el\s+[uú]ltimo\s+p[aá]rrafo/i.test(message)) {
+    const paragraphs = draft.body.split(/\n\s*\n/);
+    work.draft = { ...draft, body: paragraphs.slice(0, -1).join("\n\n") };
+  }
 }
 
 /** Contextual "Conecta tu correo" suggestion — product wording, never

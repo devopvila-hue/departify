@@ -82,7 +82,14 @@ export async function sendEmail(
 ): Promise<EmailSendOutcome> {
   const organizationId = session.organizationId;
   const provider = await resolveOperationalEmailProvider(organizationId);
+  console.info(`[email-capability] ${JSON.stringify({
+    event: "email_send_attempt",
+    organizationId,
+    provider,
+    capability: "email.send",
+  })}`);
   if (!provider) {
+    logEmailSendFailure(organizationId, null, "email_not_connected");
     return {
       ok: false,
       provider: null,
@@ -123,6 +130,7 @@ export async function sendEmail(
   const clientId = process.env["GOOGLE_OAUTH_CLIENT_ID"]?.trim();
   const clientSecret = process.env["GOOGLE_OAUTH_CLIENT_SECRET"]?.trim();
   if (!clientId || !clientSecret) {
+    logEmailSendFailure(organizationId, "google", "google_not_configured");
     return {
       ok: false,
       provider: "google",
@@ -132,6 +140,7 @@ export async function sendEmail(
     };
   }
   if (!(await hasOperationalGoogleCapabilityForOrg(organizationId, "email.send"))) {
+    logEmailSendFailure(organizationId, "google", "google_send_not_authorized");
     return {
       ok: false,
       provider: "google",
@@ -148,6 +157,7 @@ export async function sendEmail(
     (s) => s.hasRefreshToken && s.operationalVerifiedAt,
   );
   if (!target) {
+    logEmailSendFailure(organizationId, "google", "email_not_connected");
     return {
       ok: false,
       provider: "google",
@@ -169,6 +179,12 @@ export async function sendEmail(
     bodyText: input.bodyText,
   });
   if (result.success && result.value) {
+    console.info(`[email-capability] ${JSON.stringify({
+      event: "email_send_success",
+      organizationId,
+      provider: "google",
+      capability: "email.send",
+    })}`);
     return {
       ok: true,
       provider: "google",
@@ -177,6 +193,13 @@ export async function sendEmail(
       error: null,
     };
   }
+  console.info(`[email-capability] ${JSON.stringify({
+    event: "email_send_failed",
+    organizationId,
+    provider: "google",
+    capability: "email.send",
+    error: result.errorCode ?? "send_failed",
+  })}`);
   return {
     ok: false,
     provider: "google",
@@ -184,6 +207,20 @@ export async function sendEmail(
     sentAt: null,
     error: result.errorCode ?? "send_failed",
   };
+}
+
+function logEmailSendFailure(
+  organizationId: string,
+  provider: string | null,
+  error: string,
+): void {
+  console.info(`[email-capability] ${JSON.stringify({
+    event: "email_send_failed",
+    organizationId,
+    provider,
+    capability: "email.send",
+    error,
+  })}`);
 }
 
 /** Load the org's operational corporate account (password stays internal). */

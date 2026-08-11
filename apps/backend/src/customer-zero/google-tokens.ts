@@ -1077,6 +1077,10 @@ export function hasOperationalGoogleCapability(
   // Older durable rows only have a Gmail probe. Keep Gmail capabilities
   // compatible when their granted scopes were present; Calendar and Drive
   // still need explicit evidence from their own probe.
+  // Compose/send have no safe non-mutating probe: a granted Gmail scope plus
+  // the verified Google identity is the authorization evidence, while the
+  // real Gmail API mutation remains the final execution evidence.
+  if (capability === "email.compose" || capability === "email.send") return true;
   return summary.operationalCapabilities
     ? summary.operationalCapabilities.includes(capability)
     : capability.startsWith("email.");

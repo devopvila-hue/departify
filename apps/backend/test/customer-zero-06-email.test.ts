@@ -56,6 +56,23 @@ function seedOperationalGmail(org: string, userId = "user-a"): void {
     displayName: "CEO",
     operationalVerifiedAt: new Date().toISOString(),
     operationalProbeError: null,
+    operationalCapabilities: ["email.read"],
+  });
+}
+
+function seedReadOnlyGmail(org: string, userId = "user-a"): void {
+  void getGoogleTokenStore().put({
+    organizationId: org,
+    userId,
+    provider: "gmail",
+    accessToken: "access-read-only",
+    refreshToken: "refresh-read-only",
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    scopes: ["https://www.googleapis.com/auth/gmail.readonly"],
+    email: "ceo@departify.app",
+    displayName: "CEO",
+    operationalVerifiedAt: new Date().toISOString(),
+    operationalProbeError: null,
   });
 }
 
@@ -189,6 +206,25 @@ describe("CZ06 — Email capability P0 (multi-turn send)", () => {
     expect(second.connectionSuggestion).toBeNull();
   });
 
+  it("P0: standalone approval 'si' approves the existing draft, never replaces its body", async () => {
+    const org = await startOrg();
+    seedOperationalGmail(org);
+    mockGoogleFetch();
+    await message(org, "Envía un correo a cliente@acme.com diciendo que la reunión pasa al viernes");
+    const approved = await message(org, "si");
+    expect(approved.reply).toContain("Enviado a cliente@acme.com");
+    expect(approved.reply).not.toContain("si");
+  });
+
+  it("P0: unaccented 'si, envialo' approves and sends the existing draft", async () => {
+    const org = await startOrg();
+    seedOperationalGmail(org);
+    mockGoogleFetch();
+    await message(org, "Envía un correo a cliente@acme.com diciendo que la reunión pasa al viernes");
+    const approved = await message(org, "si, envialo");
+    expect(approved.reply).toContain("Enviado a cliente@acme.com");
+  });
+
   it("T3: missing objective → continuation fills it and preserves the recipient", async () => {
     const org = await startOrg();
     seedOperationalGmail(org);
@@ -232,6 +268,16 @@ describe("CZ06 — Email capability P0 (multi-turn send)", () => {
     expect(second.reply).not.toContain("no ha podido responderte");
   });
 
+  it("P0: Gmail read operational but send scope missing is reported as authorization_required", async () => {
+    const org = await startOrg();
+    seedReadOnlyGmail(org);
+    mockGoogleFetch();
+    await message(org, "Envía un correo a cliente@acme.com diciendo hola");
+    const result = await message(org, "si");
+    expect(result.reply.toLowerCase()).toContain("autorización");
+    expect(result.reply).not.toContain("Enviado a");
+  });
+
   it("H: connected email → no unnecessary connection card after the turn", async () => {
     const org = await startOrg();
     seedOperationalGmail(org);
@@ -271,11 +317,68 @@ describe("CZ06 — Email capability P0 (multi-turn send)", () => {
     expect(second.status).toBe(200);
     expect(second.reply).not.toContain("Enviado a");
     expect(second.reply).toContain("No he podido enviar");
+    const why = await message(org, "por que");
+    expect(why.reply).toContain("falló");
+    expect(why.reply).not.toContain("por que");
     // The draft survives → a retry with a working provider succeeds.
     restoreFetch();
     mockGoogleFetch({});
     const third = await message(org, "sí, envíalo");
     expect(third.reply).toContain("Enviado a cliente@acme.com");
+  });
+
+  it("P0: cancellation exits email state and unrelated text never becomes email content", async () => {
+    const org = await startOrg();
+    seedOperationalGmail(org);
+    mockGoogleFetch();
+    await message(org, "Envía un correo a cliente@acme.com diciendo hola");
+    const cancelled = await message(org, "olvida mail");
+    expect(cancelled.reply).toContain("cancelado");
+    const next = await message(org, "Envía un correo a cliente@acme.com diciendo que seguimos adelante");
+    expect(next.reply).toContain("seguimos adelante");
+    expect(next.reply).not.toContain("olvida mail");
+  });
+
+  it("P0: an explicit Calendar/Drive request escapes a pending email draft", async () => {
+    const org = await startOrg();
+    seedOperationalGmail(org);
+    mockGoogleFetch();
+    await message(org, "Envía un correo a cliente@acme.com diciendo contenido privado");
+    const next = await message(org, "pues aceder al drive y al calendar");
+    expect(next.reply).not.toContain("contenido privado");
+    expect(next.reply).not.toContain("olvida mail");
+  });
+
+  it("P0: repeated approvals while sending are idempotent", async () => {
+    const org = await startOrg();
+    seedOperationalGmail(org);
+    let sendCalls = 0;
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/messages/send")) {
+        sendCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        return new Response(JSON.stringify({ id: "gmail-msg-idempotent" }), { status: 200 });
+      }
+      return (originalFetch as typeof fetch)(input, init);
+    }) as unknown as typeof fetch;
+    await message(org, "Envía un correo a cliente@acme.com diciendo hola");
+    const [first, second] = await Promise.all([message(org, "si"), message(org, "envialo")]);
+    expect(sendCalls).toBe(1);
+    expect([first.reply, second.reply].some((reply) => reply.includes("Enviado a cliente@acme.com"))).toBe(true);
+  });
+
+  it("P0: complete natural-language joke request builds five distinct jokes", async () => {
+    const org = await startOrg();
+    seedOperationalGmail(org);
+    mockGoogleFetch();
+    const draft = await message(org, "manda un mail a alex@refactu.com con 5 chiste de informatica buenos");
+    expect(draft.reply).toContain("alex@refactu.com");
+    expect(draft.reply).toContain("5 chistes de informática");
+    expect(draft.reply).toContain("1. ");
+    expect(draft.reply).toContain("5. ");
+    expect(draft.reply).not.toContain("qué quieres decir");
   });
 
   it("X: org B cannot see org A's email state or credentials", async () => {
