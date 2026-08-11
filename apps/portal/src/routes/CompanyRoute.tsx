@@ -14,6 +14,7 @@ export function CompanyRoute() {
   const { organizationId } = useOrg();
   const [status, setStatus] = useState<CompanyStatus | null>(null);
   const [understanding, setUnderstanding] = useState<UnderstandingView | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     if (!organizationId) return;
@@ -21,9 +22,24 @@ export function CompanyRoute() {
       ([statusData, understandingData]) => {
         if (statusData) setStatus(statusData);
         if (understandingData) setUnderstanding(understandingData);
+        setLoaded(true);
       },
-    );
+    ).catch(() => setLoaded(true));
   }, [organizationId]);
+
+  if (loaded && !status && !understanding) {
+    return (
+      <div className="dfy-page">
+        <section className="dfy-hero">
+          <p className="dfy-eyebrow">Empresa</p>
+          <h1>No he podido cargar la información</h1>
+          <p className="dfy-alert" role="alert">
+            No he podido recuperar el contexto de tu empresa ahora mismo. Inténtalo de nuevo en un momento.
+          </p>
+        </section>
+      </div>
+    );
+  }
 
   const onboarding = status?.onboarding;
   const transcript = status?.discoveryTranscript ?? [];
