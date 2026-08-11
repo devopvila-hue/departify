@@ -13,6 +13,7 @@ import { SupabaseTenantService } from "./auth/supabase-tenant-service.js";
 import { SupabaseToolStateStore } from "./customer-zero/supabase-tool-state-store.js";
 import { SupabaseConversationStore } from "./customer-zero/supabase-conversation-store.js";
 import { SupabaseInboxStore } from "./customer-zero/supabase-inbox-store.js";
+import { SupabaseCompanyDnaStore } from "./customer-zero/supabase-company-dna-store.js";
 import {
   SupabaseGoogleTokenStore,
   setGoogleTokenStore,
@@ -67,6 +68,10 @@ try {
   deps.toolState = new SupabaseToolStateStore(supabaseAuthConfig);
   deps.conversations = new SupabaseConversationStore(supabaseAuthConfig);
   deps.inbox = new SupabaseInboxStore(supabaseAuthConfig);
+  // Durable canonical Company DNA (Customer Zero P0). Company
+  // understanding MUST survive Railway backend restarts — the readiness
+  // gate is evaluated against this store, never against process memory.
+  deps.companyDna = new SupabaseCompanyDnaStore(supabaseAuthConfig);
   // Durable Google OAuth token persistence. Required in production —
   // tokens MUST survive Railway backend restarts. The in-memory
   // fallback is dev / tests only.

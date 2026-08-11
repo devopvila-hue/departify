@@ -4,6 +4,7 @@ import type { EngineRuntimePolicy } from "@departify/config";
 import type { OrganizationStore } from "../auth/tenant-contracts.js";
 import type { ToolStateStore } from "../customer-zero/tool-state.js";
 import type { ConversationStore } from "../customer-zero/conversation-store.js";
+import type { CompanyDnaStore } from "../customer-zero/company-dna.js";
 import type { InboxStore } from "../customer-zero/inbox-domain.js";
 import type { MarketingService } from "../customer-zero/marketing-service.js";
 
@@ -22,6 +23,12 @@ export interface ServerDeps {
   toolState?: ToolStateStore;
   /** Durable organization-scoped conversations (Phase P-B part 15). */
   conversations?: ConversationStore;
+  /**
+   * Durable canonical Company DNA (Customer Zero P0). The readiness gate
+   * is evaluated against this store and nothing else — in-memory session
+   * state can never prove that Departify understands the company.
+   */
+  companyDna?: CompanyDnaStore;
   /** Durable organization-scoped unified inbox (Customer Zero 03). */
   inbox?: InboxStore;
   /** Public base URL of the portal, used to build OAuth redirect URIs. */
