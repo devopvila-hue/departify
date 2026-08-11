@@ -113,12 +113,27 @@ export interface CustomerZeroSessionState {
   /** Pending Calendar mutation; retained until the CEO approves or cancels. */
   pendingCalendarWork?: {
     summary: string;
-    startIso: string;
-    endIso: string;
+    hour?: number;
+    minute?: number;
+    startIso?: string;
+    endIso?: string;
     timezone: string;
     attendees: readonly string[];
-    status: "awaiting_approval" | "creating";
+    status: "awaiting_date" | "awaiting_approval" | "creating";
     createdAt: string;
+  };
+  /** Last Calendar result confirmed by Google; never populated from prose. */
+  lastCalendarOperation?: {
+    status: "verified" | "failed" | "ambiguous";
+    operation: "list" | "get" | "create" | "update";
+    eventId?: string;
+    calendarId?: string;
+    htmlLink?: string;
+    summary?: string;
+    startIso?: string;
+    endIso?: string;
+    verifiedAt?: string;
+    error?: string;
   };
   /** UI/session locale — every generated visible text respects it. */
   locale: SupportedLocale;

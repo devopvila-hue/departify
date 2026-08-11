@@ -1107,12 +1107,20 @@ export function isEmailReadFollowUp(message: string): boolean {
 
 export function isCalendarReadRequest(message: string): boolean {
   if (/\bqu[eé]\s+tengo\s+(hoy|ma[nñ]ana|esta\s+semana|this\s+week|tomorrow|today)\b/i.test(message)) return true;
+  // Bare agenda requests are explicit Calendar operations; they must not
+  // fall through to the generic Marketing/LLM sink.
+  if (/\bmis\s+(pr[oó]xim(?:o|os|a|as)|siguientes?)\s+eventos?\b/i.test(message)) return true;
+  if (/(?:link|enlace|encale|url)\b/i.test(message) && /\b(evento|calendar|calendario)\b/i.test(message)) return true;
+  if (/\bno\s+(?:lo\s+)?(?:veo|aparece|me\s+aparece|me\s+sale)\b/i.test(message) && /\b(evento|calendar|calendario)\b/i.test(message)) return true;
+  if (/\b(?:en\s+qu[eé]|que)\s+calendari[oa]\b/i.test(message)) return true;
   return /\b(calendar|calendario|reuni[oó]n|reuniones|cita|hueco|disponible|agenda)\b/i.test(message) &&
     /\b(qu[eé]|qu[eé]\s+tengo|hoy|ma[nñ]ana|semana|pr[oó]xim(?:o|a|os|as)|siguiente|hueco|disponible|cu[aá]ndo|when|today|tomorrow|this week|next meeting|eventos?)\b/i.test(message);
 }
 
 export function isCalendarCreateRequest(message: string): boolean {
-  return /\b(agenda|agendar|a[nñ]ade|a[nñ]adir|crea|crear|pon|poner|programa|programar|schedule|book)\b/i.test(message) &&
+  const createVerb = /\b(agenda|agendar|a[nñ]ade|a[nñ]adir|crea|crear|creas|pon|poner|programa|programar|schedule|book)\b/i.test(message) ||
+    /\b(?:queiero|quiero)\s+que\s+cre(?:e|es)\b/i.test(message);
+  return createVerb &&
     /\b(reuni[oó]n|evento|cita|meeting|event)\b/i.test(message);
 }
 

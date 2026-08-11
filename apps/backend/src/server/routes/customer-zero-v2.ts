@@ -2716,6 +2716,7 @@ export async function processCeoMessage(
     emailConnectionSuggestion = emailOutcome.connectionSuggestion;
   } else if (
     session.state.pendingCalendarWork ||
+    (session.state.lastCalendarOperation && isCalendarNotFoundFollowUp(message)) ||
     routed.decision.intent === "calendar_read" ||
     routed.decision.intent === "calendar_create" ||
     routed.decision.intent === "drive_query" ||
@@ -3414,6 +3415,11 @@ async function runGoogleBusinessTurn(
   intent: RoutingDecision["intent"],
   isEs: boolean,
 ): Promise<{ reply: string }> {
+  if (isCalendarNotFoundFollowUp(message)) {
+    return { reply: await verifyLatestCalendarEvent(session, isEs) };
+  }
+  const followUp = await runCalendarFollowUp(session, message, isEs);
+  if (followUp) return { reply: followUp };
   if (session.state.pendingCalendarWork) {
     return runPendingCalendarTurn(session, message, isEs);
   }
@@ -3469,7 +3475,10 @@ async function runCalendarReadTurn(
     organizationId: session.organizationId,
     userId: identity.userId,
   }).listEvents({ timeMinIso: range.start, timeMaxIso: range.end, maxResults: 50 });
-  if (!result.success) return { reply: calendarFailure(result.message, isEs) };
+  if (!result.success) {
+    session.state.lastCalendarOperation = { status: "failed", operation: "list", ...(result.message ? { error: result.message } : {}) };
+    return { reply: calendarFailure(result.message, isEs) };
+  }
   const events = result.value ?? [];
   if (events.length === 0) return { reply: isEs ? "No tienes reuniones en ese periodo." : "You have no meetings in that period." };
   const lines = events.slice(0, 8).map((event) =>
@@ -3496,13 +3505,18 @@ async function runCalendarCreateTurn(
     : "Calendar event creation is not activated. You can give Calendar access from Connections." };
   const work = {
     ...parsed,
-    status: "awaiting_approval" as const,
+    status: (parsed.dateProvided ? "awaiting_approval" : "awaiting_date") as "awaiting_approval" | "awaiting_date",
     createdAt: new Date().toISOString(),
   };
   session.state.pendingCalendarWork = work;
+  if (!parsed.dateProvided) {
+    return { reply: isEs
+      ? `Tengo preparado «${work.summary}» a las ${String(parsed.hour).padStart(2, "0")}:${String(parsed.minute).padStart(2, "0")}, pero necesito saber el día. ¿Es hoy o mañana?`
+      : `I have “${work.summary}” prepared for ${String(parsed.hour).padStart(2, "0")}:${String(parsed.minute).padStart(2, "0")}, but I need the day. Is it today or tomorrow?` };
+  }
   return { reply: isEs
-    ? `He preparado este evento:\n\n**${work.summary}**\n${formatCalendarTime(work.startIso, work.timezone)} — ${formatCalendarTime(work.endIso, work.timezone)}\n${work.attendees.length ? `Con: ${work.attendees.join(", ")}\n` : ""}\n¿Quieres que lo cree? Responde «sí, créala» para confirmarlo.`
-    : `I prepared this event:\n\n**${work.summary}**\n${formatCalendarTime(work.startIso, work.timezone)} — ${formatCalendarTime(work.endIso, work.timezone)}\n${work.attendees.length ? `With: ${work.attendees.join(", ")}\n` : ""}\nShould I create it? Reply “yes, create it” to confirm.` };
+    ? `He preparado este evento:\n\n**${work.summary}**\n${formatCalendarTime(work.startIso!, work.timezone)} — ${formatCalendarTime(work.endIso!, work.timezone)}\n${work.attendees.length ? `Con: ${work.attendees.join(", ")}\n` : ""}\n¿Quieres que lo cree? Responde «sí, créala» para confirmarlo.`
+    : `I prepared this event:\n\n**${work.summary}**\n${formatCalendarTime(work.startIso!, work.timezone)} — ${formatCalendarTime(work.endIso!, work.timezone)}\n${work.attendees.length ? `With: ${work.attendees.join(", ")}\n` : ""}\nShould I create it? Reply “yes, create it” to confirm.` };
 }
 
 async function runPendingCalendarTurn(
@@ -3515,7 +3529,25 @@ async function runPendingCalendarTurn(
     delete session.state.pendingCalendarWork;
     return { reply: isEs ? "De acuerdo, no he creado ningún evento." : "OK, I did not create any event." };
   }
-  if (!/\b(s[ií]|si|confirmo|confirma|crea|hazlo|adelante|yes|approve|go ahead|ok)\b/i.test(message)) {
+  if (isCalendarNotFoundFollowUp(message)) {
+    return { reply: await verifyLatestCalendarEvent(session, isEs) };
+  }
+  if (work.status === "awaiting_date") {
+    const dateOffset = /\b(ma[nñ]ana|tomorrow)\b/i.test(message) ? 1 : /\b(hoy|today)\b/i.test(message) ? 0 : null;
+    if (dateOffset === null) {
+      return { reply: isEs ? "Necesito el día del evento: ¿hoy o mañana?" : "I need the event day: today or tomorrow?" };
+    }
+    const base = localDateParts(new Date(), work.timezone);
+    const date = addLocalDays(base, dateOffset);
+    const start = zonedDate(date, work.hour ?? 9, work.minute ?? 0, work.timezone);
+    work.startIso = start.toISOString();
+    work.endIso = new Date(start.getTime() + 30 * 60_000).toISOString();
+    work.status = "awaiting_approval";
+    return { reply: isEs
+      ? `He preparado este evento:\n\n**${work.summary}**\n${formatCalendarTime(work.startIso!, work.timezone)} — ${formatCalendarTime(work.endIso!, work.timezone)}\n¿Quieres que lo cree? Responde «sí» para confirmarlo.`
+      : `I prepared this event:\n\n**${work.summary}**\n${formatCalendarTime(work.startIso!, work.timezone)} — ${formatCalendarTime(work.endIso!, work.timezone)}\nShould I create it? Reply “yes” to confirm.` };
+  }
+  if (!isCalendarApproval(message)) {
     return { reply: isEs ? "El evento sigue preparado. Responde «sí, créala» para crearlo o «cancela» para descartarlo." : "The event is still prepared. Reply “yes, create it” to create it or “cancel” to discard it." };
   }
   const identity = await findOperationalGoogleIdentityForOrg(session.organizationId, "calendar.create");
@@ -3523,20 +3555,87 @@ async function runPendingCalendarTurn(
   work.status = "creating";
   const result = await new GoogleCalendarAdapter({ organizationId: session.organizationId, userId: identity.userId }).createEvent({
     summary: work.summary,
-    startIso: work.startIso,
-    endIso: work.endIso,
+    startIso: work.startIso!,
+    endIso: work.endIso!,
     attendees: work.attendees,
     businessIntent: "ceo_calendar_request",
   });
   if (!result.success || !result.value?.id) {
     work.status = "awaiting_approval";
+    session.state.lastCalendarOperation = { status: "ambiguous", operation: "create", ...(result.message ? { error: result.message } : {}) };
     return { reply: calendarFailure(result.message, isEs) };
   }
   const event = result.value;
+  session.state.lastCalendarOperation = {
+    status: "verified",
+    operation: "create",
+    eventId: event.id,
+    ...(event.calendarId ? { calendarId: event.calendarId } : {}),
+    ...(event.htmlLink ? { htmlLink: event.htmlLink } : {}),
+    summary: event.summary,
+    startIso: event.startIso,
+    endIso: event.endIso,
+    verifiedAt: new Date().toISOString(),
+  };
   delete session.state.pendingCalendarWork;
   return { reply: isEs
-    ? `Evento creado: **${event.summary}**, ${formatCalendarTime(event.startIso, work.timezone)}. Google confirmó el evento.`
-    : `Event created: **${event.summary}**, ${formatCalendarTime(event.startIso, work.timezone)}. Google confirmed the event.` };
+    ? `He creado el evento **${event.summary}**, ${formatCalendarTime(event.startIso, work.timezone)}. Google lo ha confirmado.${event.htmlLink ? `\n\n[Ver evento en Google Calendar](${event.htmlLink})` : ""}`
+    : `I created **${event.summary}**, ${formatCalendarTime(event.startIso, work.timezone)}. Google confirmed it.${event.htmlLink ? `\n\n[Open in Google Calendar](${event.htmlLink})` : ""}` };
+}
+
+function isCalendarApproval(message: string): boolean {
+  const normalized = message
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[¿?!.,;:]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return /^(?:si|envialo|mandalo|crealo|confirmo|confirma|crea|hazlo|adelante|yes|approve|go ahead|ok)(?:\s+(?:envialo|mandalo|crealo|crea|hazlo|ya|go ahead|ok))?$/.test(normalized);
+}
+
+function isCalendarNotFoundFollowUp(message: string): boolean {
+  return /\b(no\s+(?:veo|aparece|me\s+aparece)|no\s+lo\s+veo|no\s+veo\s+el|no\s+me\s+sale|no\s+est[aá])\b/i.test(message) &&
+    /\b(evento|event|calendar|calendario)\b/i.test(message);
+}
+
+async function runCalendarFollowUp(
+  session: CustomerZeroSession,
+  message: string,
+  isEs: boolean,
+): Promise<string | null> {
+  const lower = message.toLowerCase();
+  const asksLink = /\b(link|enlace|encale|url|abre)\b/i.test(lower) && /\b(evento|calendar|calendario)\b/i.test(lower);
+  const asksCalendar = /\b(en\s+qu[eé]|que)\s+calendari[oa]\b/i.test(lower) || /\bcalendario\s+(lo|la)\s+pusiste\b/i.test(lower);
+  if (!asksLink && !asksCalendar) return null;
+  const operation = session.state.lastCalendarOperation;
+  if (!operation || operation.status !== "verified" || !operation.eventId) {
+    return isEs ? "No tengo un evento de Calendar confirmado por Google para enlazar o localizar." : "I have no Calendar event confirmed by Google to link or locate.";
+  }
+  if (asksLink) {
+    return operation.htmlLink
+      ? (isEs ? `Este es el enlace del evento **${operation.summary ?? ""}**:\n${operation.htmlLink}` : `Here is the link for **${operation.summary ?? ""}**:\n${operation.htmlLink}`)
+      : (isEs ? "Google confirmó el evento, pero no devolvió un enlace para él." : "Google confirmed the event but did not return a link.");
+  }
+  return isEs
+    ? `Google lo ha puesto en el calendario **${operation.calendarId ?? "principal"}**. ID del evento: ${operation.eventId}.`
+    : `Google placed it in the **${operation.calendarId ?? "primary"}** calendar. Event ID: ${operation.eventId}.`;
+}
+
+async function verifyLatestCalendarEvent(session: CustomerZeroSession, isEs: boolean): Promise<string> {
+  const operation = session.state.lastCalendarOperation;
+  if (!operation || operation.status !== "verified" || !operation.eventId) {
+    return isEs ? "No hay una creación de Calendar confirmada que pueda comprobar. No voy a crear un duplicado sin confirmación." : "There is no Calendar creation confirmed that I can check. I will not create a duplicate without confirmation.";
+  }
+  const identity = await findOperationalGoogleIdentityForOrg(session.organizationId, "calendar.read");
+  if (!identity) return isEs ? "No puedo comprobar ahora el evento porque Calendar no está disponible." : "I cannot check the event because Calendar is unavailable.";
+  const result = await new GoogleCalendarAdapter({ organizationId: session.organizationId, userId: identity.userId }).getEvent(operation.eventId);
+  if (!result.success || !result.value?.id) {
+    return isEs ? "Google no ha confirmado que ese evento siga visible. No voy a volver a crearlo automáticamente." : "Google did not confirm that event is still visible. I will not recreate it automatically.";
+  }
+  return isEs
+    ? `Google sigue confirmando el evento **${result.value.summary}**.${result.value.htmlLink ? `\n\n${result.value.htmlLink}` : ""}`
+    : `Google still confirms **${result.value.summary}**.${result.value.htmlLink ? `\n\n${result.value.htmlLink}` : ""}`;
 }
 
 async function runDriveTurn(
@@ -3570,27 +3669,35 @@ function calendarRange(message: string): { start: string; end: string; timezone:
   const now = new Date();
   const base = localDateParts(now, timezone);
   const dayOffset = /\b(ma[nñ]ana|tomorrow)\b/i.test(message) ? 1 : 0;
+  const isUpcoming = /\b(pr[oó]xim(?:o|os|a|as)|siguientes?|upcoming|next)\b/i.test(message);
   const startDay = addLocalDays(base, dayOffset);
   const isWeek = /\b(semana|week)\b/i.test(message);
-  const start = zonedDate(startDay, 0, 0, timezone);
-  const end = isWeek ? zonedDate(addLocalDays(startDay, 7), 23, 59, timezone) : zonedDate(addLocalDays(startDay, 1), 0, 0, timezone);
+  const start = isUpcoming ? now : zonedDate(startDay, 0, 0, timezone);
+  const end = isWeek
+    ? zonedDate(addLocalDays(startDay, 7), 23, 59, timezone)
+    : isUpcoming
+      ? zonedDate(addLocalDays(startDay, 30), 23, 59, timezone)
+      : zonedDate(addLocalDays(startDay, 1), 0, 0, timezone);
   return { start: start.toISOString(), end: end.toISOString(), timezone };
 }
 
-function parseCalendarProposal(message: string): null | { summary: string; startIso: string; endIso: string; timezone: string; attendees: readonly string[] } {
-  const time = message.match(/\b(?:a\s+las|las|at)\s+(\d{1,2})(?::(\d{2}))?\b/i);
+function parseCalendarProposal(message: string): null | { summary: string; hour: number; minute: number; startIso?: string; endIso?: string; timezone: string; attendees: readonly string[]; dateProvided: boolean } {
+  const time = message.match(/\b(?:a\s+las|a\s+la|las|at)\s*(\d{1,2})(?::|\s+)?(\d{2})?\b/i);
   if (!time) return null;
   const timezone = businessTimezone();
   const base = localDateParts(new Date(), timezone);
+  const dateProvided = /\b(hoy|today|ma[nñ]ana|tomorrow)\b/i.test(message);
   const date = addLocalDays(base, /\b(ma[nñ]ana|tomorrow)\b/i.test(message) ? 1 : 0);
   const hour = Number(time[1]);
   const minute = Number(time[2] ?? 0);
+  if (hour > 23 || minute > 59) return null;
   const start = zonedDate(date, hour, minute, timezone);
   const duration = message.match(/(\d+)\s*(?:minutos?|minutes?)/i);
   const end = new Date(start.getTime() + Number(duration?.[1] ?? 30) * 60_000);
   const attendees = Array.from(message.matchAll(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g), (match) => match[0]!);
-  const summary = message.match(/\b(?:con|with)\s+([^,.;]+?)(?:\s+(?:ma[nñ]ana|tomorrow|a\s+las|las|at)\b|$)/i)?.[1]?.trim() || "Reunión";
-  return { summary: summary.slice(0, 160), startIso: start.toISOString(), endIso: end.toISOString(), timezone, attendees };
+  const named = message.match(/\b(?:llamad[oa]?|llamdo|titulado|con\s+nombre|named)\s+(.+?)(?:[,.!?]|$)/i)?.[1]?.trim();
+  const summary = named || message.match(/\b(?:con|with)\s+([^,.;]+?)(?:\s+(?:ma[nñ]ana|tomorrow|a\s+las|las|at)\b|$)/i)?.[1]?.trim() || "Reunión";
+  return { summary: summary.replace(/\s+/g, " ").slice(0, 160), hour, minute, ...(dateProvided ? { startIso: start.toISOString(), endIso: end.toISOString() } : {}), timezone, attendees, dateProvided };
 }
 
 function businessTimezone(): string {

@@ -28,6 +28,7 @@ import {
 
 export interface CalendarEvent {
   readonly id: string;
+  readonly calendarId?: string;
   readonly summary: string;
   readonly description?: string;
   readonly location?: string;
@@ -169,7 +170,7 @@ export class GoogleCalendarAdapter {
       .filter((i): i is typeof i & { id: string; start: { dateTime: string }; end: { dateTime: string } } =>
         Boolean(i.id) && Boolean(i.start?.dateTime) && Boolean(i.end?.dateTime),
       )
-      .map((i) => normalizeEvent(i));
+      .map((i) => normalizeEvent(i, "primary"));
     return ok(items);
   }
 
@@ -187,7 +188,7 @@ export class GoogleCalendarAdapter {
       if (response.status === 401) return fail("Google rechazó la autorización.", "auth");
       return fail(`Google devolvió ${response.status}.`, "invalid_response");
     }
-    return ok(normalizeEvent((await response.json()) as GoogleCalendarEvent));
+    return ok(normalizeEvent((await response.json()) as GoogleCalendarEvent, "primary"));
   }
 
   async createEvent(
@@ -225,7 +226,13 @@ export class GoogleCalendarAdapter {
       if (response.status === 401) return fail("Google rechazó la autorización.", "auth");
       return fail(`Google no creó el evento (${response.status}).`, "invalid_response");
     }
-    return ok(normalizeEvent((await response.json()) as GoogleCalendarEvent));
+    const event = normalizeEvent((await response.json()) as GoogleCalendarEvent, "primary");
+    // A successful HTTP status without a provider event identity is not
+    // evidence that the side effect happened.
+    if (!event.id || !event.startIso || !event.endIso) {
+      return fail("Google no ha confirmado el evento.", "invalid_response");
+    }
+    return ok(event);
   }
 
   async updateEvent(
@@ -269,6 +276,7 @@ export class GoogleCalendarAdapter {
 
 interface GoogleCalendarEvent {
   id?: string;
+  calendarId?: string;
   summary?: string;
   description?: string;
   location?: string;
@@ -281,9 +289,10 @@ interface GoogleCalendarEvent {
   extendedProperties?: { private?: { businessIntent?: string } };
 }
 
-function normalizeEvent(raw: GoogleCalendarEvent): CalendarEvent {
+function normalizeEvent(raw: GoogleCalendarEvent, fallbackCalendarId?: string): CalendarEvent {
   return {
     id: raw.id ?? "",
+    ...((raw.calendarId ?? fallbackCalendarId) ? { calendarId: raw.calendarId ?? fallbackCalendarId! } : {}),
     summary: raw.summary ?? "(Sin título)",
     ...(raw.description ? { description: raw.description } : {}),
     ...(raw.location ? { location: raw.location } : {}),

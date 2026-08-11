@@ -184,4 +184,71 @@ describe("Google Workspace P0 — one identity and truthful capabilities", () =>
     expect(routeCommandCenter({ ...base, message: "Busca en Drive el plan de marketing" }).decision.intent).toBe("drive_query");
     expect(routeCommandCenter({ ...base, message: "Busca el último correo de Pedro y dime si tenemos alguna reunión con él" }).decision.intent).toBe("multi_capability");
   });
+
+  it("routes the exact Customer Zero Calendar literals to Calendar", () => {
+    const base = {
+      organizationId: "org-google",
+      locale: "es" as const,
+      pendingApprovals: [],
+      unreadResults: [],
+      inflight: [],
+      connections: [],
+      unmappedTools: [],
+      history: [],
+    };
+    expect(routeCommandCenter({ ...base, message: "mis proximos eventos" }).decision.intent).toBe("calendar_read");
+    expect(routeCommandCenter({ ...base, message: "queiero que creas un evento para las 20 00 horas llamdo ver jodar" }).decision.intent).toBe("calendar_create");
+  });
+
+  it("accepts only a provider-confirmed Calendar create response", async () => {
+    const calendarRecord = record([CALENDAR, CALENDAR_WRITE], {
+      operationalCapabilities: ["calendar.read", "calendar.create"],
+    });
+    gmailTokenStore.put("org-google-p0", "user-ceo", legacyTokens(calendarRecord));
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      if (String(input).includes("/calendar/v3/calendars/primary/events") && init?.method === "POST") {
+        return new Response(JSON.stringify({
+          id: "google-event-1",
+          calendarId: "primary",
+          summary: "Ver Jódar",
+          start: { dateTime: "2026-08-11T20:00:00+02:00" },
+          end: { dateTime: "2026-08-11T20:30:00+02:00" },
+          htmlLink: "https://calendar.google.com/calendar/event?eid=google-event-1",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("unexpected", { status: 500 });
+    }) as typeof fetch;
+    try {
+      const result = await new GoogleCalendarAdapter({ organizationId: "org-google-p0", userId: "user-ceo" }).createEvent({
+        summary: "Ver Jódar",
+        startIso: "2026-08-11T18:00:00.000Z",
+        endIso: "2026-08-11T18:30:00.000Z",
+      });
+      expect(result.success).toBe(true);
+      expect(result.value?.id).toBe("google-event-1");
+      expect(result.value?.htmlLink).toContain("google-event-1");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it("treats a 2xx Calendar create without event identity as ambiguous", async () => {
+    const calendarRecord = record([CALENDAR_WRITE], { operationalCapabilities: ["calendar.create"] });
+    gmailTokenStore.put("org-google-p0", "user-ceo", legacyTokens(calendarRecord));
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({ summary: "Ver Jódar" }), { status: 200 })) as typeof fetch;
+    try {
+      const result = await new GoogleCalendarAdapter({ organizationId: "org-google-p0", userId: "user-ceo" }).createEvent({
+        summary: "Ver Jódar",
+        startIso: "2026-08-11T18:00:00.000Z",
+        endIso: "2026-08-11T18:30:00.000Z",
+      });
+      expect(result.success).toBe(false);
+      expect(result.value).toBeUndefined();
+      expect(result.message).toContain("confirmado");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
 });

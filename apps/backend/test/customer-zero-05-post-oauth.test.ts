@@ -133,6 +133,28 @@ function mockGoogleFetch(options?: {
       );
     }
     if (url.includes("www.googleapis.com/calendar/v3/calendars/primary/events")) {
+      if (init?.method === "POST") {
+        return new Response(JSON.stringify({
+          id: "event-created-1",
+          calendarId: "primary",
+          summary: "Ver Jódar",
+          start: { dateTime: "2026-08-11T20:00:00+02:00" },
+          end: { dateTime: "2026-08-11T20:30:00+02:00" },
+          htmlLink: "https://calendar.google.com/calendar/event?eid=event-created-1",
+          status: "confirmed",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.includes("/events/event-created-1")) {
+        return new Response(JSON.stringify({
+          id: "event-created-1",
+          calendarId: "primary",
+          summary: "Ver Jódar",
+          start: { dateTime: "2026-08-11T20:00:00+02:00" },
+          end: { dateTime: "2026-08-11T20:30:00+02:00" },
+          htmlLink: "https://calendar.google.com/calendar/event?eid=event-created-1",
+          status: "confirmed",
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
       return new Response(
         JSON.stringify({
           items: [{
@@ -664,10 +686,36 @@ describe("P0 — post-OAuth HTTP: connect → callback → /conexiones", () => {
     const chat = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/command-center/message`,
-      payload: { message: "mis proximos eventos del calendar" },
+      payload: { message: "mis proximos eventos" },
     });
     expect(chat.statusCode).toBe(200);
     expect(chat.json().reply).toContain("Reunión de prueba");
+
+    const draft = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "crea un evento hoy a las 20:00 llamado Ver Jódar" },
+    });
+    expect(draft.json().reply).toMatch(/preparado/i);
+    const createdEvent = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "sí" },
+    });
+    expect(createdEvent.json().reply).toContain("Google");
+    expect(createdEvent.json().reply).toContain("event-created-1");
+    const link = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "dame el link del evento" },
+    });
+    expect(link.json().reply).toContain("https://calendar.google.com/calendar/event?eid=event-created-1");
+    const notVisible = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "no veo el eventa el calendario" },
+    });
+    expect(notVisible.json().reply).toContain("event-created-1");
   });
 
   it("Calendar read without its granted capability offers authorization instead of delegating", async () => {

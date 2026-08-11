@@ -917,7 +917,10 @@ export async function completeGoogleOAuthCallback(
         ...(input.provider === "gmail"
           ? ["email.read" as GoogleCapability]
           : input.provider === "google_calendar"
-            ? ["calendar.read" as GoogleCapability]
+            ? [
+                ...(hasGoogleCapability(merged.scopes, "calendar.read") ? ["calendar.read" as GoogleCapability] : []),
+                ...(hasGoogleCapability(merged.scopes, "calendar.create") ? ["calendar.create" as GoogleCapability] : []),
+              ]
             : input.provider === "google_drive" || input.provider === "google_workspace"
               ? ["drive.search" as GoogleCapability, "drive.read" as GoogleCapability]
               : []),
