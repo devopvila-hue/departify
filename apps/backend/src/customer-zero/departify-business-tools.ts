@@ -106,7 +106,7 @@ export const DEPARTIFY_TOOL_DEFINITIONS: readonly DepartifyToolDefinition[] = [
   },
   {
     name: "departify.email.reply",
-    description: "Reply to the current email reference through the authorized mailbox; approval may be required.",
+    description: "Reply to the latest/current email reference through the authorized mailbox. Use this for a CEO request to reply, respond or contestar to that email; the body is the requested message and approval may be required.",
     requiredCapability: "email.business.reply",
     sideEffect: true,
     inputSchema: {
