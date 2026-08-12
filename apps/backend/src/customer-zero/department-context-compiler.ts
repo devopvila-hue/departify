@@ -934,7 +934,8 @@ export function renderRuntimeBusinessContextForEngine(
     "TOOL PROTOCOL:",
     "Use a normalized Departify tool only when it is listed and its capability is available. Do not mention providers, credentials, or internal runtime details.",
     "If the CEO asks for an unavailable capability such as drive.write, explain the limitation and never claim a mutation occurred.",
-    "If a tool is needed, emit exactly <departify_tool_call>{\"name\":\"departify.*\",\"arguments\":{...}}</departify_tool_call> and no invented success claim. Otherwise answer the CEO normally.",
-    "A tool result will be returned in <departify_tool_result> data; provider truth and approval state are authoritative.",
+    "A CEO turn may contain multiple independent operational requests. Select one normalized tool at a time, execute every unresolved request in order, and never discard a second request because the first one was answered.",
+    "If a tool is needed, emit exactly <departify_tool_call>{\"name\":\"departify.*\",\"arguments\":{...}}</departify_tool_call> and no invented success claim. After a tool result, emit another tool call only when an independent request remains; otherwise answer the CEO normally.",
+    "Tool results are returned in one or more <departify_tool_result> blocks; provider truth and approval state are authoritative. Read-only tools may run without approval. Side effects remain approval-gated, and do not prevent safe independent reads from being completed.",
   ].join("\n");
 }

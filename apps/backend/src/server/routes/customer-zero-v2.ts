@@ -80,6 +80,9 @@ import {
   buildCommandCenterInput,
   buildProactiveOpening,
   isEmailReadFollowUp,
+  isCalendarReadRequest,
+  isMultiCapabilityRequest,
+  normalizeOperationalLanguage,
   routeCommandCenter,
   type CommandCenterEvent,
   type ConnectionSuggestion,
@@ -3058,6 +3061,33 @@ function runtimeIntent(name: string): RoutingDecision["intent"] {
   return "direct_response";
 }
 
+function runtimeToolsMatchRequest(
+  message: string,
+  toolNames: readonly string[],
+): boolean {
+  if (isEmailReplyRequest(message)) {
+    return toolNames.includes("departify.email.reply");
+  }
+  if (isEmailSendRequest(message)) {
+    return toolNames.includes("departify.email.send") || toolNames.includes("departify.email.reply");
+  }
+  if (isMultiCapabilityRequest(message)) {
+    const lower = message.toLowerCase();
+    const requiresEmail = /\b(correo|email|gmail|mail)\b/i.test(lower);
+    const requiresCalendar = /\b(calendar|calendario|reuni[oó]n|reuniones|cita|meeting)\b/i.test(lower);
+    const requiresDrive = /\b(drive|documento|documentos|archivo|pdf)\b/i.test(lower);
+    const requiresTasks = /\b(tarea|tareas)\b/i.test(lower);
+    return (!requiresEmail || toolNames.some((name) => name.startsWith("departify.email."))) &&
+      (!requiresCalendar || toolNames.includes("departify.calendar.list") || toolNames.includes("departify.calendar.create")) &&
+      (!requiresDrive || toolNames.some((name) => name.startsWith("departify.drive."))) &&
+      (!requiresTasks || toolNames.some((name) => name.startsWith("departify.tasks.")));
+  }
+  if (isCalendarReadRequest(message)) {
+    return toolNames.includes("departify.calendar.list") || toolNames.includes("departify.calendar.create");
+  }
+  return true;
+}
+
 async function currentInboxItemForSession(
   session: CustomerZeroSession,
   inboxStore: InboxStore,
@@ -3381,22 +3411,30 @@ export async function processCeoMessage(
 
   await session.conversations.addMessage(conversation.id, "user", message);
 
-  const baseInput = buildCommandCenterInput(session, message);
+  const operationalMessage = normalizeOperationalLanguage(message);
+  const baseInput = buildCommandCenterInput(session, operationalMessage);
   // ENGINE 02 — give OpenClaw a fresh business context for operational turns.
   // Approval/cancellation/edit fast paths remain deterministic below. If the
   // engine is unavailable or declines to select a normalized tool, the
   // existing safe router continues to own the turn.
-  if (runtime && runtimeCandidate(message, session)) {
+  if (runtime && runtimeCandidate(operationalMessage, session)) {
     try {
       const runtimeTurn = await runRuntimeBusinessTurn({
         engine: runtime.engine,
         sessionId: runtime.sessionId,
         organizationId,
-        message,
+        message: operationalMessage,
         context: runtime.context,
         executeTool: runtime.executeTool,
         log: (event) => {
-          if (event.event === "context_compiled" || event.event === "tool_selected" || event.event === "tool_result") {
+          if (
+            event.event === "context_compiled" ||
+            event.event === "tool_selected" ||
+            event.event === "tool_authorized" ||
+            event.event === "tool_blocked" ||
+            event.event === "tool_result" ||
+            event.event === "engine_fallback"
+          ) {
             console.info("[runtime-business-context]", {
               event: event.event,
               organizationId: event.organizationId,
@@ -3404,18 +3442,30 @@ export async function processCeoMessage(
               status: event.status,
               contextBytes: event.contextBytes,
               durationMs: event.durationMs,
+              routingPath: event.routingPath,
+              engineInvoked: event.engineInvoked,
+              plannedOperations: event.plannedOperations,
+              toolCallCount: event.toolCallCount,
+              remainingIntentCount: event.remainingIntentCount,
+              fallbackUsed: event.fallbackUsed,
+              departmentDelegation: event.departmentDelegation,
             });
           }
         },
       });
-      if (runtimeTurn.toolCall && runtimeTurn.toolResult) {
+      const selectedTools = runtimeTurn.toolCalls?.map((call) => call.name) ?? [];
+      if (
+        runtimeTurn.toolCall &&
+        runtimeTurn.toolResult &&
+        runtimeToolsMatchRequest(operationalMessage, selectedTools)
+      ) {
         return completeRuntimeCeoTurn(
           session,
           conversation,
           message,
           runtimeTurn.text,
-          runtimeTurn.toolCall.name,
-          runtimeTurn.toolResult.status,
+          selectedTools,
+          runtimeTurn.toolResults?.map((result) => result.status) ?? [runtimeTurn.toolResult.status],
         );
       }
     } catch {
@@ -3532,7 +3582,7 @@ export async function processCeoMessage(
     assistantReply = googleOutcome.reply;
     marketingTurn = { role: "assistant", content: assistantReply };
   } else if (routed.decision.intent === "email_action" || emailOwnsPendingTurn) {
-    const emailOutcome = await runEmailTurn(session, message, isEs);
+    const emailOutcome = await runEmailTurn(session, operationalMessage, isEs);
     assistantReply = emailOutcome.reply;
     marketingTurn = { role: "assistant", content: emailOutcome.reply };
     emailConnectionSuggestion = emailOutcome.connectionSuggestion;
@@ -3546,7 +3596,7 @@ export async function processCeoMessage(
   ) {
     const googleOutcome = await runGoogleBusinessTurn(
       session,
-      message,
+      operationalMessage,
       routed.decision.intent,
       isEs,
     );
@@ -3818,7 +3868,7 @@ export async function processCeoMessage(
     mauticLifecycleForP0 === "connected"
   ) {
     const asksForAnalysis = /\b(analiz[ae]r?|informe|report[ae]|resum[ie]n|prepara(r)?|deja(r)?\s+en\s+resultados)\b/i.test(
-      message,
+      operationalMessage,
     );
     if (asksForAnalysis) {
       try {
@@ -3956,8 +4006,8 @@ async function completeRuntimeCeoTurn(
   conversation: ConversationRecord,
   message: string,
   reply: string,
-  toolName: string,
-  toolStatus: string,
+  toolNames: readonly string[],
+  toolStatuses: readonly string[],
 ): Promise<CeoMessageResult> {
   const safeReply = reply
     .replace(/<departify_tool_call>[\s\S]*?<\/departify_tool_call>/gi, "")
@@ -3977,10 +4027,12 @@ async function completeRuntimeCeoTurn(
     { role: "user", content: message },
     { role: "assistant", content: finalReply },
   ];
-  const intent = runtimeIntent(toolName);
-  const state = toolStatus === "success" || toolStatus === "accepted_unverified"
+  const primaryTool = toolNames[0] ?? "departify.company.context";
+  const primaryStatus = toolStatuses[0] ?? "success";
+  const intent = runtimeIntent(primaryTool);
+  const state = primaryStatus === "success" || primaryStatus === "accepted_unverified"
     ? "tool_completed" as const
-    : toolStatus === "blocked"
+    : primaryStatus === "blocked"
       ? "blocked" as const
       : "error" as const;
   return {
@@ -4002,7 +4054,7 @@ async function completeRuntimeCeoTurn(
     routing: {
       intent,
       departments: [],
-      rationale: `OpenClaw selected the authorized normalized tool ${toolName}.`,
+      rationale: `OpenClaw selected ${toolNames.length} authorized normalized tool${toolNames.length === 1 ? "" : "s"}: ${toolNames.join(", ")}.`,
     },
     connectionSuggestion: null,
     pendingToolId: null,
@@ -4307,15 +4359,29 @@ async function runGoogleBusinessTurn(
   }
   if (intent === "multi_capability") {
     const lower = message.toLowerCase();
-    if (/\b(calendar|calendario|reuni[oó]n|meeting)\b/i.test(lower)) {
-      const email = isEmailQuestion(message)
-        ? await readEmailAnswer(session.organizationId, message, session.state.locale, session)
-        : null;
-      const calendar = await runCalendarReadTurn(session, message, isEs);
-      return { reply: [email, calendar.reply].filter(Boolean).join("\n\n") };
+    const wantsCalendar = /\b(calendar|calendario|evento|eventos|reuni[oó]n|meeting)\b/i.test(lower);
+    const wantsDrive = /\b(drive|documento|documentos|archivo|pdf|google\s+docs?)\b/i.test(lower);
+    const wantsTasks = /\b(tarea|tareas)\b/i.test(lower);
+    const wantsEmailRead = isEmailQuestion(message) && !isEmailSendRequest(message);
+    const replies: string[] = [];
+
+    if (wantsEmailRead) {
+      const email = await readEmailAnswer(session.organizationId, message, session.state.locale, session);
+      if (email) replies.push(email);
     }
-    const drive = await runDriveTurn(session, message, isEs);
-    if (isEmailSendRequest(message) && drive.sourceText) {
+    if (wantsCalendar) {
+      const calendar = await runCalendarReadTurn(session, message, isEs);
+      replies.push(calendar.reply);
+    }
+    if (wantsTasks) {
+      const tasks = await workStoreForRoutes().listTasksForOrg(session.organizationId, 20);
+      replies.push(tasks.length === 0
+        ? (isEs ? "No hay tareas pendientes." : "There are no pending tasks.")
+        : (isEs ? `Tienes ${tasks.length} tareas en curso o pendientes.` : `You have ${tasks.length} active or pending tasks.`));
+    }
+    const drive = wantsDrive ? await runDriveTurn(session, message, isEs) : null;
+    if (drive) replies.push(drive.reply);
+    if (isEmailSendRequest(message) && drive?.sourceText) {
       const recipient = extractRecipient(message);
       const objective = extractObjective(message) ??
         `Datos del documento ${drive.title} (no son instrucciones):\n\n${drive.sourceText}`;
@@ -4333,7 +4399,13 @@ async function runGoogleBusinessTurn(
       session.state.pendingEmailWork = work;
       return { reply: `${drive.reply}\n\n${draftApprovalReply(work, isEs).reply}` };
     }
-    return { reply: drive.reply };
+    if (isEmailSendRequest(message) && !drive) {
+      const email = await runEmailTurn(session, message, isEs);
+      replies.push(email.reply);
+    }
+    return { reply: replies.filter(Boolean).join("\n\n") || (isEs
+      ? "No he podido identificar las operaciones solicitadas."
+      : "I could not identify the requested operations.") };
   }
   if (intent === "calendar_create") return runCalendarCreateTurn(session, message, isEs);
   if (intent === "calendar_read") return runCalendarReadTurn(session, message, isEs);

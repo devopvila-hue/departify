@@ -284,6 +284,12 @@ export function renderDepartifyToolResult(result: DepartifyToolResult): string {
   return `<departify_tool_result>${JSON.stringify(result)}</departify_tool_result>`;
 }
 
+export function renderDepartifyToolResults(
+  results: readonly DepartifyToolResult[],
+): string {
+  return results.map(renderDepartifyToolResult).join("\n");
+}
+
 /** Backend authorization: model arguments cannot select another tenant. */
 export function authorizeDepartifyToolCall(input: {
   readonly call: DepartifyToolCall;

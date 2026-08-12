@@ -124,6 +124,10 @@ export function extractObjective(message: string): string | null {
     /\bpara\s+(?:enviar(?:le)?|escribir(?:le)?|mandar(?:le)?|comunicar(?:le)?|avisar(?:le)?|decir(?:le)?)\s+(.+)$/i,
   );
   if (afterPara?.[1]?.trim()) return afterPara[1].trim();
+  const replyBody = message.match(
+    /^\s*(?:responde|responder|contesta|contestar)\b[\s\S]*?\bcon\s+(.+)$/i,
+  );
+  if (replyBody?.[1]?.trim()) return replyBody[1].trim();
   const address = message.match(EMAIL_RE);
   if (address?.index !== undefined) {
     const remainder = message

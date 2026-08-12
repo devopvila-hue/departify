@@ -1106,11 +1106,69 @@ export function isEmailReadFollowUp(message: string): boolean {
     || /^\s*(?:los|las)\s+[úu]ltim(?:o|os|a|as)\b/i.test(message);
 }
 
+const OPERATIONAL_TERMS = [
+  "calendario",
+  "calendar",
+  "evento",
+  "eventos",
+  "reunion",
+  "reuniones",
+  "responde",
+  "responder",
+  "contesta",
+  "contestar",
+  "correo",
+  "correos",
+  "email",
+  "emails",
+  "tarea",
+  "tareas",
+  "drive",
+] as const;
+
+function accentless(value: string): string {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function editDistance(left: string, right: string): number {
+  const row = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    let diagonal = row[0]!;
+    row[0] = i;
+    for (let j = 1; j <= right.length; j += 1) {
+      const previous = row[j]!;
+      row[j] = left[i - 1] === right[j - 1]
+        ? diagonal
+        : Math.min(diagonal + 1, row[j]! + 1, row[j - 1]! + 1);
+      diagonal = previous;
+    }
+  }
+  return row[right.length]!;
+}
+
+/**
+ * Correct only near-miss spellings in the small operational vocabulary.
+ * This is intentionally generic (one edit away), not a growing typo list;
+ * company content and email bodies remain untouched by domain classifiers.
+ */
+export function normalizeOperationalLanguage(message: string): string {
+  return message.replace(/[\p{L}\p{N}]+/gu, (token) => {
+    const normalized = accentless(token);
+    if (normalized.length < 6) return token;
+    const candidates = OPERATIONAL_TERMS.filter((term) =>
+      Math.abs(term.length - normalized.length) <= 1 &&
+      editDistance(normalized, accentless(term)) <= 1,
+    );
+    return candidates.length === 1 ? candidates[0]! : token;
+  });
+}
+
 export function isCalendarReadRequest(message: string): boolean {
   if (/\bqu[eé]\s+tengo\s+(hoy|ma[nñ]ana|esta\s+semana|this\s+week|tomorrow|today)\b/i.test(message)) return true;
   // Bare agenda requests are explicit Calendar operations; they must not
   // fall through to the generic Marketing/LLM sink.
   if (/\bmis\s+(pr[oó]xim(?:o|os|a|as)|siguientes?)\s+eventos?\b/i.test(message)) return true;
+  if (/^\s*(?:y\s+)?(?:mis\s+)?eventos?\s*[?.!]?\s*$/i.test(message)) return true;
   if (/(?:link|enlace|encale|url)\b/i.test(message) && /\b(evento|calendar|calendario)\b/i.test(message)) return true;
   if (/\bno\s+(?:lo\s+)?(?:veo|aparece|me\s+aparece|me\s+sale)\b/i.test(message) && /\b(evento|calendar|calendario)\b/i.test(message)) return true;
   if (/\b(?:en\s+qu[eé]|que)\s+calendari[oa]\b/i.test(message)) return true;
@@ -1133,11 +1191,15 @@ export function isDriveRequest(message: string): boolean {
 
 export function isMultiCapabilityRequest(message: string): boolean {
   const lower = message.toLowerCase();
-  const email = /\b(correo|correo\s+de|email|gmail|mail)\b/i.test(lower);
+  if (/\b(convierte|convertir|pasa|pasar|transforma|transformar)\b[\s\S]*\b(correo|correos?|email|emails?|mail)\b[\s\S]*\b(tarea|tareas)\b/i.test(lower)) {
+    return false;
+  }
+  const email = /\b(correos?|emails?|gmail|mail)\b/i.test(lower);
   const calendar = /\b(calendar|calendario|reuni[oó]n|reuniones|cita|meeting)\b/i.test(lower);
   const drive = /\b(drive|documento|documentos|archivo|plan\s+de\s+marketing)\b/i.test(lower);
-  return (email && calendar) ||
-    (drive && /\b(prepara|preparar|escribe|redacta|env[ií]a|correo|email)\b/i.test(lower));
+  const tasks = /\b(tarea|tareas)\b/i.test(lower);
+  const domains = [email, calendar, drive, tasks].filter(Boolean).length;
+  return domains >= 2;
 }
 
 /**

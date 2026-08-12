@@ -24,9 +24,12 @@ import {
   isEmailReadFollowUp,
   discoverConnection,
   isEmailReadQuestion,
+  isCalendarReadRequest,
+  normalizeOperationalLanguage,
   routeCommandCenter,
   type CommandCenterInput,
 } from "../src/customer-zero/command-center.js";
+import { extractObjective, isEmailReplyRequest, isEmailSendRequest } from "../src/customer-zero/pending-email.js";
 import {
   buildConnectionState,
   TOOL_CATALOG,
@@ -49,6 +52,47 @@ function makeInput(overrides: Partial<CommandCenterInput> = {}): CommandCenterIn
 }
 
 describe("Command Center routing", () => {
+  it("normalizes near-miss operational words without a typo dictionary", () => {
+    expect(normalizeOperationalLanguage("consulta mi mail y el calndario")).toBe(
+      "consulta mi mail y el calendario",
+    );
+    expect(normalizeOperationalLanguage("respone al ultimo mail con ok")).toBe(
+      "responde al ultimo mail con ok",
+    );
+  });
+
+  it("keeps the Founder multi-intent request in operational routing", () => {
+    const decision = routeCommandCenter(makeInput({
+      message: normalizeOperationalLanguage("consulta mi ultimo mail y el calndario"),
+    }));
+    expect(decision.decision.intent).toBe("multi_capability");
+    expect(decision.decision.departments).toEqual([]);
+  });
+
+  it("recognizes semantic multi-capability variants beyond email plus Calendar", () => {
+    expect(routeCommandCenter(makeInput({
+      message: "qué correos nuevos tengo y qué tareas están pendientes",
+    })).decision.intent).toBe("multi_capability");
+    expect(routeCommandCenter(makeInput({
+      message: "consulta el calendario y las tareas pendientes",
+    })).decision.intent).toBe("multi_capability");
+  });
+
+  it("routes a bare events follow-up to Calendar, never Marketing", () => {
+    expect(isCalendarReadRequest("y eventos?")).toBe(true);
+    const decision = routeCommandCenter(makeInput({ message: "y eventos?" }));
+    expect(decision.decision.intent).toBe("calendar_read");
+    expect(decision.decision.departments).toEqual([]);
+  });
+
+  it("preserves reply action, latest-email reference and body after typo normalization", () => {
+    const normalized = normalizeOperationalLanguage("respone al ultimo mail con ok");
+    expect(isEmailSendRequest(normalized)).toBe(true);
+    expect(isEmailReplyRequest(normalized)).toBe(true);
+    expect(extractObjective(normalized)).toBe("ok");
+    expect(normalized).toContain("ok");
+  });
+
   it("routes a quantity-only inbox follow-up to Gmail", () => {
     expect(isEmailReadFollowUp("los 3 últimos")).toBe(true);
     const decision = routeCommandCenter(makeInput({ message: "los 3 últimos" }));
