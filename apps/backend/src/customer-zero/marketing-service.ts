@@ -28,6 +28,7 @@ import {
   buildBusinessContext,
 } from "@departify/tool-catalog";
 import type { DiscoveryReportRepository } from "@departify/business-discovery";
+import type { CompanyDnaStore } from "./company-dna.js";
 import {
   type ApprovalRequest,
   type BusinessObjective,
@@ -60,90 +61,32 @@ import {
 } from "./department-context-compiler.js";
 import type { CustomerZeroSession } from "./customer-zero-session.js";
 
-/** Marketing digital employees — mapped from the marketing-director catalog. */
+/** Marketing digital employees — the canonical department template roster. */
 const MARKETING_EMPLOYEES: readonly Omit<DigitalEmployee, "status" | "currentWork">[] = [
   {
-    id: "especialista_adquisicion",
-    label: "Especialista en Adquisición",
-    role: "Adquisición de clientes",
-    capabilities: [
-      "market_research",
-      "audience_segmentation",
-      "campaign_strategy",
-      "advertising_paid",
-    ],
-  },
-  {
-    id: "especialista_contenido",
+    id: "agent_content_strategist",
     label: "Especialista en Contenido",
     role: "Creación de contenido",
     capabilities: [
       "content_creation",
       "content_strategy",
       "positioning_strategy",
-      "seo_optimization",
-      "social_media",
     ],
   },
   {
-    id: "especialista_crecimiento",
-    label: "Especialista en Crecimiento",
-    role: "Crecimiento y analítica",
-    capabilities: ["analytics_measurement", "growth_experimentation", "web_analytics"],
-  },
-  {
-    id: "especialista_conversion",
-    label: "Especialista en Conversión",
-    role: "Optimización de conversión",
-    capabilities: ["audience_segmentation", "positioning_strategy"],
-  },
-  {
-    id: "especialista_estrategia",
-    label: "Especialista en Estrategia",
-    role: "Estrategia de marketing",
-    capabilities: ["market_research", "positioning_strategy", "campaign_strategy"],
-  },
-  {
-    id: "especialista_email",
-    label: "Especialista en Email",
-    role: "Email marketing",
-    capabilities: ["email_marketing"],
-  },
-  {
-    id: "especialista_performance",
-    label: "Especialista en Performance",
-    role: "Publicidad y rendimiento",
-    capabilities: ["advertising_paid", "analytics_measurement"],
-  },
-  {
-    id: "especialista_social",
-    label: "Especialista en Redes",
+    id: "agent_social_media_manager",
+    label: "Especialista en Redes Sociales",
     role: "Redes sociales",
-    capabilities: ["social_media", "content_creation"],
+    capabilities: [
+      "social_media",
+      "content_creation",
+    ],
   },
   {
-    id: "especialista_seo",
-    label: "Especialista en SEO",
-    role: "Posicionamiento en buscadores",
-    capabilities: ["seo_optimization", "content_strategy"],
-  },
-  {
-    id: "especialista_investigacion",
-    label: "Especialista en Investigación",
-    role: "Investigación de mercado",
-    capabilities: ["market_research", "audience_segmentation"],
-  },
-  {
-    id: "especialista_planificacion",
-    label: "Especialista en Planificación",
-    role: "Planificación de campañas",
-    capabilities: ["campaign_strategy", "content_strategy"],
-  },
-  {
-    id: "especialista_reporting",
-    label: "Especialista en Reporting",
-    role: "Informes y analítica",
-    capabilities: ["analytics_measurement", "web_analytics"],
+    id: "agent_ads_specialist",
+    label: "Especialista en Publicidad",
+    role: "Publicidad y adquisición",
+    capabilities: ["advertising_paid", "campaign_strategy"],
   },
 ];
 
@@ -183,6 +126,8 @@ export interface MarketingServiceOptions {
   readonly activity?: MarketingActivityRepository;
   /** Durable approval repository (Supabase in production). */
   readonly approvals?: MarketingApprovalRepository;
+  /** Durable readiness source for the provisioned Marketing roster. */
+  readonly companyDna?: CompanyDnaStore;
 }
 
 /**
@@ -199,6 +144,7 @@ export class MarketingService {
   private readonly objectivesRepo: MarketingObjectiveRepository;
   private readonly activityRepo: MarketingActivityRepository;
   private readonly approvalsRepo: MarketingApprovalRepository;
+  private readonly companyDna: CompanyDnaStore | null;
   /** Engine session id per organization (maps to OpenClaw persistent session). */
   private readonly engineSessionIds = new Map<string, string>();
 
@@ -213,6 +159,7 @@ export class MarketingService {
       options.activity ?? new InMemoryMarketingActivityRepository();
     this.approvalsRepo =
       options.approvals ?? new InMemoryMarketingApprovalRepository();
+    this.companyDna = options.companyDna ?? null;
   }
 
   /* ------------------------- CEO conversation ------------------------- */
@@ -500,6 +447,15 @@ export class MarketingService {
    * provisioned through the canonical Customer Zero handoff.
    */
   private async findDepartmentForOrg(organizationId: string): Promise<unknown> {
+    // Production reconstructs the provisioned department from durable Company
+    // DNA after a restart. The process-local department registry is retained
+    // only as a test/dev fallback when no durable store is injected.
+    if (this.companyDna) {
+      const dna = await this.companyDna.get(organizationId);
+      return dna?.departmentProvisionedAt
+        ? { employees: MARKETING_EMPLOYEES.map((employee) => employee.id) }
+        : null;
+    }
     const session = (await import("./customer-zero-session.js")).getCustomerZeroSession(
       organizationId,
     );

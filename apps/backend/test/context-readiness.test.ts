@@ -15,6 +15,10 @@ import {
   freshOrganizationFacts,
   type ReadinessFacts,
 } from "../src/customer-zero/context-readiness.js";
+import {
+  InMemoryCompanyDnaStore,
+  type CompanyDnaRecord,
+} from "../src/customer-zero/company-dna.js";
 
 describe("Readiness gate (pure)", () => {
   it("A1 fresh organization is NOT ready", () => {
@@ -121,6 +125,41 @@ describe("DepartmentStatus for fresh orgs", () => {
     });
     const employees = await service.getDigitalEmployees("org_brand_new");
     expect(employees).toEqual([]);
+  }, 30_000);
+
+  it("B3 reconstructs the canonical roster from durable provisioned DNA", async () => {
+    const { MarketingService } = await import(
+      "../src/customer-zero/marketing-service.js"
+    );
+    const companyDna = new InMemoryCompanyDnaStore();
+    const now = new Date().toISOString();
+    const record: CompanyDnaRecord = {
+      organizationId: "org_restarted",
+      companyName: "Empresa real",
+      description: "Servicio real",
+      objective: "Operar mejor",
+      products: ["Servicio"],
+      customers: ["Clientes"],
+      channels: ["Web"],
+      declaredTools: [],
+      uncertainties: [],
+      provenance: {},
+      factsUpdatedAt: now,
+      departmentProvisionedAt: now,
+    };
+    await companyDna.upsert(record);
+    const service = new MarketingService({
+      engine: { sendMessage: async () => ({ status: "completed", text: "" }) } as unknown as ConstructorParameters<typeof MarketingService>[0]["engine"],
+      companyDna,
+    });
+
+    const employees = await service.getDigitalEmployees("org_restarted");
+
+    expect(employees.map((employee) => employee.id)).toEqual([
+      "agent_content_strategist",
+      "agent_social_media_manager",
+      "agent_ads_specialist",
+    ]);
   }, 30_000);
 });
 

@@ -133,6 +133,7 @@ try {
           objectives: new SupabaseMarketingObjectiveRepository(supabaseAuthConfig),
           activity: new SupabaseMarketingActivityRepository(supabaseAuthConfig),
           approvals: new SupabaseMarketingApprovalRepository(supabaseAuthConfig),
+          ...(deps.companyDna ? { companyDna: deps.companyDna } : {}),
         })
       : new MarketingService({
           engine: deps.engine,
