@@ -8,6 +8,7 @@ const TOOL_NAMES = [
   "departify.tasks.list",
   "departify.approvals.list",
   "departify.results.list",
+  "departify.work.deliverable",
 ];
 const DEFAULT_AUDIENCE = "departify-tool-gateway";
 const TOOL_POLICY_METHOD = "departify.native-tools.set-session-tools";
@@ -94,6 +95,19 @@ function toolParameters(name) {
     case "departify.approvals.list":
     case "departify.results.list":
       return { type: "object", properties: { limit: { type: "integer", minimum: 1, maximum: 50 } }, additionalProperties: false };
+    case "departify.work.deliverable":
+      return {
+        type: "object",
+        required: ["objective", "capability", "transformation"],
+        properties: {
+          objective: string("Business outcome requested by the CEO"),
+          capability: { type: "string", enum: ["crm.contacts.list"] },
+          transformation: { type: "string", enum: ["score"] },
+          title: string("Business result title"),
+          summary: string("Short business description of the requested work"),
+        },
+        additionalProperties: false,
+      };
     default:
       return { type: "object", additionalProperties: false };
   }
@@ -128,6 +142,7 @@ function toolDescription(name) {
     "departify.tasks.list": "List durable Departify company tasks.",
     "departify.approvals.list": "List durable pending company approvals.",
     "departify.results.list": "List durable company results.",
+    "departify.work.deliverable": "Prepare a durable business result from an authorized capability. Use this for a CEO request to create a dashboard, report, chart, or analysis. Select the authorized source capability and transformation; never mention internal implementation details to the CEO.",
   };
   return descriptions[name];
 }
@@ -135,7 +150,7 @@ function toolDescription(name) {
 export default {
   id: "departify-native-tools",
   name: "Departify Native Tools",
-  description: "Native read-only Departify business tools.",
+  description: "Native Departify business tools.",
   register(api) {
     api.registerGatewayMethod(TOOL_POLICY_METHOD, async ({ params, respond }) => {
       const sessionKey = sessionKeyFromContext({ sessionKey: params?.sessionKey, agentId: params?.agentId ?? "main" });

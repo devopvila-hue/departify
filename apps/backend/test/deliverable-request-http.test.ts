@@ -16,6 +16,7 @@ import { buildServer } from "../src/server/server.js";
 import { makeFakeTenant } from "./helpers/fake-tenant.js";
 import { InMemoryInboxStore } from "../src/customer-zero/inbox-domain.js";
 import { InMemoryDepartmentWorkStore } from "../src/customer-zero/department-work.js";
+import { InMemoryToolStateStore } from "../src/customer-zero/tool-state.js";
 import {
   getOrCreateCustomerZeroSession,
   resetCustomerZeroSessionsForTest,
@@ -43,6 +44,16 @@ class CapabilityAckEngine implements EngineAdapter {
 
   async sendMessage(input: EngineSendMessageInput): Promise<EngineMessageResult> {
     this.inputs.push(input);
+    if (input.nativeBusinessTools && this.onNativeTurn) {
+      const result = await this.onNativeTurn(input);
+      return {
+        sessionId: input.sessionId,
+        messageId: `message-${this.inputs.length}`,
+        status: "completed",
+        text: result.summary,
+        toolCalls: [{ name: "departify.work.deliverable", status: "completed" }],
+      };
+    }
     return {
       sessionId: input.sessionId,
       messageId: `message-${this.inputs.length}`,
@@ -52,6 +63,8 @@ class CapabilityAckEngine implements EngineAdapter {
       text: "Sí. Mautic está conectado y operativo. Ya tengo acceso y puedo trabajar con ello.",
     };
   }
+
+  onNativeTurn?: (input: EngineSendMessageInput) => Promise<{ summary: string }>;
 
   async getSession(sessionId: string): Promise<EngineSession | null> {
     return this.sessionCreated && this.session.id === sessionId ? this.session : null;
@@ -71,6 +84,7 @@ describe("P0 deliverable request HTTP boundary", () => {
   let server: FastifyInstance | null = null;
   let engine: CapabilityAckEngine | null = null;
   let workStore: InMemoryDepartmentWorkStore | null = null;
+  let toolState: InMemoryToolStateStore | null = null;
   const previousMautic = {
     baseUrl: process.env.MAUTIC_BASE_URL,
     clientId: process.env.MAUTIC_CLIENT_ID,
@@ -92,6 +106,7 @@ describe("P0 deliverable request HTTP boundary", () => {
     server = null;
     engine = null;
     workStore = null;
+    toolState = null;
   });
 
   it.each([
@@ -104,25 +119,41 @@ describe("P0 deliverable request HTTP boundary", () => {
     expect(classifyDeliverableRequest(message).requested).toBe(true);
   });
 
-  it("does not terminate at a Mautic capability acknowledgement", async () => {
+  it("autonomously composes authorized Mautic data into a durable dashboard", async () => {
     process.env.MAUTIC_BASE_URL = "https://mautic.test";
     process.env.MAUTIC_CLIENT_ID = "test-client";
     process.env.MAUTIC_CLIENT_SECRET = "test-secret";
+    process.env.DEPARTIFY_RUNTIME_TOKEN = "runtime-test-secret";
 
-    let mauticCalls = 0;
+    const mauticCalls: string[] = [];
     globalThis.fetch = (async (input: string | URL) => {
-      if (String(input).includes("mautic.test")) mauticCalls += 1;
+      const url = String(input);
+      if (url.includes("mautic.test")) mauticCalls.push(url);
+      if (url.endsWith("/oauth/v2/token")) {
+        return new Response(JSON.stringify({ access_token: "provider-token" }), { status: 200 });
+      }
+      if (url.includes("/api/contacts")) {
+        return new Response(JSON.stringify({
+          total: 2,
+          contacts: {
+            "1": { id: 1, points: 90, fields: { all: { firstname: "A", lastname: "Lead", email: "a@example.com" } } },
+            "2": { id: 2, points: 20, fields: { all: { firstname: "B", lastname: "Lead", email: "b@example.com" } } },
+          },
+        }), { status: 200 });
+      }
       return new Response("not found", { status: 404 });
     }) as typeof fetch;
 
     const tenant = makeFakeTenant();
     engine = new CapabilityAckEngine();
     workStore = new InMemoryDepartmentWorkStore();
+    toolState = new InMemoryToolStateStore();
     server = await buildServer(loadBackendConfig(), {
       auth: tenant,
       organizations: tenant,
       inbox: new InMemoryInboxStore(),
       workStore,
+      toolState,
       engine,
       nativeBusinessTools: true,
     });
@@ -145,10 +176,48 @@ describe("P0 deliverable request HTTP boundary", () => {
     expect(start.statusCode).toBe(200);
     const organizationId = start.json().organizationId as string;
     const session = getOrCreateCustomerZeroSession(organizationId);
+    await toolState.upsert({
+      organizationId,
+      toolId: "mautic",
+      label: "Mautic",
+      capability: "CRM",
+      declared: true,
+      status: "connected",
+      configSource: "env:mautic",
+      verifiedAt: new Date().toISOString(),
+      health: "operational",
+    });
     const mautic = session.state.connections.get("mautic");
     expect(mautic).toBeTruthy();
     mautic!.status = "connected";
     mautic!.lifecycle = "connected";
+
+    engine.onNativeTurn = async () => {
+      const token = await authedInject({
+        method: "POST",
+        url: "/internal/native-tools/runtime-token",
+        headers: { authorization: "Bearer runtime-test-secret" },
+        payload: { sessionKey: `departify:ceo:${organizationId}` },
+      });
+      expect(token.statusCode).toBe(200);
+      const scoped = token.json() as { token: string };
+      const gateway = await authedInject({
+        method: "POST",
+        url: "/internal/native-tools/tool",
+        headers: { authorization: `Bearer ${scoped.token}` },
+        payload: {
+          toolName: "departify.work.deliverable",
+          params: {
+            objective: "hazme un dashboard con el scoring de los contactos de Mautic",
+            capability: "crm.contacts.list",
+            transformation: "score",
+            title: "Scoring de contactos",
+          },
+        },
+      });
+      expect(gateway.statusCode).toBe(200);
+      return gateway.json() as { summary: string };
+    };
 
     const response = await authedInject({
       method: "POST",
@@ -158,25 +227,29 @@ describe("P0 deliverable request HTTP boundary", () => {
 
     expect(response.statusCode).toBe(200);
     const body = response.json() as { reply: string; routing: { intent: string } };
-    expect(body.routing.intent).toBe("external_tool_query");
-    expect(body.reply).toMatch(/todavía no tengo disponible la capacidad/i);
-    expect(body.reply).not.toMatch(/conectado y operativo|ya tengo acceso/i);
+    expect(body.routing.intent).toBe("direct_response");
+    expect(body.reply).toMatch(/resultado|scoring|puntuaci[oó]n/i);
+    expect(body.reply).not.toMatch(/skill|openclaw|plugin|tool|mautic est[aá] conectado/i);
     expect(engine.inputs).toHaveLength(1);
     expect(engine.inputs[0]?.nativeBusinessTools).toBe(true);
     expect(engine.policies).toHaveLength(1);
 
-    // Unsupported transformation: no task, provider call, result, dashboard,
-    // or result CTA may be fabricated from capability availability alone.
-    expect(await workStore.listTasksForOrg(organizationId)).toHaveLength(0);
-    expect(await workStore.listResultsForOrg(organizationId)).toHaveLength(0);
-    expect(mauticCalls).toBe(0);
-    expect(body.reply).not.toMatch(/dashboard.*creado|resultado disponible/i);
+    const tasks = await workStore.listTasksForOrg(organizationId);
+    const durableResults = await workStore.listResultsForOrg(organizationId);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.status).toBe("completed");
+    expect(durableResults).toHaveLength(1);
+    expect(durableResults[0]?.chart?.kind).toBe("bar");
+    expect(durableResults[0]?.producedByCapability).toBe("crm.contacts.list");
+    expect(mauticCalls.some((url) => url.includes("/api/contacts"))).toBe(true);
+    expect(mauticCalls.join(" ")).not.toContain("provider-token");
 
     const results = await authedInject({
       method: "GET",
       url: `/api/customer-zero/${organizationId}/results`,
     });
     expect(results.statusCode).toBe(200);
-    expect(results.json().results).toHaveLength(0);
+    expect(results.json().results).toHaveLength(1);
+    expect(results.json().dashboardCount).toBe(1);
   });
 });

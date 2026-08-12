@@ -58,6 +58,8 @@ export interface ExecuteWorkInput {
   readonly summary: string;
   /** Capability the engine plan is invoking. */
   readonly capability: BusinessCapability;
+  /** Optional bounded transformation composed from the source capability. */
+  readonly transformation?: "score";
   readonly locale: SupportedLocale;
 }
 
@@ -111,10 +113,10 @@ const CREDENTIALED_EXECUTORS: Readonly<
     }
     return buildContactsSummaryResult(summary.value);
   },
-  "crm.contacts.list": async (creds) => {
+  "crm.contacts.list": async (creds, input) => {
     const page = await listMauticContacts(
       creds,
-      { limit: 50, orderBy: "dateAdded" },
+      { limit: input.transformation === "score" ? 200 : 50, orderBy: "dateAdded" },
       new AbortController().signal,
     );
     if (!page.success || !page.value) {
@@ -123,7 +125,9 @@ const CREDENTIALED_EXECUTORS: Readonly<
         page.message ?? "Mautic contacts list failed",
       );
     }
-    return buildContactsListResult(page.value);
+    return input.transformation === "score"
+      ? buildContactsScoringResult(page.value)
+      : buildContactsListResult(page.value);
   },
   "crm.segments.list": async (creds) => {
     const segments = await listMauticSegments(creds, new AbortController().signal);
@@ -250,6 +254,85 @@ function buildContactsListResult(page: {
       rows,
     },
     source: "Mautic",
+    createdAt: "",
+    producedByCapability: "crm.contacts.list",
+  };
+}
+
+function buildContactsScoringResult(page: {
+  total: number;
+  contacts: readonly {
+    id: number;
+    displayName: string;
+    score?: number;
+  }[];
+}): DepartmentResult {
+  const scored = page.contacts.filter(
+    (contact): contact is typeof contact & { score: number } =>
+      typeof contact.score === "number" && Number.isFinite(contact.score),
+  );
+  if (scored.length === 0) {
+    throw new DepartmentWorkError(
+      "unsupported",
+      "Mautic no ha proporcionado puntuaciones de contactos para generar este resultado.",
+    );
+  }
+
+  const ordered = [...scored].sort((left, right) => right.score - left.score);
+  const bands = [
+    { label: "0–24", min: 0, max: 24 },
+    { label: "25–49", min: 25, max: 49 },
+    { label: "50–74", min: 50, max: 74 },
+    { label: "75+", min: 75, max: Number.POSITIVE_INFINITY },
+  ];
+  const values = bands.map((band) =>
+    scored.filter((contact) => contact.score >= band.min && contact.score <= band.max).length,
+  );
+  const rows = ordered.slice(0, 20).map((contact) => ({
+    label: contact.displayName,
+    value: String(contact.score),
+  }));
+  const average = Math.round(
+    scored.reduce((sum, contact) => sum + contact.score, 0) / scored.length,
+  );
+  const content = [
+    `Scoring calculado sobre ${scored.length} contactos puntuados de ${page.total}.`,
+    `Puntuación media: **${average}**.`,
+    "",
+    "Contactos con mayor puntuación:",
+    ...rows.map((row) => `- **${row.label}** — ${row.value}`),
+  ].join("\n");
+
+  return {
+    id: "",
+    organizationId: "",
+    departmentId: "marketing",
+    relatedWorkItemId: null,
+    title: "Scoring de contactos",
+    summary: `He preparado el scoring de ${scored.length} contactos con una puntuación media de ${average}.`,
+    content,
+    data: {
+      totalContacts: page.total,
+      scoredContacts: scored.length,
+      averageScore: average,
+      topContacts: ordered.slice(0, 20).map((contact) => ({
+        id: contact.id,
+        name: contact.displayName,
+        score: contact.score,
+      })),
+    },
+    chart: {
+      kind: "bar",
+      title: "Distribución del scoring",
+      unit: "contactos",
+      series: [{
+        name: "Contactos",
+        labels: bands.map((band) => band.label),
+        values,
+      }],
+      rows,
+    },
+    source: "CRM",
     createdAt: "",
     producedByCapability: "crm.contacts.list",
   };

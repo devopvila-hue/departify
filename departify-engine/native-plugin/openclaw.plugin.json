@@ -1,7 +1,7 @@
 {
   "id": "departify-native-tools",
   "name": "Departify Native Tools",
-  "description": "Native read-only Departify business tools.",
+  "description": "Native Departify business tools.",
   "activation": { "onStartup": true },
   "contracts": {
     "tools": [
@@ -13,7 +13,8 @@
       "departify.drive.read",
       "departify.tasks.list",
       "departify.approvals.list",
-      "departify.results.list"
+      "departify.results.list",
+      "departify.work.deliverable"
     ]
   },
   "configSchema": {

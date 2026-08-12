@@ -69,6 +69,10 @@ export const RUNTIME_CAPABILITY_RULES: readonly CapabilityRule[] = [
   { id: "tasks.create", sourceCapabilities: [], alwaysAvailable: true },
   { id: "approvals.list", sourceCapabilities: [], alwaysAvailable: true },
   { id: "results.list", sourceCapabilities: [], alwaysAvailable: true },
+  {
+    id: "work.deliverable",
+    sourceCapabilities: ["crm.contacts.list", "crm.contacts.read", "crm.contacts.summary"],
+  },
   { id: "company.context", sourceCapabilities: [], alwaysAvailable: true },
 ];
 

@@ -17,6 +17,7 @@ import {
   readEmailNativeResult,
   runCalendarReadTurn,
   requireSession,
+  createWorkExecutor,
   workStoreForRoutes,
 } from "./customer-zero-v2.js";
 import { compileRuntimeBusinessContext } from "../../customer-zero/department-context-compiler.js";
@@ -45,6 +46,7 @@ function nativeRuntimeConnections(
     toolId: connection.toolId,
     label: connection.label,
     state: connection.state,
+    ...(connection.capabilities ? { capabilities: connection.capabilities.map((capability) => capability) } : {}),
     ...(connection.toolId === "gmail"
       ? {
           capabilities: [
@@ -439,6 +441,43 @@ export async function registerInternalEngineRoutes(
       } else if (toolName === "departify.tasks.list") {
         const tasks = await workStoreForRoutes().listTasksForOrg(identity.organizationId, Number(args.limit ?? 20));
         result = { status: "success", operation: toolName, data: { tasks: tasks.map((task) => ({ id: task.id, title: task.title, status: task.status, departmentId: task.departmentId })) } };
+      } else if (toolName === "departify.work.deliverable") {
+        const capability = nativeText(args, "capability");
+        const transformation = nativeText(args, "transformation");
+        const objective = nativeText(args, "objective");
+        if (capability !== "crm.contacts.list" || transformation !== "score" || !objective) {
+          result = {
+            status: "blocked",
+            operation: toolName,
+            summary: "No puedo preparar ese resultado con las capacidades autorizadas actualmente.",
+          };
+        } else {
+          const outcome = await createWorkExecutor(identity.organizationId).run({
+            organizationId: identity.organizationId,
+            conversationId: `native:${validation.claims.sessionKey}`,
+            departmentId: "marketing",
+            objectiveId: null,
+            requestedBy: "ceo",
+            title: nativeText(args, "title") || "Scoring de contactos",
+            summary: nativeText(args, "summary") || objective,
+            capability: "crm.contacts.list",
+            transformation: "score",
+            locale: session.state.locale,
+          });
+          result = outcome.result
+            ? {
+                status: "success",
+                operation: toolName,
+                summary: `Resultado preparado: ${outcome.result.summary}. Puedes verlo en Resultados.`,
+                data: { taskId: outcome.task.id, resultId: outcome.result.id, dashboard: true },
+              }
+            : {
+                status: "blocked",
+                operation: toolName,
+                summary: outcome.finalMessage,
+                data: { taskId: outcome.task.id },
+              };
+        }
       } else if (toolName === "departify.approvals.list") {
         const approvals = await deps.marketing?.listApprovals(identity.organizationId) ?? [];
         result = { status: "success", operation: toolName, data: { approvals: approvals.slice(0, Number(args.limit ?? 20)).map((approval) => ({ id: approval.id, title: approval.title, status: approval.status })) } };

@@ -391,8 +391,12 @@ export function renderOpenClawTurn(input: EngineSendMessageInput): string {
         "delegate a factual request to Marketing, answer from general knowledge, or carry an old " +
         "tool selection into the current turn. For several independent requests in " +
         "one message, call only the native capabilities needed for those requests. Never claim " +
-        "unavailable results, perform mutations, " +
-        "reveal internal implementation details, or install/configure software.",
+        "unavailable results, perform external system mutations, " +
+        "reveal internal implementation details, or install/configure software. For a legitimate " +
+        "business outcome that asks for a dashboard, report, chart, analysis, or other durable " +
+        "result, inspect the currently exposed capabilities and select departify.work.deliverable " +
+        "when an authorized source capability and transformation can satisfy it. Use its business " +
+        "arguments; never ask the CEO to mention or create an internal procedure.",
     );
   }
   if (input.runtimeContext) {

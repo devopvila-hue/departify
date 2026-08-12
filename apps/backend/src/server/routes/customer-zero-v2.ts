@@ -3158,6 +3158,7 @@ async function buildRuntimeBridge(
     toolId: connection.toolId,
     label: connection.label,
     state: connection.state,
+    ...(connection.capabilities ? { capabilities: connection.capabilities.map((capability) => capability) } : {}),
     ...(connection.toolId === "gmail"
       ? {
           capabilities: [
@@ -3803,8 +3804,11 @@ export async function processCeoMessage(
       if (
         nativeResult.status === "completed" &&
         selectedExposedTools.length > 0 &&
-        !deliverableRequest.requested
+        (!deliverableRequest.requested || selectedExposedTools.includes("departify.work.deliverable"))
       ) {
+        const nativeWorkResult = selectedExposedTools.includes("departify.work.deliverable")
+          ? (await workStoreForRoutes().listResultsForOrg(organizationId, 1))[0] ?? null
+          : null;
         return completeRuntimeCeoTurn(
           session,
           conversation,
@@ -3812,6 +3816,7 @@ export async function processCeoMessage(
           nativeResult.text,
           selectedTools,
           ["success"],
+          nativeWorkResult,
         );
       }
       if (nativeResult.status === "completed") {
@@ -4300,12 +4305,31 @@ export async function processCeoMessage(
       /\b(analiz[ae]r?|informe|report[ae]|resum[ie]n|prepara(r)?|deja(r)?\s+en\s+resultados)\b/i.test(
         operationalMessage,
       );
-    if (deliverableRequest.kind === "contacts_scoring") {
+    if (asksForAnalysis && deliverableRequest.kind === "contacts_scoring") {
+      // Native OpenClaw owns procedure selection. This legacy route is only
+      // used when native mode is disabled; it composes the same authorized
+      // CRM read with the bounded scoring transformation.
       deliverableHandled = true;
-      assistantReply = isEs
-        ? "Puedo acceder a Mautic, pero todavía no tengo disponible la capacidad para generar ese scoring como dashboard."
-        : "I can access Mautic, but I do not yet have the capability to generate that scoring as a dashboard.";
-      marketingTurn = { role: "assistant", content: assistantReply };
+      try {
+        const outcome = await createWorkExecutor(organizationId).run({
+          organizationId,
+          conversationId: conversation.id,
+          departmentId: "marketing",
+          objectiveId: null,
+          requestedBy: "ceo",
+          title: "Scoring de contactos",
+          summary: operationalMessage,
+          capability: "crm.contacts.list",
+          transformation: "score",
+          locale: session.state.locale,
+        });
+        await session.conversations.addMessage(conversation.id, "assistant", outcome.finalMessage);
+        assistantReply = outcome.finalMessage;
+        marketingTurn = { role: "assistant", content: assistantReply };
+        completedWorkResult = outcome.result;
+      } catch {
+        // The executor persists the truthful failure state.
+      }
     } else if (asksForAnalysis) {
       deliverableHandled = true;
       try {
@@ -4492,6 +4516,7 @@ async function completeRuntimeCeoTurn(
   reply: string,
   toolNames: readonly string[],
   toolStatuses: readonly string[],
+  workResult: DepartmentResult | null = null,
 ): Promise<CeoMessageResult> {
   const safeReply = reply
     .replace(/<departify_tool_call>[\s\S]*?<\/departify_tool_call>/gi, "")
@@ -4537,6 +4562,20 @@ async function completeRuntimeCeoTurn(
         state,
         message: finalReply,
       },
+      ...(workResult
+        ? [{
+            kind: "result" as const,
+            item: {
+              id: workResult.id,
+              title: workResult.title,
+              description: workResult.summary,
+              status: "completed" as const,
+              result: workResult.summary,
+              capability: workResult.producedByCapability,
+              kind: "dashboard" as const,
+            },
+          }]
+        : []),
     ],
     routing: {
       intent,
@@ -6641,7 +6680,7 @@ function replySubject(subject: string): string {
   return /^re\s*:/i.test(subject.trim()) ? subject.trim() : `Re: ${subject.trim() || "Tu correo"}`;
 }
 
-function createWorkExecutor(
+export function createWorkExecutor(
   organizationId: string,
 ): DepartmentWorkExecutor {
   const session = getCustomerZeroSession(organizationId);
@@ -6684,7 +6723,10 @@ function createWorkExecutor(
         process.stdout.write(
           JSON.stringify({
             kind: "department.work.message_injected",
-            ...input,
+            organizationHash: safeTraceHash(input.organizationId),
+            conversationHash: safeTraceHash(input.conversationId),
+            hasTask: Boolean(input.relatedTaskId),
+            hasResult: Boolean(input.relatedResultId),
           }) + "\n",
         );
       } catch {

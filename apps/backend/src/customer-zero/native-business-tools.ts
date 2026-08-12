@@ -3,7 +3,8 @@ import {
   type RuntimeCapabilityManifest,
 } from "./capability-manifest.js";
 
-/** Read-only native surface advertised to the runtime engine. */
+/** Native business surface advertised to the runtime engine. Mutating external
+ * provider operations remain outside this surface and approval-gated. */
 export const NATIVE_READ_TOOL_NAMES = [
   "departify.company.context",
   "departify.email.list",
@@ -14,6 +15,7 @@ export const NATIVE_READ_TOOL_NAMES = [
   "departify.tasks.list",
   "departify.approvals.list",
   "departify.results.list",
+  "departify.work.deliverable",
 ] as const;
 
 export const NATIVE_DRIVE_READ_INPUT = {
@@ -38,6 +40,7 @@ const REQUIRED_CAPABILITY: Partial<Record<NativeReadToolName, string>> = {
   "departify.tasks.list": "tasks.list",
   "departify.approvals.list": "approvals.list",
   "departify.results.list": "results.list",
+  "departify.work.deliverable": "work.deliverable",
 };
 
 export function isNativeReadToolName(value: string): value is NativeReadToolName {
