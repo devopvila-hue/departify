@@ -37,8 +37,12 @@ Departify never depends directly on an engine implementation.
 - The backend receives the adapter via dependency injection (`ServerDeps.engine`)
   wired in `main.ts` from `loadEngineAdapterConfig()`. No handler constructs
   `OpenClawEngineAdapter` directly.
-- A temporary, protected `/internal/engine/*` route exists for ENGINE 02
-  verification and will be removed once real product routes consume the adapter.
+- A protected `/internal/engine/*` route remains available for diagnostics; it
+  requires the backend auth boundary whenever AuthService is configured.
+- Runtime operational turns use the adapter with a fresh Runtime Business
+  Context and normalized `departify.*` business-tool protocol. The backend
+  authorizes and executes every selected tool; OpenClaw never receives secrets
+  or tenant selectors.
 
 ## Boundary
 
