@@ -349,6 +349,7 @@ const config = {
       "tts",
     ],
     fs: { workspaceOnly: true },
+    elevated: { enabled: false },
     ...(smallFallbackNeedsWebIsolation
       ? {
           byProvider: {
