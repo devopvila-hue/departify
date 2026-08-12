@@ -57,7 +57,7 @@ export async function buildServer(
   await registerCustomerZeroV2Routes(server, deps);
   await registerConversationRoutes(server, deps);
   await registerAuthRoutes(server, deps.organizations);
-  await registerInternalEngineRoutes(server, deps);
+  await registerInternalEngineRoutes(server, deps, config);
   await registerMarketingRoutes(server, deps);
 
   return server;

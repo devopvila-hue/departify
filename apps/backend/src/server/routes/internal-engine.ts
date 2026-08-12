@@ -1,9 +1,11 @@
 import type { FastifyInstance } from "fastify";
+import type { BackendConfig } from "@departify/config";
 import type { ServerDeps } from "../deps.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
   DEFAULT_AUDIENCE,
   issueScopedRuntimeToken,
+  isPersistedOrganizationId,
   organizationFromOpenClawSessionKey,
   runtimeTokenSecret,
   validateScopedRuntimeToken,
@@ -131,6 +133,7 @@ function runtimeTokenAuth(request: { headers: { authorization?: unknown } }): st
 export async function registerInternalEngineRoutes(
   server: FastifyInstance,
   deps: ServerDeps,
+  config?: Pick<BackendConfig, "environment">,
 ): Promise<void> {
   if (!deps.engine) return;
 
@@ -144,7 +147,9 @@ export async function registerInternalEngineRoutes(
       }
       const sessionKey = request.body?.sessionKey?.trim() ?? "";
       const identity = organizationFromOpenClawSessionKey(sessionKey);
-      if (!identity) return reply.code(403).send({ error: "invalid_session_scope" });
+      if (!identity || (config?.environment === "production" && !isPersistedOrganizationId(identity.organizationId))) {
+        return reply.code(403).send({ error: "invalid_session_scope" });
+      }
       const issued = issueScopedRuntimeToken({
         secret,
         organizationId: identity.organizationId,
@@ -183,7 +188,7 @@ export async function registerInternalEngineRoutes(
         return reply.code(401).send({ error: "invalid_runtime_identity" });
       }
       const identity = organizationFromOpenClawSessionKey(validation.claims.sessionKey);
-      if (!identity || identity.organizationId !== validation.claims.organizationId) {
+      if (!identity || (config?.environment === "production" && !isPersistedOrganizationId(identity.organizationId)) || identity.organizationId !== validation.claims.organizationId) {
         return reply.code(403).send({ error: "invalid_session_scope" });
       }
       const session = await requireSession(identity.organizationId, deps);
@@ -273,7 +278,7 @@ export async function registerInternalEngineRoutes(
         return reply.code(401).send({ error: "invalid_runtime_identity" });
       }
       const identity = organizationFromOpenClawSessionKey(validation.claims.sessionKey);
-      if (!identity || identity.organizationId !== validation.claims.organizationId || validation.claims.agentId !== "main") {
+      if (!identity || (config?.environment === "production" && !isPersistedOrganizationId(identity.organizationId)) || identity.organizationId !== validation.claims.organizationId || validation.claims.agentId !== "main") {
         return reply.code(403).send({ error: "invalid_session_scope" });
       }
       if (!isNativeReadToolName(toolName)) {

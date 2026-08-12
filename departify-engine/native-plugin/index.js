@@ -11,6 +11,7 @@ const TOOL_NAMES = [
 ];
 const DEFAULT_AUDIENCE = "departify-tool-gateway";
 const TOOL_POLICY_METHOD = "departify.native-tools.set-session-tools";
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const sessionToolPolicies = new Map();
 
 function policyKey(sessionKey) {
@@ -29,7 +30,8 @@ function runtimeConfig() {
 function sessionKeyFromContext(ctx) {
   const sessionKey = typeof ctx?.sessionKey === "string" ? ctx.sessionKey.trim() : "";
   const agentId = typeof ctx?.agentId === "string" ? ctx.agentId.trim() : "main";
-  if (agentId !== "main" || !/^(?:departify:ceo:|agent:main:departify:ceo:)[^:]+$/.test(sessionKey)) {
+  const match = /^(?:departify:ceo:|agent:main:departify:ceo:)([^:]+)$/.exec(sessionKey);
+  if (agentId !== "main" || !match?.[1] || !UUID_PATTERN.test(match[1])) {
     throw new Error("Departify native tool requires a scoped CEO session");
   }
   return sessionKey;

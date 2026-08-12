@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 const TOKEN_VERSION = "v1";
 const DEFAULT_AUDIENCE = "departify-tool-gateway";
 const DEFAULT_TTL_SECONDS = 60;
+const ORGANIZATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export interface RuntimeTokenClaims {
   readonly sub: string;
@@ -117,6 +118,11 @@ export function organizationFromOpenClawSessionKey(
   const match = /^(?:departify:ceo:|agent:main:departify:ceo:)([^:]+)$/.exec(sessionKey.trim());
   if (!match?.[1]) return null;
   return { organizationId: match[1], agentId: "main" };
+}
+
+/** Persistent organization stores use PostgreSQL UUID primary keys. */
+export function isPersistedOrganizationId(value: string): boolean {
+  return ORGANIZATION_ID_PATTERN.test(value);
 }
 
 export function runtimeTokenSecret(): string | null {

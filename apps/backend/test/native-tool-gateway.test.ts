@@ -156,6 +156,14 @@ describe("native company context gateway", () => {
     expect(wrongAudienceResponse.statusCode).toBe(401);
   });
 
+  it("rejects a malformed organization session before a UUID-backed store query", async () => {
+    expect(issueScopedRuntimeToken({
+      secret,
+      organizationId: "engine032fresh20260812",
+      sessionKey: "departify:ceo:engine032fresh20260812",
+    }).claims.organizationId).not.toMatch(/^[0-9a-f-]{36}$/i);
+  });
+
   it("routes the real CEO HTTP entrypoint through native mode without textual tools", async () => {
     const start = await server.inject({
       method: "POST",
