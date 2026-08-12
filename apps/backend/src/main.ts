@@ -119,6 +119,9 @@ try {
   if (engineConfig.gatewayUrl) {
     deps.engine = createEngineAdapter(engineConfig);
     deps.engineRuntimePolicy = engineConfig.runtimePolicy ?? "strict";
+    deps.nativeBusinessTools = /^(1|true|yes|on)$/i.test(
+      process.env.OPENCLAW_NATIVE_BUSINESS_TOOLS ?? "",
+    );
     console.log(
       `[engine] adapter initialised provider=${engineConfig.provider} url=${engineConfig.gatewayUrl} policy=${engineConfig.runtimePolicy}`,
     );

@@ -27,6 +27,8 @@ export interface EngineSendMessageInput {
   businessTools?: readonly EngineBusinessToolDefinition[];
   /** Structured result from a backend-authorized business tool call. */
   toolResult?: string;
+  /** Experimental native OpenClaw mode; no textual Departify tool protocol. */
+  nativeBusinessTools?: boolean;
 }
 
 /** Provider-neutral business tool metadata. Never contains credentials. */

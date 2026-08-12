@@ -35,6 +35,11 @@ const PUBLIC_PATHS = new Set(["/health", "/version"]);
 
 function isPublicPath(pathname: string): boolean {
   if (PUBLIC_PATHS.has(pathname)) return true;
+  // Native Departify tool endpoints have their own HMAC runtime identity. Do
+  // not force them through CEO bearer auth, which would make the OpenClaw
+  // gateway present a Supabase user token. The route handler remains fail
+  // closed and validates the scoped token before reading any tenant state.
+  if (pathname.startsWith("/internal/native-tools/")) return true;
   if (pathname === "/documentation" || pathname.startsWith("/documentation/")) {
     return true;
   }

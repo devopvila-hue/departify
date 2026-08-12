@@ -105,6 +105,12 @@ export const envSchema = z.object({
   /** Optional model override sent with every message (provider/model). */
   OPENCLAW_MODEL: z.string().optional().or(z.literal("")),
 
+  /** Internal, non-provider credential used by the native Departify tool gateway. */
+  DEPARTIFY_RUNTIME_TOKEN: optionalSecret,
+  /** Backend base URL reachable from the private OpenClaw runtime. */
+  DEPARTIFY_API_URL: optionalUrl,
+  OPENCLAW_NATIVE_BUSINESS_TOOLS: z.coerce.boolean().default(false),
+
   /** Server-side Hostinger Email MCP adapter configuration. */
   HOSTINGER_EMAIL_MCP_URL: optionalUrl,
   HOSTINGER_EMAIL_MCP_TOKEN: optionalSecret,

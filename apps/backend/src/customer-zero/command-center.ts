@@ -1174,6 +1174,7 @@ export function normalizeOperationalLanguage(message: string): string {
 
 export function isCalendarReadRequest(message: string): boolean {
   if (/\bqu[eé]\s+tengo\s+(hoy|ma[nñ]ana|esta\s+semana|this\s+week|tomorrow|today)\b/i.test(message)) return true;
+  if (/\bqu[eé]\s+(?:eventos?|reuniones?)\s+tengo\b/i.test(message)) return true;
   // Bare agenda requests are explicit Calendar operations; they must not
   // fall through to the generic Marketing/LLM sink.
   if (/\bmis\s+(pr[oó]xim(?:o|os|a|as)|siguientes?)\s+eventos?\b/i.test(message)) return true;

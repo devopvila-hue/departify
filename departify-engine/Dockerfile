@@ -39,6 +39,7 @@ ENV OPENCLAW_VERSION=${OPENCLAW_VERSION} \
 COPY --chown=root:root --chmod=0755 scripts/entrypoint.sh /app/scripts/entrypoint.sh
 COPY --chown=root:root --chmod=0755 scripts/render-config.mjs /app/scripts/render-config.mjs
 COPY --chown=root:root --chmod=0644 bootstrap/ /app/bootstrap/
+COPY --chown=root:root --chmod=0644 native-plugin/ /app/native-plugin/
 
 # Health probe: combine /healthz (liveness) and /readyz (readiness) by hitting
 # the same loopback port the gateway binds to. The official docker-healthcheck.js

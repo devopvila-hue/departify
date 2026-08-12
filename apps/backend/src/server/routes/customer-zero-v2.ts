@@ -2295,7 +2295,13 @@ export async function registerCustomerZeroV2Routes(
       const session = await requireSession(organizationId, deps);
       const trace = newCeoTurnTrace(session, request.id);
       try {
-        const runtime = deps.engine
+        const normalizedMessage = normalizeOperationalLanguage(body.message);
+        const bypassRuntime = shouldBypassRuntimeForPendingOperation(session, normalizedMessage);
+        const pendingRead = Boolean(
+          session.state.pendingCalendarWork && isCalendarReadRequest(normalizedMessage),
+        );
+        if (bypassRuntime) trace.routingBypassed = true;
+        const runtime = deps.engine && !bypassRuntime && !pendingRead
           ? await buildRuntimeBridge(session, deps, inboxStore, trace)
           : null;
         const result = await processCeoMessage(
@@ -2305,6 +2311,7 @@ export async function registerCustomerZeroV2Routes(
           deps.marketing,
           deps.engineRuntimePolicy,
           runtime,
+          trace,
         );
         emitCeoTurnTrace(session, runtime?.trace ?? trace, result);
         return reply.code(200).send(result);
@@ -2932,6 +2939,7 @@ interface RuntimeBridgeInput {
     userMessage: string,
   ) => Promise<DepartifyToolResult>;
   readonly trace: CeoTurnTraceState;
+  readonly nativeBusinessTools: boolean;
 }
 
 interface CeoTurnTraceState {
@@ -2950,7 +2958,16 @@ interface CeoTurnTraceState {
   toolResultStatuses: string[];
   contextBytes: number | null;
   sessionFound: boolean | null;
+  pendingOperationIdHash: string | null;
+  pendingStatus: string | null;
+  approvalClassification: PendingOperationDecision | null;
+  executionReceiptFound: boolean;
+  providerMutationAttempted: boolean;
+  providerMutationResult: string | null;
+  routingBypassed: boolean;
 }
+
+type PendingOperationDecision = "APPROVE" | "CANCEL" | "OTHER";
 
 function safeTraceHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 12);
@@ -2960,6 +2977,67 @@ function pendingOperationType(session: CustomerZeroSession): string | null {
   if (session.state.pendingEmailWork) return "email";
   if (session.state.pendingCalendarWork) return "calendar";
   return null;
+}
+
+function pendingOperationIdentity(session: CustomerZeroSession): string | null {
+  const email = session.state.pendingEmailWork;
+  if (email) return email.id;
+  const calendar = session.state.pendingCalendarWork;
+  return calendar ? `calendar:${calendar.createdAt}:${calendar.summary}` : null;
+}
+
+function normalizePendingOperationMessage(message: string): string {
+  return message
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[¿?!.,;:¡]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function classifyPendingOperationDecision(message: string): PendingOperationDecision {
+  const normalized = normalizePendingOperationMessage(message);
+  if (/^(?:no|cancela|cancelar|descarta(?:lo|la)?|olvida(?:lo|la)?|no\s+lo\s+hagas?|no\s+la\s+crees?)$/.test(normalized)) {
+    return "CANCEL";
+  }
+  if (/^(?:si|crea(?:lo|la)?|hazlo|adelante|confirma|confirmo|yes|approve|go ahead|ok)(?:\s+(?:envialo|mandalo|crea(?:lo|la)?|hazlo|ya|adelante|confirma|confirmo|yes|approve|go ahead|ok))?$/.test(normalized)) {
+    return "APPROVE";
+  }
+  return "OTHER";
+}
+
+function pendingDecisionForSession(
+  session: CustomerZeroSession,
+  message: string,
+): PendingOperationDecision | null {
+  if (session.state.pendingCalendarWork?.status === "awaiting_approval") {
+    return classifyPendingOperationDecision(message);
+  }
+  if (session.state.pendingEmailWork?.status === "awaiting_approval") {
+    if (isEmailCancellation(message)) return "CANCEL";
+    if (isEmailApprovalResponse(message)) return "APPROVE";
+    return "OTHER";
+  }
+  return null;
+}
+
+function shouldBypassRuntimeForPendingOperation(
+  session: CustomerZeroSession,
+  message: string,
+): boolean {
+  const decision = pendingDecisionForSession(session, message);
+  if (decision === "APPROVE" || decision === "CANCEL") return true;
+  if (session.state.pendingCalendarWork && isCalendarReadRequest(message)) return true;
+  return Boolean(
+    !session.state.pendingCalendarWork &&
+    session.state.lastCalendarOperation?.status === "verified" &&
+    classifyPendingOperationDecision(message) === "APPROVE",
+  );
+}
+
+function isBusinessObjectiveRequest(message: string): boolean {
+  return /\b(?:quiero|necesito|busco|me\s+gustar[ií]a|objetivo)\b[\s\S]*\b(?:conseguir|captar|ganar|aumentar|mejorar|crecer|vender|clientes?|ventas?|ingresos?)\b/i.test(message);
 }
 
 function newCeoTurnTrace(
@@ -2982,6 +3060,15 @@ function newCeoTurnTrace(
     toolResultStatuses: [],
     contextBytes: null,
     sessionFound: null,
+    pendingOperationIdHash: pendingOperationIdentity(session)
+      ? safeTraceHash(pendingOperationIdentity(session)!)
+      : null,
+    pendingStatus: session.state.pendingEmailWork?.status ?? session.state.pendingCalendarWork?.status ?? null,
+    approvalClassification: null,
+    executionReceiptFound: Boolean(session.state.lastExecutionReceipt),
+    providerMutationAttempted: false,
+    providerMutationResult: null,
+    routingBypassed: false,
   };
 }
 
@@ -3008,8 +3095,19 @@ function emitCeoTurnTrace(
     delegatedDepartment,
     contextBytes: trace.contextBytes,
     sessionFound: trace.sessionFound,
+    pendingOperationIdHash: trace.pendingOperationIdHash,
+    pendingStatus: pendingOperationStatus(session),
+    approvalClassification: trace.approvalClassification,
+    executionReceiptFound: trace.executionReceiptFound,
+    providerMutationAttempted: trace.providerMutationAttempted,
+    providerMutationResult: trace.providerMutationResult,
+    routingBypassed: trace.routingBypassed,
     resultStatus: trace.toolResultStatuses.at(-1) ?? "completed",
   });
+}
+
+function pendingOperationStatus(session: CustomerZeroSession): string | null {
+  return session.state.pendingEmailWork?.status ?? session.state.pendingCalendarWork?.status ?? null;
 }
 
 /**
@@ -3113,6 +3211,7 @@ async function buildRuntimeBridge(
     capabilities,
     executeTool: (call, userMessage) => executeRuntimeTool(session, deps, call, inboxStore, userMessage),
     trace,
+    nativeBusinessTools: deps.nativeBusinessTools === true,
   };
 }
 
@@ -3519,6 +3618,7 @@ export async function processCeoMessage(
   marketing?: MarketingServiceType,
   engineRuntimePolicy?: "strict" | "legacy-fallback",
   runtime?: RuntimeBridgeInput | null,
+  trace?: CeoTurnTraceState,
 ): Promise<CeoMessageResult> {
   let conversation: ConversationRecord;
   try {
@@ -3539,11 +3639,158 @@ export async function processCeoMessage(
 
   const operationalMessage = normalizeOperationalLanguage(message);
   const baseInput = buildCommandCenterInput(session, operationalMessage);
+  const pendingDecision = pendingDecisionForSession(session, operationalMessage);
+  const lastReceipt = session.state.lastExecutionReceipt;
+  const repeatedApprovedOperation = Boolean(
+    !pendingDecision &&
+    classifyPendingOperationDecision(operationalMessage) === "APPROVE" &&
+    lastReceipt?.sideEffect &&
+    lastReceipt.status === "succeeded" &&
+    (lastReceipt.intent === "calendar.create" || lastReceipt.intent === "email.send"),
+  );
+  if (trace) {
+    trace.approvalClassification = pendingDecision ?? (repeatedApprovedOperation ? "APPROVE" : null);
+  }
+
+  // ENGINE 02.4 — pending side effects are a deterministic control-plane
+  // transition. They must be resolved before OpenClaw or Marketing sees the
+  // message; the model is never the authority for approval, cancellation, or
+  // duplicate prevention.
+  if (pendingDecision === "APPROVE" || pendingDecision === "CANCEL") {
+    if (session.state.pendingCalendarWork) {
+      if (trace) {
+        trace.providerMutationAttempted = pendingDecision === "APPROVE";
+      }
+      const outcome = await runPendingCalendarTurn(session, operationalMessage, session.state.locale !== "en");
+      if (trace) {
+        trace.executionReceiptFound = Boolean(session.state.lastExecutionReceipt);
+        trace.providerMutationResult = pendingDecision === "CANCEL"
+          ? "cancelled"
+          : session.state.lastExecutionReceipt?.status ?? "blocked";
+      }
+      return completeDeterministicOperationTurn(
+        session,
+        conversation,
+        message,
+        outcome.reply,
+        "calendar_create",
+        session.state.lastExecutionReceipt?.status === "succeeded"
+          ? "success"
+          : pendingDecision === "CANCEL"
+            ? "cancelled"
+            : "blocked",
+      );
+    }
+    if (session.state.pendingEmailWork) {
+      if (trace) {
+        trace.providerMutationAttempted = pendingDecision === "APPROVE";
+      }
+      const outcome = await runEmailTurn(session, operationalMessage, session.state.locale !== "en");
+      if (trace) {
+        trace.executionReceiptFound = Boolean(session.state.lastExecutionReceipt);
+        trace.providerMutationResult = pendingDecision === "CANCEL"
+          ? "cancelled"
+          : session.state.lastExecutionReceipt?.status ?? "blocked";
+      }
+      return completeDeterministicOperationTurn(
+        session,
+        conversation,
+        message,
+        outcome.reply,
+        "email_action",
+        session.state.lastExecutionReceipt?.status === "succeeded"
+          ? "success"
+          : pendingDecision === "CANCEL"
+            ? "cancelled"
+            : "blocked",
+        outcome.connectionSuggestion,
+      );
+    }
+  }
+
+  if (repeatedApprovedOperation) {
+    if (trace) {
+      trace.providerMutationAttempted = false;
+      trace.executionReceiptFound = true;
+      trace.providerMutationResult = "already_verified";
+    }
+    const operation = lastReceipt?.intent === "email.send" ? "email_action" : "calendar_create";
+    const reply = session.state.locale === "en"
+      ? "That operation was already verified; I will not repeat it."
+      : "Esa operación ya está verificada; no la repetiré ni crearé un duplicado.";
+    return completeDeterministicOperationTurn(session, conversation, message, reply, operation, "already_verified");
+  }
+
+  if (runtime?.nativeBusinessTools) {
+    const nativeCompanyContextRequest = !isCalendarCreateRequest(operationalMessage) &&
+      !isCalendarReadRequest(operationalMessage) &&
+      !isEmailReadQuestion(operationalMessage) &&
+      !isEmailReadFollowUp(operationalMessage) &&
+      !isEmailReplyRequest(operationalMessage) &&
+      !isEmailSendRequest(operationalMessage) &&
+      !isDriveRequest(operationalMessage) &&
+      !/\b(?:tarea|tareas)\b/i.test(operationalMessage) &&
+      !isBusinessObjectiveRequest(operationalMessage);
+    if (!nativeCompanyContextRequest) {
+      // The vertical slice is read-only company context. Existing
+      // capability-specific routing remains authoritative for all other
+      // operational families and for business objectives.
+    } else {
+    if (trace) {
+      trace.capabilityIds = ["company.context"];
+      trace.exposedToolNames = ["departify.company.context"];
+    }
+    try {
+      const nativeResult = await runtime.engine.sendMessage({
+        sessionId: runtime.sessionId,
+        message: operationalMessage,
+        nativeBusinessTools: true,
+      });
+      const selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
+      if (trace) {
+        trace.selectedToolNames = selectedTools;
+        trace.toolResultStatuses = nativeResult.status === "completed" ? ["success"] : ["failed"];
+      }
+      // A native turn is successful only when OpenClaw actually selected the
+      // registered native tool. A plain model response must not be relabeled
+      // as a company-context result or bypass the existing safe router.
+      if (nativeResult.status === "completed" && selectedTools.includes("departify.company.context")) {
+        return completeRuntimeCeoTurn(
+          session,
+          conversation,
+          message,
+          nativeResult.text,
+          selectedTools,
+          ["success"],
+        );
+      }
+      if (nativeResult.status === "completed") {
+        if (trace) trace.toolResultStatuses = ["native_tool_not_selected"];
+        console.info("[native-tool-trace]", {
+          nativeTool: true,
+          toolName: "departify.company.context",
+          organizationHash: safeTraceHash(organizationId),
+          authorized: false,
+          status: "tool_not_selected",
+        });
+      }
+    } catch {
+      console.info("[native-tool-trace]", {
+        nativeTool: true,
+        toolName: "departify.company.context",
+        organizationHash: safeTraceHash(organizationId),
+        authorized: false,
+        status: "engine_failed",
+      });
+    }
+    }
+  }
+
   // ENGINE 02 — give OpenClaw a fresh business context for operational turns.
   // Approval/cancellation/edit fast paths remain deterministic below. If the
   // engine is unavailable or declines to select a normalized tool, the
   // existing safe router continues to own the turn.
-  if (runtime && runtimeCandidate(operationalMessage, session)) {
+  if (runtime && !runtime.nativeBusinessTools && runtimeCandidate(operationalMessage, session)) {
     try {
       const runtimeTurn = await runRuntimeBusinessTurn({
         engine: runtime.engine,
@@ -3689,7 +3936,6 @@ export async function processCeoMessage(
     !calendarOwnsPendingTurn &&
     [
       "email_action",
-      "calendar_read",
       "calendar_create",
       "drive_query",
       "multi_capability",
@@ -4191,6 +4437,53 @@ async function completeRuntimeCeoTurn(
   };
 }
 
+async function completeDeterministicOperationTurn(
+  session: CustomerZeroSession,
+  conversation: ConversationRecord,
+  message: string,
+  reply: string,
+  intent: RoutingDecision["intent"],
+  status: "success" | "blocked" | "cancelled" | "already_verified",
+  connectionSuggestion: ConnectionSuggestion | null = null,
+): Promise<CeoMessageResult> {
+  try {
+    await session.conversations.addMessage(conversation.id, "assistant", reply);
+  } catch (cause) {
+    console.info("[runtime-business-context]", {
+      event: "assistant_persist_failed",
+      organizationHash: safeTraceHash(session.organizationId),
+      error: cause instanceof Error ? cause.message : "unknown",
+    });
+  }
+  session.state.conversation = [
+    ...session.state.conversation,
+    { role: "user", content: message },
+    { role: "assistant", content: reply },
+  ];
+  return {
+    organizationId: session.organizationId,
+    reply,
+    events: [
+      { kind: "transcript", role: "assistant", content: reply, speaker: "departify" },
+      {
+        kind: "work_state",
+        state: status === "success" || status === "cancelled" || status === "already_verified"
+          ? "tool_completed"
+          : "blocked",
+        message: reply,
+      },
+    ],
+    routing: {
+      intent,
+      departments: [],
+      rationale: "Deterministic pending-operation control-plane gate.",
+    },
+    connectionSuggestion,
+    pendingToolId: null,
+    conversationId: conversation.id,
+  };
+}
+
 function isExplicitNewBusinessIntent(
   message: string,
   intent: RoutingDecision["intent"],
@@ -4483,9 +4776,11 @@ async function runGoogleBusinessTurn(
   }
   const followUp = await runCalendarFollowUp(session, message, isEs);
   if (followUp) return { reply: followUp };
-  if (session.state.pendingCalendarWork) {
-    return runPendingCalendarTurn(session, message, isEs);
-  }
+  // A read-only Calendar question is allowed to pass while a mutation is
+  // awaiting approval. The pending operation remains durable and is still
+  // resolved deterministically by the next approval/cancellation turn.
+  if (intent === "calendar_read") return runCalendarReadTurn(session, message, isEs);
+  if (session.state.pendingCalendarWork) return runPendingCalendarTurn(session, message, isEs);
   if (intent === "multi_capability") {
     const lower = message.toLowerCase();
     const wantsCalendar = /\b(calendar|calendario|evento|eventos|reuni[oó]n|meeting)\b/i.test(lower);
@@ -4537,7 +4832,6 @@ async function runGoogleBusinessTurn(
       : "I could not identify the requested operations.") };
   }
   if (intent === "calendar_create") return runCalendarCreateTurn(session, message, isEs);
-  if (intent === "calendar_read") return runCalendarReadTurn(session, message, isEs);
   if (intent === "drive_query") return runDriveTurn(session, message, isEs);
   return { reply: isEs ? "No he podido identificar la acción de Google." : "I could not identify the Google action." };
 }
@@ -4719,14 +5013,7 @@ async function runPendingCalendarTurn(
 }
 
 function isCalendarApproval(message: string): boolean {
-  const normalized = message
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[¿?!.,;:]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return /^(?:si|envialo|mandalo|crealo|confirmo|confirma|crea|hazlo|adelante|yes|approve|go ahead|ok)(?:\s+(?:envialo|mandalo|crealo|crea|hazlo|ya|go ahead|ok))?$/.test(normalized);
+  return classifyPendingOperationDecision(message) === "APPROVE";
 }
 
 function isCalendarCancellation(message: string): boolean {

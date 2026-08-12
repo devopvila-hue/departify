@@ -1,0 +1,12 @@
+{
+  "id": "departify-native-tools",
+  "name": "Departify Native Tools",
+  "description": "Native read-only Departify business context tools.",
+  "activation": { "onStartup": true },
+  "contracts": { "tools": ["departify.company.context"] },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

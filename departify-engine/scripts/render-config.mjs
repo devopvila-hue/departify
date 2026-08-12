@@ -102,6 +102,13 @@ const logLevel = optional("OPENCLAW_LOG_LEVEL", "info");
 // (e.g. one-time device pairing approval). Disabled by default in production.
 // Never leave enabled; remove the env var after use.
 const enableAdminHttpRpc = bool("OPENCLAW_ENABLE_ADMIN_HTTP_RPC", false);
+const enableNativeBusinessTools = bool("OPENCLAW_NATIVE_BUSINESS_TOOLS", false);
+const departifyApiUrl = optional("DEPARTIFY_API_URL", "");
+const departifyRuntimeToken = optional("DEPARTIFY_RUNTIME_TOKEN", "");
+if (enableNativeBusinessTools && (!departifyApiUrl || !departifyRuntimeToken)) {
+  console.error("[render-config] native business tools require DEPARTIFY_API_URL and DEPARTIFY_RUNTIME_TOKEN");
+  process.exit(1);
+}
 const maxTokens = int("OPENCLAW_MAX_TOKENS", 2048);
 const contextTokens = int("OPENCLAW_CONTEXT_TOKENS", 131072);
 const temperature = Number.parseFloat(optional("OPENCLAW_TEMPERATURE", "0.2"));
@@ -274,11 +281,14 @@ const config = {
   models: { providers },
   tools: {
     profile: "messaging",
+    alsoAllow: [
+      ...(enableNativeBusinessTools ? ["departify.company.context"] : []),
+      ...(execMode === "test" ? ["exec", "process", "read"] : []),
+    ],
     // In "test" mode expose exec (bounded to safe bins) so the tool loop is a
     // real agent→tool→result cycle. In "locked" mode exec is denied entirely.
     ...(execMode === "test"
       ? {
-          alsoAllow: ["exec", "process", "read"],
           exec: {
             host: "gateway",
             security: "full",
@@ -312,10 +322,22 @@ const config = {
     allow: [
       "codex",
       "diagnostics-otel",
+      ...(enableNativeBusinessTools ? ["departify-native-tools"] : []),
       ...(enableAdminHttpRpc ? ["admin-http-rpc"] : []),
     ],
+    load: {
+      paths: enableNativeBusinessTools ? ["/app/native-plugin"] : [],
+    },
     ...(enableAdminHttpRpc
       ? { entries: { "admin-http-rpc": { enabled: true } } }
+      : {}),
+    ...(enableNativeBusinessTools
+      ? {
+          entries: {
+            ...(enableAdminHttpRpc ? { "admin-http-rpc": { enabled: true } } : {}),
+            "departify-native-tools": { enabled: true },
+          },
+        }
       : {}),
   },
   logging: { level: logLevel },

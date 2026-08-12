@@ -42,4 +42,6 @@ export interface ServerDeps {
   marketing?: MarketingService;
   /** Production engine runtime policy (DEPLOY 01). */
   engineRuntimePolicy?: EngineRuntimePolicy;
+  /** Enables the experimental native OpenClaw company.context slice. */
+  nativeBusinessTools?: boolean;
 }

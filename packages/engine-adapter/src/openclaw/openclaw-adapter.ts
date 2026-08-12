@@ -344,6 +344,16 @@ export class OpenClawEngineAdapter implements EngineAdapter {
  */
 function renderOpenClawTurn(input: EngineSendMessageInput): string {
   const sections: string[] = [];
+  if (input.nativeBusinessTools) {
+    sections.push(
+      "DEPARTIFY_NATIVE_BUSINESS_TOOL_MODE (trusted runtime instruction):\n" +
+        "The only Departify native business tool available in this experiment is " +
+        "departify.company.context. Use it for questions about the company, its current " +
+        "objective, or Marketing's current work. The active session determines the tenant; " +
+        "never ask for or invent an organization id. Return the tool result in natural language. " +
+        "Do not claim provider actions or external mutations.",
+    );
+  }
   if (input.runtimeContext) {
     sections.push(input.runtimeContext);
   }

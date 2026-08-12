@@ -1,0 +1,134 @@
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { EngineAdapter, EngineHealth, EngineHistory, EngineMessageResult, EngineSendMessageInput, EngineSession, EngineToolState, EngineUsage } from "@departify/engine-adapter";
+import { buildServer } from "../src/server/server.js";
+import { loadBackendConfig } from "@departify/config";
+import type { FastifyInstance } from "fastify";
+import { makeFakeTenant } from "./helpers/fake-tenant.js";
+import { issueScopedRuntimeToken } from "../src/customer-zero/runtime-identity.js";
+
+class GatewayTestEngine implements EngineAdapter {
+  readonly inputs: EngineSendMessageInput[] = [];
+  async createSession(input?: { sessionId?: string }): Promise<EngineSession> {
+    return { id: input?.sessionId ?? "ceo:test", status: "active" };
+  }
+  async sendMessage(input: EngineSendMessageInput): Promise<EngineMessageResult> {
+    this.inputs.push(input);
+    return {
+      sessionId: input.sessionId,
+      text: input.nativeBusinessTools ? "Contexto de empresa consultado." : "ok",
+      status: "completed",
+      ...(input.nativeBusinessTools
+        ? { toolCalls: [{ name: "departify.company.context", status: "completed" as const }] }
+        : {}),
+    };
+  }
+  async getSession(): Promise<EngineSession | null> { return null; }
+  async getHistory(sessionId: string): Promise<EngineHistory> { return { sessionId, items: [] }; }
+  async closeSession(): Promise<void> {}
+  async getUsage(): Promise<EngineUsage> { return {}; }
+  async getToolState(): Promise<EngineToolState> { return { available: [], denied: [] }; }
+  async health(): Promise<EngineHealth> { return { healthy: true, ready: true, provider: "test" }; }
+}
+
+describe("native company context gateway", () => {
+  let server: FastifyInstance;
+  let engine: GatewayTestEngine;
+  const secret = "native-gateway-test-secret";
+
+  beforeAll(async () => {
+    const tenant = makeFakeTenant();
+    engine = new GatewayTestEngine();
+    server = await buildServer(loadBackendConfig(), {
+      auth: tenant,
+      organizations: tenant,
+      engine,
+      nativeBusinessTools: true,
+    });
+  });
+
+  afterEach(() => {
+    delete process.env.DEPARTIFY_RUNTIME_TOKEN;
+  });
+
+  it("returns bounded canonical context and ignores model organization arguments", async () => {
+    process.env.DEPARTIFY_RUNTIME_TOKEN = secret;
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Native Context A",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const orgA = start.json().organizationId as string;
+    const tokenA = issueScopedRuntimeToken({
+      secret,
+      organizationId: orgA,
+      sessionKey: `departify:ceo:${orgA}`,
+    }).token;
+    const response = await server.inject({
+      method: "POST",
+      url: "/internal/native-tools/company-context",
+      headers: { authorization: `Bearer ${tokenA}` },
+      payload: { organizationId: "org-b", section: "all" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      status: "success",
+      organization: { id: orgA },
+      company: { name: "Native Context A" },
+    });
+    expect(JSON.stringify(response.json())).not.toMatch(/access_token|refresh_token|service_role|authorization/i);
+  });
+
+  it("rejects a token from tenant A when its signed claims are changed to tenant B", async () => {
+    process.env.DEPARTIFY_RUNTIME_TOKEN = secret;
+    const issued = issueScopedRuntimeToken({
+      secret,
+      organizationId: "org-a",
+      sessionKey: "departify:ceo:org-a",
+    });
+    const parts = issued.token.split(".");
+    const forgedPayload = Buffer.from(JSON.stringify({ ...issued.claims, organizationId: "org-b", sessionKey: "departify:ceo:org-b" })).toString("base64url");
+    const forged = `${parts[0]}.${forgedPayload}.${parts[2]}`;
+    const response = await server.inject({
+      method: "POST",
+      url: "/internal/native-tools/company-context",
+      headers: { authorization: `Bearer ${forged}` },
+      payload: {},
+    });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("routes the real CEO HTTP entrypoint through native mode without textual tools", async () => {
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Native Route A",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const organizationId = start.json().organizationId as string;
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/command-center/message`,
+      headers: { authorization: "Bearer token-a" },
+      payload: { message: "¿qué está haciendo Marketing ahora?" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().reply).toContain("Contexto de empresa consultado");
+    const lastInput = engine.inputs.at(-1);
+    expect(lastInput?.nativeBusinessTools).toBe(true);
+    expect(lastInput?.runtimeContext).toBeUndefined();
+    expect(lastInput?.businessTools).toBeUndefined();
+  });
+});

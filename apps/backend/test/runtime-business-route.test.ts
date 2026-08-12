@@ -54,8 +54,8 @@ class FakeRuntimeEngine implements EngineAdapter {
     const isCalendarRead = /\beventos?\b/i.test(input.message) && !isCalendarCreate && !input.toolResult;
     const isEmailReply = this.mode === "email" && /^(?:responde|respondele|resp[oó]ndele|contesta)/i.test(input.message.trim());
     const isEmailRead = this.mode === "email" && /\b(?:correo|correos|email|mail)\b/i.test(input.message) && !isEmailReply && !input.toolResult;
-    const text = isCalendarRead
-      ? `<departify_tool_call>${JSON.stringify({
+      const text = isCalendarRead
+        ? `<departify_tool_call>${JSON.stringify({
           name: "departify.calendar.list",
           arguments: { range: "upcoming" },
         })}</departify_tool_call>`
@@ -74,7 +74,9 @@ class FakeRuntimeEngine implements EngineAdapter {
               name: "departify.email.reply",
               arguments: { body: "mañana lo miro" },
             })}</departify_tool_call>`
-          : input.toolResult
+      : input.toolResult && input.toolResult.includes("departify.calendar.list")
+      ? "No tienes reuniones en la agenda para ese periodo."
+      : input.toolResult
       ? this.mode === "calendar"
         ? "Evento preparado y bloqueado hasta la aprobación."
         : this.mode === "email"
@@ -155,6 +157,41 @@ describe("Engine 02 runtime business route", () => {
       ...options,
       headers: { ...AUTH, ...(options.headers ?? {}) },
     });
+  }
+
+  async function startCalendarConversation(companyName: string): Promise<string> {
+    const start = await authedInject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      payload: {
+        companyName,
+        hasWebsite: false,
+        description: "Servicio B2B para equipos comerciales.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const organizationId = start.json().organizationId as string;
+    installGoogleTokenStore(createInMemoryGoogleTokenStore());
+    await getGoogleTokenStore().put({
+      organizationId,
+      userId: "user-a",
+      provider: "gmail",
+      accessToken: "access-calendar-gate",
+      refreshToken: "refresh-calendar-gate",
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      scopes: [
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/calendar.events",
+      ],
+      email: "ceo@departify.app",
+      displayName: "CEO",
+      operationalVerifiedAt: new Date().toISOString(),
+      operationalProbeError: null,
+      operationalCapabilities: ["calendar.read", "calendar.create"],
+    });
+    engine.mode = "calendar";
+    return organizationId;
   }
 
   it("converts the current unified-inbox email into one durable idempotent task", async () => {
@@ -580,5 +617,152 @@ describe("Engine 02 runtime business route", () => {
     expect(objective.json().routing.intent).toBe("delegate_marketing");
     expect(objective.json().routing.departments).toEqual(["marketing"]);
     expect(objective.json().reply).not.toMatch(/calendar|drive|correo/i);
+  });
+
+  it("resolves Calendar approval through the real HTTP entry point without OpenClaw or Marketing", async () => {
+    const originalFetch = globalThis.fetch;
+    let calendarCreateCalls = 0;
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("calendar/v3")) {
+        if (init?.method === "POST") {
+          calendarCreateCalls += 1;
+          return new Response(JSON.stringify({
+            id: "event-http-gate-1",
+            calendarId: "primary",
+            summary: "hola",
+            start: { dateTime: new Date(Date.now() + 10 * 60_000).toISOString() },
+            end: { dateTime: new Date(Date.now() + 40 * 60_000).toISOString() },
+            status: "confirmed",
+            htmlLink: "https://calendar.google.test/event-http-gate-1",
+          }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+    const traceSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    try {
+      const organizationId = await startCalendarConversation("HTTP Approval Gate Test");
+      const first = await authedInject({
+        method: "POST",
+        url: `/api/customer-zero/${organizationId}/command-center/message`,
+        payload: { message: "y eventos?" },
+      });
+      const second = await authedInject({
+        method: "POST",
+        url: `/api/customer-zero/${organizationId}/command-center/message`,
+        payload: { message: "crea un evento en 10 minutos con hola" },
+      });
+      const inputsBeforeApproval = engine.inputs.length;
+      const approval = await authedInject({
+        method: "POST",
+        url: `/api/customer-zero/${organizationId}/command-center/message`,
+        payload: { message: "sí, créala" },
+      });
+      const repeatApproval = await authedInject({
+        method: "POST",
+        url: `/api/customer-zero/${organizationId}/command-center/message`,
+        payload: { message: "sí, créala" },
+      });
+
+      expect(first.statusCode).toBe(200);
+      expect(second.statusCode).toBe(200);
+      expect(second.json().routing.intent).toBe("calendar_create");
+      expect(second.json().reply).toMatch(/preparado|aprobaci[oó]n/i);
+      expect(approval.statusCode).toBe(200);
+      expect(approval.json().routing.intent).toBe("calendar_create");
+      expect(approval.json().reply).toMatch(/creado|confirmado/i);
+      expect(approval.json().reply).not.toMatch(/Elvira|Marketing/i);
+      expect(repeatApproval.statusCode).toBe(200);
+      expect(repeatApproval.json().reply).toMatch(/ya está verificada|duplicado/i);
+      expect(calendarCreateCalls).toBe(1);
+      expect(engine.inputs.length).toBe(inputsBeforeApproval);
+
+      const session = getOrCreateCustomerZeroSession(organizationId);
+      expect(session.state.pendingCalendarWork).toBeUndefined();
+      expect(session.state.lastCalendarOperation).toMatchObject({
+        status: "verified",
+        eventId: "event-http-gate-1",
+        summary: "hola",
+      });
+      const traces = traceSpy.mock.calls
+        .filter(([event]) => event === "[ceo-turn-trace]")
+        .map(([, payload]) => payload as Record<string, unknown>);
+      expect(traces.at(-2)).toMatchObject({
+        approvalClassification: "APPROVE",
+        providerMutationAttempted: true,
+        providerMutationResult: "succeeded",
+        routingBypassed: true,
+        delegatedDepartment: null,
+      });
+      expect(traces.at(-1)).toMatchObject({
+        approvalClassification: "APPROVE",
+        providerMutationAttempted: false,
+        providerMutationResult: "already_verified",
+        executionReceiptFound: true,
+        routingBypassed: true,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+      traceSpy.mockRestore();
+    }
+  });
+
+  it("allows a Calendar read through a pending mutation and preserves approval state", async () => {
+    const originalFetch = globalThis.fetch;
+    let calendarCreateCalls = 0;
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("calendar/v3")) {
+        if (init?.method === "POST") calendarCreateCalls += 1;
+        return new Response(JSON.stringify(init?.method === "POST"
+          ? {
+              id: "should-not-exist",
+              calendarId: "primary",
+              summary: "should-not-exist",
+              start: { dateTime: new Date(Date.now() + 10 * 60_000).toISOString() },
+              end: { dateTime: new Date(Date.now() + 40 * 60_000).toISOString() },
+              status: "confirmed",
+            }
+          : { items: [] }), { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    }) as typeof fetch;
+    try {
+      const organizationId = await startCalendarConversation("HTTP Pending Read Test");
+      await authedInject({
+        method: "POST",
+        url: `/api/customer-zero/${organizationId}/command-center/message`,
+        payload: { message: "crea un evento en 10 minutos con hola" },
+      });
+      const session = getOrCreateCustomerZeroSession(organizationId);
+      expect(session.state.pendingCalendarWork?.status).toBe("awaiting_approval");
+      const beforeReadInputs = engine.inputs.length;
+      const read = await authedInject({
+        method: "POST",
+        url: `/api/customer-zero/${organizationId}/command-center/message`,
+        payload: { message: "que eventos tengo" },
+      });
+      expect(read.statusCode).toBe(200);
+      expect(read.json().routing.intent).toBe("calendar_read");
+      expect(read.json().reply).toMatch(/no tienes reuniones|agenda/i);
+      expect(read.json().reply).not.toMatch(/Elvira|Marketing/i);
+      expect(engine.inputs.length).toBe(beforeReadInputs);
+      expect(session.state.pendingCalendarWork?.status).toBe("awaiting_approval");
+      expect(calendarCreateCalls).toBe(0);
+
+      const cancel = await authedInject({
+        method: "POST",
+        url: `/api/customer-zero/${organizationId}/command-center/message`,
+        payload: { message: "cancela" },
+      });
+      expect(cancel.statusCode).toBe(200);
+      expect(cancel.json().reply).toMatch(/no he creado|cancel/i);
+      expect(session.state.pendingCalendarWork).toBeUndefined();
+      expect(calendarCreateCalls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
