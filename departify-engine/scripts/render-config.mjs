@@ -212,6 +212,8 @@ const buildProviders = () => {
   return out;
 };
 const providers = buildProviders();
+const smallFallbackNeedsWebIsolation =
+  fallbackProvider === "ollama" && /(?:0\.\d+|small|mini)/i.test(fallbackModel);
 
 /* ------------------------- config assembly ------------------------- */
 
@@ -347,6 +349,15 @@ const config = {
       "tts",
     ],
     fs: { workspaceOnly: true },
+    ...(smallFallbackNeedsWebIsolation
+      ? {
+          byProvider: {
+            [`${fallbackProvider}/${fallbackModel}`]: {
+              deny: ["group:web", "browser"],
+            },
+          },
+        }
+      : {}),
   },
   channels: {},
   hooks: { enabled: false },
