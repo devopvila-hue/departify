@@ -143,19 +143,20 @@ export function extractObjective(message: string): string | null {
 export function isEmailSendRequest(message: string): boolean {
   const lower = message.toLowerCase();
   const actionVerb =
-    /\b(env[ií]a|enviar|manda|mandar|escribe|escribir|redacta|redactar|prepara|preparar|m[eé]ndale|responde|responder|contesta|contestar)\b/.test(
+    /\b(env[ií]a|enviar|manda|mandar|escribe|escribir|redacta|redactar|prepara|preparar|m[eé]ndale|responde(?:le)?|resp[oó]ndele|responder|contesta(?:le)?|contestar)\b/.test(
       lower,
     );
   if (!actionVerb) return false;
   return (
     /\b(correo|correos?|email|e-?mail|mensaje|mensajes|mail)\b/.test(lower) ||
     /\b(escribe|manda|env[ií]a|m[eé]ndale)\s+a\b/.test(lower) ||
-    EMAIL_RE.test(lower)
+    EMAIL_RE.test(lower) ||
+    isEmailReplyRequest(message)
   );
 }
 
 export function isEmailReplyRequest(message: string): boolean {
-  return /^\s*(?:responde|responder|contesta|contestar)\b/i.test(message) &&
+  return /^\s*(?:responde(?:le)?|resp[oó]ndele|responder|contesta(?:le)?|contestar)\b/i.test(message) &&
     (/\b(correo|email|mail|mensaje)\b/i.test(message) || /\b(a|al|a la|a el)\b/i.test(message));
 }
 

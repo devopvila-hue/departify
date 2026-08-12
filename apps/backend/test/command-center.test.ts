@@ -108,12 +108,27 @@ describe("Command Center routing", () => {
     expect(decision.decision.departments).toEqual([]);
   });
 
+  it("answers Marketing status locally before delegating a new objective", () => {
+    const status = routeCommandCenter(makeInput({ message: "¿qué está haciendo Marketing ahora?" }));
+    expect(status.decision.intent).toBe("department_request");
+    expect(status.decision.departments).toEqual(["marketing"]);
+
+    const objective = routeCommandCenter(makeInput({ message: "quiero conseguir más clientes este mes" }));
+    expect(objective.decision.intent).toBe("delegate_marketing");
+    expect(objective.decision.departments).toEqual(["marketing"]);
+  });
+
   it("preserves reply action, latest-email reference and body after typo normalization", () => {
     const normalized = normalizeOperationalLanguage("respone al ultimo mail con ok");
     expect(isEmailSendRequest(normalized)).toBe(true);
     expect(isEmailReplyRequest(normalized)).toBe(true);
     expect(extractObjective(normalized)).toBe("ok");
     expect(normalized).toContain("ok");
+  });
+
+  it("recognizes the natural Spanish reply inflection without a phrase-specific rule", () => {
+    expect(isEmailSendRequest("respóndele al último que mañana lo miro")).toBe(true);
+    expect(isEmailReplyRequest("respóndele al último que mañana lo miro")).toBe(true);
   });
 
   it("routes a quantity-only inbox follow-up to Gmail", () => {

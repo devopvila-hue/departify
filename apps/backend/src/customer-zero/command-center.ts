@@ -431,7 +431,7 @@ const SYSTEM_HELP_PATTERNS =
  * Does NOT delegate to Marketing as a request; surfaces structured info.
  */
 const DEPARTMENT_REQUEST_PATTERNS =
-  /\b(h[áa]blame\s+de|hablame\s+de|h[áa]blame\s+sobre|h[áa]blame\s+acerca\s+de|cu[ée]ntame\s+sobre|cu[ée]ntame\s+de|qu[ée]\s+hace\s+(marketing|ventas|finanzas|operaciones)|tell\s+me\s+about|what\s+does\s+(marketing|sales|finance|operations)\s+do)\b/i;
+  /\b(h[áa]blame\s+de|hablame\s+de|h[áa]blame\s+sobre|h[áa]blame\s+acerca\s+de|cu[ée]ntame\s+sobre|cu[ée]ntame\s+de|qu[ée]\s+(?:est[áa]\s+haciendo|hace)\s+(marketing|ventas|finanzas|operaciones)|tell\s+me\s+about|what\s+does\s+(marketing|sales|finance|operations)\s+do)\b/i;
 
 /**
  * True when the CEO's message also contains a clear business intent

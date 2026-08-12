@@ -15,6 +15,7 @@
  * composed runtime. Nothing is simulated.
  */
 import type { FastifyInstance } from "fastify";
+import { createHash } from "node:crypto";
 import {
   fetchAndExtractWebsite,
   interpretWebsite,
@@ -79,7 +80,10 @@ import {
 import {
   buildCommandCenterInput,
   buildProactiveOpening,
+  isCalendarCreateRequest,
+  isDriveRequest,
   isEmailReadFollowUp,
+  isEmailReadQuestion,
   isCalendarReadRequest,
   isMultiCapabilityRequest,
   normalizeOperationalLanguage,
@@ -200,6 +204,7 @@ import {
 import {
   type DepartifyToolCall,
   type DepartifyToolResult,
+  toolsForManifest,
 } from "../../customer-zero/departify-business-tools.js";
 import {
   compileRuntimeBusinessContext,
@@ -2288,9 +2293,10 @@ export async function registerCustomerZeroV2Routes(
       const { organizationId } = request.params as { organizationId: string };
       const body = request.body as { message: string; conversationId?: string };
       const session = await requireSession(organizationId, deps);
+      const trace = newCeoTurnTrace(session, request.id);
       try {
         const runtime = deps.engine
-          ? await buildRuntimeBridge(session, deps, inboxStore)
+          ? await buildRuntimeBridge(session, deps, inboxStore, trace)
           : null;
         const result = await processCeoMessage(
           session,
@@ -2300,6 +2306,7 @@ export async function registerCustomerZeroV2Routes(
           deps.engineRuntimePolicy,
           runtime,
         );
+        emitCeoTurnTrace(session, runtime?.trace ?? trace, result);
         return reply.code(200).send(result);
       } catch (cause) {
         if (cause instanceof MaxActiveConversationsError) {
@@ -2924,6 +2931,85 @@ interface RuntimeBridgeInput {
     call: DepartifyToolCall,
     userMessage: string,
   ) => Promise<DepartifyToolResult>;
+  readonly trace: CeoTurnTraceState;
+}
+
+interface CeoTurnTraceState {
+  readonly requestCorrelationId: string;
+  readonly organizationHash: string;
+  /** Opaque/hash-based form: never log the raw organization id. */
+  readonly logicalSessionKey: string;
+  engineSessionId: string | null;
+  turnNumber: number;
+  pendingOperationTypeBefore: string | null;
+  pendingOperationType: string | null;
+  activeDepartment: string | null;
+  capabilityIds: string[];
+  exposedToolNames: string[];
+  selectedToolNames: string[];
+  toolResultStatuses: string[];
+  contextBytes: number | null;
+  sessionFound: boolean | null;
+}
+
+function safeTraceHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
+}
+
+function pendingOperationType(session: CustomerZeroSession): string | null {
+  if (session.state.pendingEmailWork) return "email";
+  if (session.state.pendingCalendarWork) return "calendar";
+  return null;
+}
+
+function newCeoTurnTrace(
+  session: CustomerZeroSession,
+  requestCorrelationId: string,
+): CeoTurnTraceState {
+  const organizationHash = safeTraceHash(session.organizationId);
+  return {
+    requestCorrelationId,
+    organizationHash,
+    logicalSessionKey: `ceo:${organizationHash}`,
+    engineSessionId: null,
+    turnNumber: session.state.conversation.filter((entry) => entry.role === "user").length + 1,
+    pendingOperationTypeBefore: pendingOperationType(session),
+    pendingOperationType: pendingOperationType(session),
+    activeDepartment: session.state.marketingTeam ? "marketing" : null,
+    capabilityIds: [],
+    exposedToolNames: [],
+    selectedToolNames: [],
+    toolResultStatuses: [],
+    contextBytes: null,
+    sessionFound: null,
+  };
+}
+
+function emitCeoTurnTrace(
+  session: CustomerZeroSession,
+  trace: CeoTurnTraceState,
+  result: CeoMessageResult,
+): void {
+  const delegatedDepartment = result.routing.departments[0] ?? null;
+  console.info("[ceo-turn-trace]", {
+    requestCorrelationId: trace.requestCorrelationId,
+    organizationHash: trace.organizationHash,
+    logicalSessionKey: trace.logicalSessionKey,
+    engineSessionId: trace.engineSessionId,
+    turnNumber: trace.turnNumber,
+    normalizedIntent: result.routing.intent,
+    pendingOperationTypeBefore: trace.pendingOperationTypeBefore,
+    pendingOperationType: pendingOperationType(session),
+    activeDepartment: delegatedDepartment ?? trace.activeDepartment,
+    capabilityIds: trace.capabilityIds,
+    toolNames: trace.exposedToolNames,
+    selectedToolNames: trace.selectedToolNames,
+    routingDecision: result.routing.intent,
+    delegatedDepartment,
+    contextBytes: trace.contextBytes,
+    sessionFound: trace.sessionFound,
+    resultStatus: trace.toolResultStatuses.at(-1) ?? "completed",
+  });
 }
 
 /**
@@ -2935,6 +3021,7 @@ async function buildRuntimeBridge(
   session: CustomerZeroSession,
   deps: ServerDeps,
   inboxStore: InboxStore,
+  trace: CeoTurnTraceState,
 ): Promise<RuntimeBridgeInput | null> {
   if (!deps.engine) return null;
   const workStore = workStoreForRoutes();
@@ -2989,6 +3076,11 @@ async function buildRuntimeBridge(
   const capabilities = buildRuntimeCapabilityManifest(
     runtimeConnections,
   );
+  const exposedToolNames = toolsForManifest(capabilities).map((tool) => tool.name);
+  trace.capabilityIds = capabilities.capabilities
+    .filter((capability) => capability.available)
+    .map((capability) => capability.id);
+  trace.exposedToolNames = exposedToolNames;
   const context = compileRuntimeBusinessContext({
     session,
     companyDna,
@@ -3009,14 +3101,18 @@ async function buildRuntimeBridge(
     })),
   });
   const sessionId = `ceo:${session.organizationId}`;
-  const engineSession = await deps.engine.getSession(sessionId)
+  const existingEngineSession = await deps.engine.getSession(sessionId);
+  const engineSession = existingEngineSession
     ?? await deps.engine.createSession({ sessionId });
+  trace.engineSessionId = safeTraceHash(engineSession.id);
+  trace.sessionFound = existingEngineSession !== null;
   return {
     engine: deps.engine,
     sessionId: engineSession.id,
     context,
     capabilities,
     executeTool: (call, userMessage) => executeRuntimeTool(session, deps, call, inboxStore, userMessage),
+    trace,
   };
 }
 
@@ -3064,12 +3160,31 @@ function runtimeIntent(name: string): RoutingDecision["intent"] {
 function runtimeToolsMatchRequest(
   message: string,
   toolNames: readonly string[],
+  session?: CustomerZeroSession,
 ): boolean {
   if (isEmailReplyRequest(message)) {
     return toolNames.includes("departify.email.reply");
   }
   if (isEmailSendRequest(message)) {
     return toolNames.includes("departify.email.send") || toolNames.includes("departify.email.reply");
+  }
+  if (isEmailReadQuestion(message) || isEmailReadFollowUp(message)) {
+    return toolNames.includes("departify.email.list") || toolNames.includes("departify.email.search");
+  }
+  if (isCalendarCreateRequest(message)) {
+    return toolNames.includes("departify.calendar.create");
+  }
+  if (
+    session?.state.pendingCalendarWork &&
+    (isCalendarAttendeeFollowUp(message) || isCalendarDateOrTimeFollowUp(message))
+  ) {
+    return toolNames.includes("departify.calendar.create");
+  }
+  if (isDriveRequest(message)) {
+    return toolNames.includes("departify.drive.search") || toolNames.includes("departify.drive.read");
+  }
+  if (/\b(?:tarea|tareas)\b/i.test(message)) {
+    return toolNames.includes("departify.tasks.list") || toolNames.includes("departify.tasks.create");
   }
   if (isMultiCapabilityRequest(message)) {
     const lower = message.toLowerCase();
@@ -3169,6 +3284,13 @@ async function executeRuntimeTool(
 ): Promise<DepartifyToolResult> {
   const args = call.arguments;
   const isEs = session.state.locale !== "en";
+  if (!runtimeToolsMatchRequest(userMessage, [call.name], session)) {
+    return {
+      status: "blocked",
+      operation: call.name,
+      summary: "La operación seleccionada no corresponde a la intención operativa actual.",
+    };
+  }
   const workStore = workStoreForRoutes();
   const text = (key: string): string => String(args[key] ?? "").trim();
   const receiptId = session.state.lastExecutionReceipt?.operationId;
@@ -3191,12 +3313,16 @@ async function executeRuntimeTool(
 
     case "departify.email.list":
     case "departify.email.search": {
-      const query = call.name === "departify.email.search" ? text("query") : "mis últimos correos del correo de empresa";
+      // Preserve the CEO's provider-neutral wording for list operations. The
+      // canonical connection resolver then chooses the same operational
+      // provider used by /conexiones; hard-coding "correo de empresa" here
+      // incorrectly forced Google-backed turns through the Hostinger path.
+      const query = call.name === "departify.email.search" ? text("query") : userMessage;
       const reply = await readEmailAnswer(
         session.organizationId,
         call.name === "departify.email.search"
           ? `busca en el correo de empresa ${query}`
-          : `mis últimos ${Number(args.limit ?? 3)} correos del correo de empresa`,
+          : userMessage,
         session.state.locale,
         session,
       );
@@ -3437,7 +3563,7 @@ export async function processCeoMessage(
           ) {
             console.info("[runtime-business-context]", {
               event: event.event,
-              organizationId: event.organizationId,
+              organizationHash: safeTraceHash(event.organizationId),
               toolName: event.toolName,
               status: event.status,
               contextBytes: event.contextBytes,
@@ -3454,10 +3580,13 @@ export async function processCeoMessage(
         },
       });
       const selectedTools = runtimeTurn.toolCalls?.map((call) => call.name) ?? [];
+      runtime.trace.selectedToolNames = selectedTools;
+      runtime.trace.toolResultStatuses = runtimeTurn.toolResults?.map((result) => result.status) ?? [];
+      runtime.trace.contextBytes = runtimeTurn.contextBytes;
       if (
         runtimeTurn.toolCall &&
         runtimeTurn.toolResult &&
-        runtimeToolsMatchRequest(operationalMessage, selectedTools)
+        runtimeToolsMatchRequest(operationalMessage, selectedTools, session)
       ) {
         return completeRuntimeCeoTurn(
           session,
@@ -3471,7 +3600,7 @@ export async function processCeoMessage(
     } catch {
       console.info("[runtime-business-context]", {
         event: "engine_fallback",
-        organizationId,
+        organizationHash: safeTraceHash(organizationId),
       });
     }
   }
@@ -4819,7 +4948,7 @@ function parseCalendarProposal(message: string): null | { summary: string; hour:
   const end = new Date(start.getTime() + Number(duration?.[1] ?? 30) * 60_000);
   const attendees = extractCalendarAttendees(message);
   const named = message.match(/\b(?:llamad[oa]?|llamdo|titulado|con\s+nombre|named)\s+(.+?)(?:[,.!?]|$)/i)?.[1]?.trim();
-  const eventNamed = message.match(/\bevento\s+(.+?)(?:\s+(?:hoy|ma[nñ]ana|today|tomorrow|a\s+las|en\s+\d+\s+min)\b|[,.!?]|$)/i)?.[1]?.trim();
+  const eventNamed = message.match(/\bevento\s+(?!(?:en|dentro\s+de)\s+\d+\s+min(?:uto)?s?\b)(.+?)(?:\s+(?:hoy|ma[nñ]ana|today|tomorrow|a\s+las|en\s+\d+\s+min(?:uto)?s?|dentro\s+de\s+\d+\s+min(?:uto)?s?)\b|[,.!?]|$)/i)?.[1]?.trim();
   const summary = named || eventNamed || message.match(/\b(?:con|with)\s+([^,.;]+?)(?:\s+(?:ma[nñ]ana|tomorrow|a\s+las|las|at)\b|$)/i)?.[1]?.trim() || "Reunión";
   return { summary: summary.replace(/\s+/g, " ").slice(0, 160), hour, minute, ...(dateProvided ? { startIso: start.toISOString(), endIso: end.toISOString() } : {}), timezone, attendees, dateProvided };
 }
