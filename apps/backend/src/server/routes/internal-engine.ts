@@ -12,13 +12,80 @@ import { resolveCompanyDnaStore } from "../../customer-zero/company-readiness.js
 import {
   buildCanonicalConnectionViews,
   buildMarketingOperationalActivity,
+  readEmailAnswer,
+  runCalendarReadTurn,
   requireSession,
   workStoreForRoutes,
 } from "./customer-zero-v2.js";
 import { compileRuntimeBusinessContext } from "../../customer-zero/department-context-compiler.js";
 import { buildRuntimeCapabilityManifest } from "../../customer-zero/capability-manifest.js";
+import { GoogleDriveAdapter } from "../../customer-zero/google-drive-adapter.js";
+import { findOperationalGoogleIdentityForOrg } from "../../customer-zero/credential-resolver.js";
+import { completeExecutionReceipt, failExecutionReceipt, startExecutionReceipt } from "../../customer-zero/execution-receipt.js";
+import {
+  getGoogleTokenStore,
+  hasOperationalGoogleCapability,
+} from "../../customer-zero/google-tokens.js";
+import {
+  isNativeReadToolName,
+  nativeToolsForManifest,
+  requiredCapabilityForNativeTool,
+  type NativeReadToolName,
+} from "../../customer-zero/native-business-tools.js";
 
 const NATIVE_TOOL_NAME = "departify.company.context";
+
+function nativeRuntimeConnections(
+  connections: ReadonlyArray<Awaited<ReturnType<typeof buildCanonicalConnectionViews>>[number]>,
+  googleSummaries: Awaited<ReturnType<ReturnType<typeof getGoogleTokenStore>["listForOrg"]>>,
+) {
+  return connections.map((connection) => ({
+    toolId: connection.toolId,
+    label: connection.label,
+    state: connection.state,
+    ...(connection.toolId === "gmail"
+      ? {
+          capabilities: [
+            ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "email.read"))
+              ? ["email.read", "email.search", "email.thread.read"]
+              : []),
+            ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "email.send"))
+              ? ["email.send.personal"]
+              : []),
+          ],
+        }
+      : connection.toolId === "google_calendar"
+        ? {
+            capabilities: [
+              ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "calendar.read")) ? ["calendar.read"] : []),
+              ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "calendar.create")) ? ["calendar.create"] : []),
+            ],
+          }
+        : connection.toolId === "google_workspace" || connection.toolId === "google_drive"
+          ? {
+              capabilities: googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.read"))
+                ? ["drive.search", "drive.read"]
+                : [],
+            }
+          : connection.capabilities
+            ? { capabilities: connection.capabilities }
+            : {}),
+  }));
+}
+
+function nativeArgs(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function nativeText(args: Record<string, unknown>, key: string): string {
+  return typeof args[key] === "string" ? args[key].trim() : "";
+}
+
+function runtimeProviderUnavailable(reply: string): boolean {
+  return /(?:todavía no está|no está activado|no está disponible|no he podido consultar|not activated|not available)/i.test(reply);
+}
 
 function safeTraceHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 12);
@@ -41,11 +108,12 @@ function runtimeTokenAuth(request: { headers: { authorization?: unknown } }): st
 }
 
 /**
- * TEMPORARY internal engine diagnostics (Sprint ENGINE 02).
+ * Internal native tool gateway (ENGINE 03.2).
  *
  * Not a public API. Used only to verify the engine boundary from the backend
- * during this sprint. Remove once the EngineAdapter is consumed by real
- * product routes.
+ * The runtime plugin is intentionally untrusted for authorization: every
+ * invocation is revalidated here against the tenant session and live
+ * capability projection.
  */
 export async function registerInternalEngineRoutes(
   server: FastifyInstance,
@@ -106,18 +174,14 @@ export async function registerInternalEngineRoutes(
         return reply.code(403).send({ error: "invalid_session_scope" });
       }
       const session = await requireSession(identity.organizationId, deps);
-      const [companyDna, connections, tasks, results] = await Promise.all([
+      const [companyDna, connections, tasks, results, googleSummaries] = await Promise.all([
         resolveCompanyDnaStore(deps).get(identity.organizationId),
         buildCanonicalConnectionViews(session, session.state.locale),
         workStoreForRoutes().listTasksForOrg(identity.organizationId, 50),
         workStoreForRoutes().listResultsForOrg(identity.organizationId, 20),
+        getGoogleTokenStore().listForOrg(identity.organizationId),
       ]);
-      const runtimeConnections = connections.map((connection) => ({
-        toolId: connection.toolId,
-        label: connection.label,
-        state: connection.state,
-        ...(connection.capabilities ? { capabilities: connection.capabilities } : {}),
-      }));
+      const runtimeConnections = nativeRuntimeConnections(connections, googleSummaries);
       const capabilities = buildRuntimeCapabilityManifest(runtimeConnections);
       const companyContextCapability = capabilities.capabilities.find(
         (capability) => capability.id === "company.context",
@@ -169,6 +233,164 @@ export async function registerInternalEngineRoutes(
         durationMs: Date.now() - startedAt,
         resultBytes: Buffer.byteLength(JSON.stringify(result), "utf8"),
         engineSessionId: safeTraceHash(validation.claims.sessionKey),
+      });
+      return result;
+    },
+  );
+
+  server.post<{ Body: { toolName?: string; params?: unknown } }>(
+    "/internal/native-tools/tool",
+    async (request, reply) => {
+      const startedAt = Date.now();
+      if (!configuredNativeTools(deps)) return reply.code(404).send({ error: "not_found" });
+      const secret = runtimeTokenSecret();
+      const token = secret ? runtimeTokenAuth(request) : null;
+      const validation = token && secret
+        ? validateScopedRuntimeToken({ token, secret, expectedAudience: DEFAULT_AUDIENCE })
+        : { valid: false, reason: "runtime_identity_unconfigured" };
+      const toolName = typeof request.body?.toolName === "string" ? request.body.toolName : "";
+      if (!validation.valid || !validation.claims) {
+        console.info("[native-tool-trace]", {
+          nativeTool: true,
+          toolName: isNativeReadToolName(toolName) ? toolName : "unknown",
+          authorized: false,
+          status: validation.reason ?? "unauthorized",
+          durationMs: Date.now() - startedAt,
+        });
+        return reply.code(401).send({ error: "invalid_runtime_identity" });
+      }
+      const identity = organizationFromOpenClawSessionKey(validation.claims.sessionKey);
+      if (!identity || identity.organizationId !== validation.claims.organizationId || validation.claims.agentId !== "main") {
+        return reply.code(403).send({ error: "invalid_session_scope" });
+      }
+      if (!isNativeReadToolName(toolName)) {
+        return reply.code(404).send({ error: "unknown_native_tool" });
+      }
+      const session = await requireSession(identity.organizationId, deps);
+      const connections = await buildCanonicalConnectionViews(session, session.state.locale);
+      const googleSummaries = await getGoogleTokenStore().listForOrg(identity.organizationId);
+      const runtimeConnections = nativeRuntimeConnections(connections, googleSummaries);
+      const capabilities = buildRuntimeCapabilityManifest(runtimeConnections);
+      const availableTools = nativeToolsForManifest(capabilities);
+      if (!availableTools.includes(toolName as NativeReadToolName)) {
+        console.info("[native-tool-trace]", {
+          nativeTool: true,
+          toolName,
+          organizationHash: safeTraceHash(identity.organizationId),
+          authorized: false,
+          status: "capability_unavailable",
+          durationMs: Date.now() - startedAt,
+        });
+        return reply.code(403).send({ error: "capability_unavailable" });
+      }
+      const args = nativeArgs(request.body?.params);
+      let result: Record<string, unknown>;
+      const isEs = session.state.locale !== "en";
+      if (toolName === "departify.company.context") {
+        const [companyDna, tasks, results, approvals, objectives] = await Promise.all([
+          resolveCompanyDnaStore(deps).get(identity.organizationId),
+          workStoreForRoutes().listTasksForOrg(identity.organizationId, 50),
+          workStoreForRoutes().listResultsForOrg(identity.organizationId, 20),
+          deps.marketing?.listApprovals(identity.organizationId) ?? Promise.resolve([]),
+          deps.marketing?.listObjectives(identity.organizationId) ?? Promise.resolve([]),
+        ]);
+        const context = compileRuntimeBusinessContext({
+          session,
+          companyDna,
+          capabilities,
+          connections: runtimeConnections,
+          tasks,
+          results,
+          approvals,
+          activeObjective: objectives.find((objective) => objective.status === "active") ?? null,
+          recentActivity: buildMarketingOperationalActivity(tasks, results),
+        });
+        const section = nativeText(args, "section");
+        result = {
+          status: "success",
+          operation: toolName,
+          organization: context.organization,
+          identity: context.identity,
+          company: context.company,
+          activeObjective: context.activeObjective,
+          departments: section === "objective" ? [] : context.departments,
+          activeWork: section === "summary" ? [] : context.activeWork,
+          capabilities: context.capabilities,
+        };
+      } else if (toolName === "departify.email.list" || toolName === "departify.email.search") {
+        const query = toolName === "departify.email.search" ? nativeText(args, "query") : "mis últimos correos";
+        const summary = await readEmailAnswer(
+          identity.organizationId,
+          toolName === "departify.email.search" ? `busca en el correo de empresa ${query}` : query,
+          session.state.locale,
+          session,
+        );
+        const blocked = !summary || runtimeProviderUnavailable(summary);
+        result = { status: blocked ? "blocked" : "success", operation: toolName, summary: summary ?? "No hay resultados disponibles." };
+      } else if (toolName === "departify.calendar.list") {
+        const outcome = await runCalendarReadTurn(session, nativeText(args, "range") || "mis próximos eventos", isEs);
+        result = { status: runtimeProviderUnavailable(outcome.reply) ? "blocked" : "success", operation: toolName, summary: outcome.reply };
+      } else if (toolName === "departify.drive.search" || toolName === "departify.drive.read") {
+        const identityForDrive = await findOperationalGoogleIdentityForOrg(identity.organizationId, "drive.read");
+        if (!identityForDrive) {
+          result = { status: "blocked", operation: toolName, summary: "Drive todavía no está activado." };
+        } else {
+          const adapter = new GoogleDriveAdapter({ organizationId: identity.organizationId, userId: identityForDrive.userId });
+          const receipt = startExecutionReceipt({
+            operationId: `native_${toolName.replaceAll(".", "_")}_${Date.now().toString(36)}`,
+            intent: toolName,
+            capability: requiredCapabilityForNativeTool(toolName as NativeReadToolName) ?? "drive.search",
+            provider: "google",
+            sideEffect: false,
+          });
+          session.state.lastExecutionReceipt = receipt;
+          if (toolName === "departify.drive.read") {
+            const driveResult = await adapter.readFile({ fileId: nativeText(args, "fileId") });
+            if (!driveResult.success) {
+              session.state.lastExecutionReceipt = failExecutionReceipt(receipt, driveResult.errorCode ?? "provider_error");
+              result = { status: "blocked", operation: toolName, summary: driveResult.message ?? "Drive no está disponible." };
+            } else {
+              const file = driveResult.value;
+              session.state.lastExecutionReceipt = completeExecutionReceipt(receipt, {
+                ...(file?.id ? { providerResourceId: file.id } : {}),
+                safeMetadata: {
+                  ...(file?.mimeType ? { mimeType: file.mimeType } : {}),
+                  ...(file?.name ? { name: file.name } : {}),
+                },
+              });
+              result = { status: "success", operation: toolName, data: file ? { id: file.id, name: file.name, mimeType: file.mimeType, preview: file.preview?.slice(0, 4000) ?? "" } : {} };
+            }
+          } else {
+            const driveResult = await adapter.searchFiles({ query: nativeText(args, "query") || "Departify", pageSize: Number(args.limit ?? 20) });
+            if (!driveResult.success) {
+              session.state.lastExecutionReceipt = failExecutionReceipt(receipt, driveResult.errorCode ?? "provider_error");
+              result = { status: "blocked", operation: toolName, summary: driveResult.message ?? "Drive no está disponible." };
+            } else {
+              const files = driveResult.value ?? [];
+              session.state.lastExecutionReceipt = completeExecutionReceipt(receipt, { safeMetadata: { resultCount: files.length } });
+              result = { status: "success", operation: toolName, data: { files: files.slice(0, 50).map((file) => ({ id: file.id, name: file.name, mimeType: file.mimeType, modifiedTime: file.modifiedTime, webViewLink: file.webViewLink })) } };
+            }
+          }
+        }
+      } else if (toolName === "departify.tasks.list") {
+        const tasks = await workStoreForRoutes().listTasksForOrg(identity.organizationId, Number(args.limit ?? 20));
+        result = { status: "success", operation: toolName, data: { tasks: tasks.map((task) => ({ id: task.id, title: task.title, status: task.status, departmentId: task.departmentId })) } };
+      } else if (toolName === "departify.approvals.list") {
+        const approvals = await deps.marketing?.listApprovals(identity.organizationId) ?? [];
+        result = { status: "success", operation: toolName, data: { approvals: approvals.slice(0, Number(args.limit ?? 20)).map((approval) => ({ id: approval.id, title: approval.title, status: approval.status })) } };
+      } else {
+        const results = await workStoreForRoutes().listResultsForOrg(identity.organizationId, Number(args.limit ?? 20));
+        result = { status: "success", operation: toolName, data: { results: results.map((entry) => ({ id: entry.id, title: entry.title, summary: entry.summary })) } };
+      }
+      console.info("[native-tool-trace]", {
+        nativeTool: true,
+        toolName,
+        organizationHash: safeTraceHash(identity.organizationId),
+        engineSessionId: safeTraceHash(validation.claims.sessionKey),
+        authorized: true,
+        status: result.status,
+        durationMs: Date.now() - startedAt,
+        resultBytes: Buffer.byteLength(JSON.stringify(result), "utf8"),
       });
       return result;
     },

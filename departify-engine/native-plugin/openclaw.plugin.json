@@ -1,9 +1,21 @@
 {
   "id": "departify-native-tools",
   "name": "Departify Native Tools",
-  "description": "Native read-only Departify business context tools.",
+  "description": "Native read-only Departify business tools.",
   "activation": { "onStartup": true },
-  "contracts": { "tools": ["departify.company.context"] },
+  "contracts": {
+    "tools": [
+      "departify.company.context",
+      "departify.email.list",
+      "departify.email.search",
+      "departify.calendar.list",
+      "departify.drive.search",
+      "departify.drive.read",
+      "departify.tasks.list",
+      "departify.approvals.list",
+      "departify.results.list"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

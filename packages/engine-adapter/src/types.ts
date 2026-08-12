@@ -31,6 +31,11 @@ export interface EngineSendMessageInput {
   nativeBusinessTools?: boolean;
 }
 
+export interface EngineNativeToolPolicyInput {
+  sessionId: string;
+  toolNames: readonly string[];
+}
+
 /** Provider-neutral business tool metadata. Never contains credentials. */
 export interface EngineBusinessToolDefinition {
   readonly name: string;

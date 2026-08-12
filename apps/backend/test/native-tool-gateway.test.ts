@@ -8,6 +8,7 @@ import { issueScopedRuntimeToken } from "../src/customer-zero/runtime-identity.j
 
 class GatewayTestEngine implements EngineAdapter {
   readonly inputs: EngineSendMessageInput[] = [];
+  readonly nativePolicies: Array<{ sessionId: string; toolNames: readonly string[] }> = [];
   nativeSelection = true;
   async createSession(input?: { sessionId?: string }): Promise<EngineSession> {
     return { id: input?.sessionId ?? "ceo:test", status: "active" };
@@ -22,6 +23,9 @@ class GatewayTestEngine implements EngineAdapter {
         ? { toolCalls: [{ name: "departify.company.context", status: "completed" as const }] }
         : {}),
     };
+  }
+  async setNativeToolPolicy(input: { sessionId: string; toolNames: readonly string[] }): Promise<void> {
+    this.nativePolicies.push(input);
   }
   async getSession(): Promise<EngineSession | null> { return null; }
   async getHistory(sessionId: string): Promise<EngineHistory> { return { sessionId, items: [] }; }
@@ -114,6 +118,43 @@ describe("native company context gateway", () => {
     expect(response.statusCode).toBe(401);
   });
 
+  it("rejects unknown, unavailable, expired, and wrong-audience native calls", async () => {
+    process.env.DEPARTIFY_RUNTIME_TOKEN = secret;
+    const org = "native-negative-org";
+    const token = issueScopedRuntimeToken({ secret, organizationId: org, sessionKey: `departify:ceo:${org}` }).token;
+    const headers = { authorization: `Bearer ${token}` };
+    const unknown = await server.inject({
+      method: "POST",
+      url: "/internal/native-tools/tool",
+      headers,
+      payload: { toolName: "departify.email.send", params: {} },
+    });
+    expect(unknown.statusCode).toBe(404);
+    const unavailable = await server.inject({
+      method: "POST",
+      url: "/internal/native-tools/tool",
+      headers,
+      payload: { toolName: "departify.email.list", params: { limit: 3 } },
+    });
+    expect(unavailable.statusCode).toBe(403);
+    const expired = issueScopedRuntimeToken({ secret, organizationId: org, sessionKey: `departify:ceo:${org}`, nowSeconds: 100, ttlSeconds: 1 }).token;
+    const expiredResponse = await server.inject({
+      method: "POST",
+      url: "/internal/native-tools/tool",
+      headers: { authorization: `Bearer ${expired}` },
+      payload: { toolName: "departify.company.context", params: {} },
+    });
+    expect(expiredResponse.statusCode).toBe(401);
+    const wrongAudience = issueScopedRuntimeToken({ secret, organizationId: org, sessionKey: `departify:ceo:${org}`, audience: "wrong-audience" }).token;
+    const wrongAudienceResponse = await server.inject({
+      method: "POST",
+      url: "/internal/native-tools/tool",
+      headers: { authorization: `Bearer ${wrongAudience}` },
+      payload: { toolName: "departify.company.context", params: {} },
+    });
+    expect(wrongAudienceResponse.statusCode).toBe(401);
+  });
+
   it("routes the real CEO HTTP entrypoint through native mode without textual tools", async () => {
     const start = await server.inject({
       method: "POST",
@@ -138,6 +179,7 @@ describe("native company context gateway", () => {
     expect(response.json().reply).toContain("Contexto de empresa consultado");
     const lastInput = engine.inputs.at(-1);
     expect(lastInput?.nativeBusinessTools).toBe(true);
+    expect(engine.nativePolicies.at(-1)?.toolNames).toContain("departify.company.context");
     expect(lastInput?.runtimeContext).toBeUndefined();
     expect(lastInput?.businessTools).toBeUndefined();
   });
@@ -166,6 +208,7 @@ describe("native company context gateway", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().reply).not.toContain("Contexto de empresa consultado");
     expect(engine.inputs.at(-1)?.nativeBusinessTools).toBe(true);
+    expect(engine.nativePolicies.at(-1)?.toolNames).toContain("departify.company.context");
   });
 
   it("keeps ENGINE 02 textual mode when the native flag is off", async () => {

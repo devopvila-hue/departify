@@ -1,25 +1,48 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import plugin from "./index.js";
+import plugin, { TOOL_NAMES } from "./index.js";
 
-test("registers the native company context tool with a closed schema", async () => {
+function registeredPlugin() {
   let factory;
+  let gatewayHandler;
   plugin.register({
+    registerGatewayMethod(_name, handler) {
+      gatewayHandler = handler;
+    },
     registerTool(candidate) {
       factory = candidate;
     },
   });
-  assert.equal(typeof factory, "function");
-  const tools = factory({ sessionKey: "departify:ceo:org-a", agentId: "main" });
-  assert.equal(tools.length, 1);
-  assert.equal(tools[0].name, "departify.company.context");
-  assert.deepEqual(tools[0].parameters.properties.section.enum, [
-    "summary",
-    "objective",
-    "marketing",
-    "all",
+  return { factory, gatewayHandler };
+}
+
+test("registers the closed read-only native tool surface", async () => {
+  const { factory, gatewayHandler } = registeredPlugin();
+  assert.deepEqual(TOOL_NAMES, [
+    "departify.company.context",
+    "departify.email.list",
+    "departify.email.search",
+    "departify.calendar.list",
+    "departify.drive.search",
+    "departify.drive.read",
+    "departify.tasks.list",
+    "departify.approvals.list",
+    "departify.results.list",
   ]);
-  assert.equal(tools[0].parameters.additionalProperties, false);
+  const beforePolicy = factory({ sessionKey: "departify:ceo:org-a", agentId: "main" });
+  assert.deepEqual(beforePolicy, []);
+  let response;
+  await gatewayHandler({
+    params: { sessionKey: "departify:ceo:org-a", agentId: "main", toolNames: TOOL_NAMES },
+    respond(ok, result) { response = { ok, result }; },
+  });
+  assert.deepEqual(response, { ok: true, result: { ok: true, toolCount: 9 } });
+  const tools = factory({ sessionKey: "departify:ceo:org-a", agentId: "main" });
+  assert.equal(tools.length, 9);
+  const company = tools.find((tool) => tool.name === "departify.company.context");
+  assert.deepEqual(company.parameters.properties.section.enum, ["summary", "objective", "marketing", "all"]);
+  assert.equal(company.parameters.additionalProperties, false);
+  assert.equal(tools.some((tool) => tool.name.includes("send") || tool.name.includes("create")), false);
 });
 
 test("uses trusted session identity and returns the structured gateway result", async () => {
@@ -32,18 +55,19 @@ test("uses trusted session identity and returns the structured gateway result", 
     if (String(url).endsWith("runtime-token")) {
       return new Response(JSON.stringify({ token: "scoped-token", audience: "departify-tool-gateway" }), { status: 200 });
     }
-    return new Response(JSON.stringify({ status: "success", organization: { id: "org-a" }, company: { name: "A" } }), { status: 200 });
+    return new Response(JSON.stringify({ status: "success", operation: "departify.email.list", data: { messages: [] } }), { status: 200 });
   };
   try {
-    let factory;
-    plugin.register({ registerTool(candidate) { factory = candidate; } });
+    const { factory, gatewayHandler } = registeredPlugin();
+    await gatewayHandler({ params: { sessionKey: "departify:ceo:org-a", agentId: "main", toolNames: ["departify.email.list"] }, respond() {} });
     const [tool] = factory({ sessionKey: "departify:ceo:org-a", agentId: "main" });
-    const result = await tool.execute("call-1", { section: "summary", organizationId: "org-b" });
-    assert.deepEqual(result.details, { status: "success", organization: { id: "org-a" }, company: { name: "A" } });
+    const result = await tool.execute("call-1", { organizationId: "org-b" });
+    assert.deepEqual(result.details, { status: "success", operation: "departify.email.list", data: { messages: [] } });
     assert.equal(requests.length, 2);
     assert.match(requests[0].init.body, /departify:ceo:org-a/);
     assert.doesNotMatch(requests[0].init.body, /org-b/);
     assert.match(requests[1].init.headers.authorization, /^Bearer scoped-token$/);
+    assert.match(requests[1].init.body, /departify\.email\.list/);
   } finally {
     globalThis.fetch = originalFetch;
     delete process.env.DEPARTIFY_API_URL;
@@ -51,12 +75,17 @@ test("uses trusted session identity and returns the structured gateway result", 
   }
 });
 
-test("accepts OpenClaw's scoped agent session key but rejects another agent", async () => {
-  let factory;
-  plugin.register({ registerTool(candidate) { factory = candidate; } });
-  assert.doesNotThrow(() => factory({ sessionKey: "agent:main:departify:ceo:org-a", agentId: "main" }));
+test("rejects another agent and never exposes a mutation through policy", async () => {
+  const { factory, gatewayHandler } = registeredPlugin();
   await assert.rejects(
-    () => factory({ sessionKey: "agent:other:departify:ceo:org-a", agentId: "other" })[0].execute("call-2", {}),
+    () => gatewayHandler({ params: { sessionKey: "agent:other:departify:ceo:org-a", agentId: "other", toolNames: TOOL_NAMES }, respond() {} }),
     /scoped CEO session/,
   );
+  let response;
+  await gatewayHandler({
+    params: { sessionKey: "departify:ceo:org-a", agentId: "main", toolNames: ["departify.email.send", "unknown", "departify.calendar.list"] },
+    respond(ok, result) { response = { ok, result }; },
+  });
+  assert.deepEqual(response, { ok: true, result: { ok: true, toolCount: 1 } });
+  assert.deepEqual(factory({ sessionKey: "departify:ceo:org-a", agentId: "main" }).map((tool) => tool.name), ["departify.calendar.list"]);
 });

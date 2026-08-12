@@ -1,6 +1,7 @@
 import type {
   EngineHealth,
   EngineHistory,
+  EngineNativeToolPolicyInput,
   EngineMessageResult,
   EngineSendMessageInput,
   EngineSession,
@@ -29,6 +30,9 @@ export interface EngineAdapter {
    * Send a message through the engine and wait for the terminal reply.
    */
   sendMessage(input: EngineSendMessageInput): Promise<EngineMessageResult>;
+
+  /** Publish the backend-authorized native read surface for this session. */
+  setNativeToolPolicy?(input: EngineNativeToolPolicyInput): Promise<void>;
 
   /**
    * Read a session's normalized state. Returns null when the session does not

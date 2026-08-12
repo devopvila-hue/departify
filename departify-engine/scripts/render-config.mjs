@@ -282,7 +282,19 @@ const config = {
   tools: {
     profile: "messaging",
     alsoAllow: [
-      ...(enableNativeBusinessTools ? ["departify.company.context"] : []),
+      ...(enableNativeBusinessTools
+        ? [
+            "departify.company.context",
+            "departify.email.list",
+            "departify.email.search",
+            "departify.calendar.list",
+            "departify.drive.search",
+            "departify.drive.read",
+            "departify.tasks.list",
+            "departify.approvals.list",
+            "departify.results.list",
+          ]
+        : []),
       ...(execMode === "test" ? ["exec", "process", "read"] : []),
     ],
     // In "test" mode expose exec (bounded to safe bins) so the tool loop is a

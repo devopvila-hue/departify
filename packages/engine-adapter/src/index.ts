@@ -17,6 +17,7 @@ export type {
   EngineSession,
   EngineSessionStatus,
   EngineSendMessageInput,
+  EngineNativeToolPolicyInput,
   EngineMessageResult,
   EngineMessageStatus,
   EngineUsage,

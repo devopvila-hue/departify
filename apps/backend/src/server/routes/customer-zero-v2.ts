@@ -206,6 +206,7 @@ import {
   type DepartifyToolResult,
   toolsForManifest,
 } from "../../customer-zero/departify-business-tools.js";
+import { nativeToolsForManifest } from "../../customer-zero/native-business-tools.js";
 import {
   compileRuntimeBusinessContext,
   type RuntimeBusinessContext,
@@ -2940,6 +2941,7 @@ interface RuntimeBridgeInput {
   ) => Promise<DepartifyToolResult>;
   readonly trace: CeoTurnTraceState;
   readonly nativeBusinessTools: boolean;
+  readonly nativeToolNames: readonly string[];
 }
 
 interface CeoTurnTraceState {
@@ -3170,11 +3172,14 @@ async function buildRuntimeBridge(
   const capabilities = buildRuntimeCapabilityManifest(
     runtimeConnections,
   );
-  const exposedToolNames = toolsForManifest(capabilities).map((tool) => tool.name);
+  const nativeToolNames = deps.nativeBusinessTools ? nativeToolsForManifest(capabilities) : [];
+  const exposedToolNames = deps.nativeBusinessTools
+    ? nativeToolNames
+    : toolsForManifest(capabilities).map((tool) => tool.name);
   trace.capabilityIds = capabilities.capabilities
     .filter((capability) => capability.available)
     .map((capability) => capability.id);
-  trace.exposedToolNames = exposedToolNames;
+  trace.exposedToolNames = [...exposedToolNames];
   const context = compileRuntimeBusinessContext({
     session,
     companyDna,
@@ -3208,6 +3213,7 @@ async function buildRuntimeBridge(
     executeTool: (call, userMessage) => executeRuntimeTool(session, deps, call, inboxStore, userMessage),
     trace,
     nativeBusinessTools: deps.nativeBusinessTools === true,
+    nativeToolNames,
   };
 }
 
@@ -3719,10 +3725,16 @@ export async function processCeoMessage(
 
   if (runtime?.nativeBusinessTools) {
     if (trace) {
-      trace.capabilityIds = ["company.context"];
-      trace.exposedToolNames = ["departify.company.context"];
+      trace.exposedToolNames = [...runtime.nativeToolNames];
     }
     try {
+      if (!runtime.engine.setNativeToolPolicy) {
+        throw new Error("native_tool_policy_unsupported");
+      }
+      await runtime.engine.setNativeToolPolicy({
+        sessionId: runtime.sessionId,
+        toolNames: runtime.nativeToolNames,
+      });
       const nativeResult = await runtime.engine.sendMessage({
         sessionId: runtime.sessionId,
         // Native mode receives the CEO's actual utterance. The existing
@@ -3736,10 +3748,11 @@ export async function processCeoMessage(
         trace.selectedToolNames = selectedTools;
         trace.toolResultStatuses = nativeResult.status === "completed" ? ["success"] : ["failed"];
       }
-      // A native turn is successful only when OpenClaw actually selected the
-      // registered native tool. A plain model response must not be relabeled
-      // as a company-context result or bypass the existing safe router.
-      if (nativeResult.status === "completed" && selectedTools.includes("departify.company.context")) {
+      // A native turn is successful only when OpenClaw actually selected an
+      // exposed native tool. A plain model response must not be relabeled as
+      // a tool result or bypass the existing safe router.
+      const selectedExposedTools = selectedTools.filter((name) => runtime.nativeToolNames.includes(name));
+      if (nativeResult.status === "completed" && selectedExposedTools.length > 0) {
         return completeRuntimeCeoTurn(
           session,
           conversation,
@@ -3753,7 +3766,7 @@ export async function processCeoMessage(
         if (trace) trace.toolResultStatuses = ["native_tool_not_selected"];
         console.info("[native-tool-trace]", {
           nativeTool: true,
-          toolName: "departify.company.context",
+          toolName: selectedTools.join(",") || "native",
           organizationHash: safeTraceHash(organizationId),
           authorized: false,
           status: "tool_not_selected",
@@ -3762,7 +3775,7 @@ export async function processCeoMessage(
     } catch {
       console.info("[native-tool-trace]", {
         nativeTool: true,
-        toolName: "departify.company.context",
+        toolName: "native",
         organizationHash: safeTraceHash(organizationId),
         authorized: false,
         status: "engine_failed",
@@ -4820,7 +4833,7 @@ async function runGoogleBusinessTurn(
   return { reply: isEs ? "No he podido identificar la acción de Google." : "I could not identify the Google action." };
 }
 
-async function runCalendarReadTurn(
+export async function runCalendarReadTurn(
   session: CustomerZeroSession,
   message: string,
   isEs: boolean,
@@ -5078,7 +5091,7 @@ async function verifyLatestCalendarEvent(session: CustomerZeroSession, isEs: boo
     : `Google still confirms **${result.value.summary}**.${result.value.htmlLink ? `\n\n${result.value.htmlLink}` : ""}`;
 }
 
-async function runDriveTurn(
+export async function runDriveTurn(
   session: CustomerZeroSession,
   message: string,
   isEs: boolean,
@@ -5764,7 +5777,7 @@ function buildEmailConnectionSuggestion(
  * intent-aware business summary. Never exposes query syntax or
  * provider internals.
  */
-async function readEmailAnswer(
+export async function readEmailAnswer(
   organizationId: string,
   message: string,
   locale: SupportedLocale,
