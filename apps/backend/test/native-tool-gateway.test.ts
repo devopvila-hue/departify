@@ -189,6 +189,8 @@ describe("native company context gateway", () => {
     const lastInput = engine.inputs.at(-1);
     expect(lastInput?.nativeBusinessTools).toBe(true);
     expect(engine.nativePolicies.at(-1)?.toolNames).toContain("departify.company.context");
+    const trace = engine.inputs.at(-1);
+    expect(trace?.nativeBusinessTools).toBe(true);
     expect(lastInput?.runtimeContext).toBeUndefined();
     expect(lastInput?.businessTools).toBeUndefined();
   });

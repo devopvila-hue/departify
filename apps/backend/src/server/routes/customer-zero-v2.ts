@@ -2958,6 +2958,7 @@ interface CeoTurnTraceState {
   capabilityIds: string[];
   exposedToolNames: string[];
   selectedToolNames: string[];
+  toolCallCount: number;
   toolResultStatuses: string[];
   contextBytes: number | null;
   sessionFound: boolean | null;
@@ -3057,6 +3058,7 @@ function newCeoTurnTrace(
     capabilityIds: [],
     exposedToolNames: [],
     selectedToolNames: [],
+    toolCallCount: 0,
     toolResultStatuses: [],
     contextBytes: null,
     sessionFound: null,
@@ -3090,7 +3092,10 @@ function emitCeoTurnTrace(
     activeDepartment: delegatedDepartment ?? trace.activeDepartment,
     capabilityIds: trace.capabilityIds,
     toolNames: trace.exposedToolNames,
+    availableNativeTools: trace.exposedToolNames,
     selectedToolNames: trace.selectedToolNames,
+    selectedNativeTools: trace.selectedToolNames,
+    toolCallCount: trace.toolCallCount,
     routingDecision: result.routing.intent,
     delegatedDepartment,
     contextBytes: trace.contextBytes,
@@ -3750,6 +3755,7 @@ export async function processCeoMessage(
       const selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
       if (trace) {
         trace.selectedToolNames = selectedTools;
+        trace.toolCallCount = selectedTools.length;
         trace.toolResultStatuses = nativeResult.status === "completed" ? ["success"] : ["failed"];
       }
       // A native turn is successful only when OpenClaw actually selected an
@@ -3829,6 +3835,7 @@ export async function processCeoMessage(
       });
       const selectedTools = runtimeTurn.toolCalls?.map((call) => call.name) ?? [];
       runtime.trace.selectedToolNames = selectedTools;
+      runtime.trace.toolCallCount = selectedTools.length;
       runtime.trace.toolResultStatuses = runtimeTurn.toolResults?.map((result) => result.status) ?? [];
       runtime.trace.contextBytes = runtimeTurn.contextBytes;
       if (
