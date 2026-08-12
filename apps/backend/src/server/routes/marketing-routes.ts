@@ -1,7 +1,13 @@
 import type { FastifyInstance } from "fastify";
 import type { ServerDeps } from "../deps.js";
-import { getCustomerZeroSession } from "../../customer-zero/customer-zero-session.js";
-import { isEmailQuestion, processCeoMessage, requireSession } from "./customer-zero-v2.js";
+import {
+  buildCanonicalConnectionViews,
+  buildMarketingOperationalActivity,
+  isEmailQuestion,
+  processCeoMessage,
+  requireSession,
+  workStoreForRoutes,
+} from "./customer-zero-v2.js";
 import { resolveLocale, t, type SupportedLocale } from "../../customer-zero/locale.js";
 
 /**
@@ -32,8 +38,19 @@ export async function registerMarketingRoutes(
   }>("/api/departments/marketing/:organizationId", async (request) => {
     const { organizationId } = request.params;
     const locale = localeOf(request.query);
-    const connectedTools = listConnectedToolIds(organizationId);
-    return marketing.getDepartmentStatus(organizationId, connectedTools, locale);
+    const operational = await loadMarketingOperationalState(
+      organizationId,
+      locale,
+      deps,
+    );
+    return marketing.getDepartmentStatus(
+      organizationId,
+      operational.connections
+        .filter((connection) => connection.state === "connected")
+        .map((connection) => connection.toolId),
+      locale,
+      operational,
+    );
   });
 
   // Objectives
@@ -173,26 +190,40 @@ export async function registerMarketingRoutes(
     "/api/departments/marketing/:organizationId/tools",
     async (request) => {
       const { organizationId } = request.params;
-      const connected = listConnectedToolIds(organizationId);
-      return { tools: await marketing.getConnectedTools(organizationId, connected) };
+      const locale = localeOf({});
+      const operational = await loadMarketingOperationalState(
+        organizationId,
+        locale,
+        deps,
+      );
+      const department = await marketing.getDepartmentStatus(
+        organizationId,
+        operational.connections
+          .filter((connection) => connection.state === "connected")
+          .map((connection) => connection.toolId),
+        locale,
+        operational,
+      );
+      return { tools: department.tools };
     },
   );
 }
 
-/** Honest connected-tool ids from the existing tool state/connections store. */
-function listConnectedToolIds(organizationId: string): string[] {
-  // The Customer Zero session holds the real connection state. When it is not
-  // available (e.g. tests), we return an empty set so every tool is honest
-  // "No conectado".
-  const session = getSessionForToolState(organizationId);
-  if (!session) return [];
-  return [...session.state.connections.values()]
-    .filter((c) => c.status === "connected" || c.lifecycle === "connected")
-    .map((c) => c.toolId);
-}
-
-function getSessionForToolState(
+async function loadMarketingOperationalState(
   organizationId: string,
-): { state: { connections: Map<string, { status: string; lifecycle?: string; toolId: string }> } } | null {
-  return getCustomerZeroSession(organizationId);
+  locale: SupportedLocale,
+  deps: ServerDeps,
+) {
+  const session = await requireSession(organizationId, deps);
+  const [connections, tasks, results] = await Promise.all([
+    buildCanonicalConnectionViews(session, locale),
+    workStoreForRoutes().listTasksForOrg(organizationId, 100),
+    workStoreForRoutes().listResultsForOrg(organizationId, 50),
+  ]);
+  return {
+    connections,
+    tasks,
+    results,
+    activity: buildMarketingOperationalActivity(tasks, results),
+  };
 }

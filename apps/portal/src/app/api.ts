@@ -563,6 +563,15 @@ export interface MarketingDepartmentStatus {
     message: string;
     createdAt: string;
   }[];
+  activeWork: {
+    id: string;
+    title: string;
+    status: "queued" | "running" | "waiting_approval";
+    statusMessage: string;
+    progress: number;
+    createdAt: string;
+    resultId?: string;
+  }[];
   results: { id: string; title: string; summary: string }[];
 }
 

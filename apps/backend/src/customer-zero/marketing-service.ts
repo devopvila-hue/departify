@@ -60,35 +60,22 @@ import {
   type CompiledDepartmentContext,
 } from "./department-context-compiler.js";
 import type { CustomerZeroSession } from "./customer-zero-session.js";
+import type { DepartmentResult, DepartmentTask } from "./department-work.js";
+import { MARKETING_ROSTER } from "./marketing-roster.js";
 
-/** Marketing digital employees — the canonical department template roster. */
-const MARKETING_EMPLOYEES: readonly Omit<DigitalEmployee, "status" | "currentWork">[] = [
-  {
-    id: "agent_content_strategist",
-    label: "Especialista en Contenido",
-    role: "Creación de contenido",
-    capabilities: [
-      "content_creation",
-      "content_strategy",
-      "positioning_strategy",
-    ],
-  },
-  {
-    id: "agent_social_media_manager",
-    label: "Especialista en Redes Sociales",
-    role: "Redes sociales",
-    capabilities: [
-      "social_media",
-      "content_creation",
-    ],
-  },
-  {
-    id: "agent_ads_specialist",
-    label: "Especialista en Publicidad",
-    role: "Publicidad y adquisición",
-    capabilities: ["advertising_paid", "campaign_strategy"],
-  },
-];
+export interface MarketingOperationalConnection {
+  readonly toolId: string;
+  readonly label: string;
+  readonly capability: string;
+  readonly state: string;
+}
+
+export interface MarketingOperationalSnapshot {
+  readonly tasks: readonly DepartmentTask[];
+  readonly results: readonly DepartmentResult[];
+  readonly connections: readonly MarketingOperationalConnection[];
+  readonly activity?: readonly DepartmentActivity[];
+}
 
 /** Marketing connected tools — honest business labels. */
 const MARKETING_TOOLS: readonly Omit<ConnectedTool, "status" | "note">[] = [
@@ -422,7 +409,10 @@ export class MarketingService {
 
   /* ------------------------- Digital employees + tools ------------------------- */
 
-  async getDigitalEmployees(organizationId: string): Promise<DigitalEmployee[]> {
+  async getDigitalEmployees(
+    organizationId: string,
+    assignedEmployeeIds?: readonly string[],
+  ): Promise<DigitalEmployee[]> {
     // Customer Zero hotfix — NEVER return a fake team for an org that has
     // not been provisioned yet. Until the Marketing department exists
     // for this organization, return an empty list. The UI shows
@@ -431,8 +421,10 @@ export class MarketingService {
     if (!department) return [];
     const employeeIds = this.employeeIdsForDepartment(department);
     const objective = await this.activeObjective(organizationId);
-    const workingIds = await this.workingEmployeeIdsForOrg(organizationId);
-    return MARKETING_EMPLOYEES.filter((e) => employeeIds.has(e.id)).map((e) => ({
+    const workingIds = assignedEmployeeIds
+      ? new Set(assignedEmployeeIds)
+      : await this.workingEmployeeIdsForOrg(organizationId);
+    return MARKETING_ROSTER.filter((e) => employeeIds.has(e.id)).map((e) => ({
       ...e,
       status: workingIds.has(e.id) ? "trabajando" : "disponible",
       ...(workingIds.has(e.id) && objective
@@ -453,7 +445,7 @@ export class MarketingService {
     if (this.companyDna) {
       const dna = await this.companyDna.get(organizationId);
       return dna?.departmentProvisionedAt
-        ? { employees: MARKETING_EMPLOYEES.map((employee) => employee.id) }
+        ? { employees: MARKETING_ROSTER.map((employee) => employee.id) }
         : null;
     }
     const session = (await import("./customer-zero-session.js")).getCustomerZeroSession(
@@ -501,21 +493,75 @@ export class MarketingService {
     organizationId: string,
     connectedToolIds: readonly string[] = [],
     locale: SupportedLocale,
+    operational?: MarketingOperationalSnapshot,
   ): Promise<DepartmentStatusView> {
     const objective = await this.activeObjective(organizationId);
     const approvals = (await this.approvalsRepo.list(organizationId, "marketing"))
       .filter((a) => a.status === "pending");
-    const employees = await this.getDigitalEmployees(organizationId);
-    const tools = await this.getConnectedTools(organizationId, connectedToolIds);
+    const activeWork = (operational?.tasks ?? []).filter(
+      (task) =>
+        task.organizationId === organizationId &&
+        task.departmentId === "marketing" &&
+        (task.status === "queued" ||
+          task.status === "running" ||
+          task.status === "waiting_approval"),
+    );
+    const assignedEmployeeIds = activeWork.flatMap((task) => {
+      const assignment = (task as DepartmentTask & {
+        readonly assignedEmployeeId?: string;
+      }).assignedEmployeeId;
+      return assignment ? [assignment] : [];
+    });
+    const employees = await this.getDigitalEmployees(
+      organizationId,
+      assignedEmployeeIds,
+    );
+    const tools = operational
+      ? operational.connections
+          .filter(
+            (connection) =>
+              connection.state === "connected" &&
+              connection.capability.trim().length > 0,
+          )
+          .map((connection) => ({
+            toolId: connection.toolId,
+            label: connection.label,
+            capability: connection.capability,
+            status: "connected" as const,
+          }))
+      : await this.getConnectedTools(organizationId, connectedToolIds);
     const objectives = await this.objectivesRepo.list(organizationId, "marketing");
-    const results = objectives
+    const objectiveResults = objectives
       .filter((o) => o.status === "completed")
       .map((o) => ({ id: o.id, title: o.title, summary: o.desiredOutcome }));
-    const recentActivity = await this.activityRepo.listRecent(
+    const durableResults = (operational?.results ?? [])
+      .filter(
+        (result) =>
+          result.organizationId === organizationId &&
+          result.departmentId === "marketing",
+      )
+      .map((result) => ({
+        id: result.id,
+        title: result.title,
+        summary: result.summary,
+      }));
+    const results = [
+      ...durableResults,
+      ...objectiveResults.filter(
+        (result) => !durableResults.some((durable) => durable.id === result.id),
+      ),
+    ];
+    const storedActivity = await this.activityRepo.listRecent(
       organizationId,
       "marketing",
       8,
     );
+    const recentActivity = [
+      ...(operational?.activity ?? []),
+      ...storedActivity,
+    ]
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 8);
 
     // Customer Zero hotfix — for an organization whose Marketing
     // department has not been provisioned, status is "not_provisioned".
@@ -542,10 +588,11 @@ export class MarketingService {
         pendingApprovals: [],
         recentActivity: [],
         results: [],
+        activeWork: [],
       };
     }
 
-    const status: DepartmentStatus = objective
+    const status: DepartmentStatus = activeWork.length > 0 || objective
       ? approvals.length > 0
         ? "bloqueado"
         : "trabajando"
@@ -563,14 +610,22 @@ export class MarketingService {
       },
       status,
       employees,
-      employeesWorkingNow: employees.filter((e) => e.status === "trabajando")
-        .length,
+      employeesWorkingNow: employees.filter((e) => e.status === "trabajando").length,
       tools,
       toolsConnected: tools.filter((t) => t.status === "connected").length,
       activeObjective: objective,
       pendingApprovals: approvals,
       recentActivity,
       results: results.slice(0, 4),
+      activeWork: activeWork.map((task) => ({
+        id: task.id,
+        title: task.title,
+        status: task.status as "queued" | "running" | "waiting_approval",
+        statusMessage: task.statusMessage,
+        progress: task.progress,
+        createdAt: task.createdAt,
+        ...(task.resultId ? { resultId: task.resultId } : {}),
+      })),
     };
   }
 

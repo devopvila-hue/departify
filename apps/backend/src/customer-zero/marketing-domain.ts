@@ -134,6 +134,15 @@ export interface DepartmentStatusView {
   readonly pendingApprovals: readonly ApprovalRequest[];
   readonly recentActivity: readonly DepartmentActivity[];
   readonly results: readonly { id: string; title: string; summary: string }[];
+  readonly activeWork: readonly {
+    readonly id: string;
+    readonly title: string;
+    readonly status: "queued" | "running" | "waiting_approval";
+    readonly statusMessage: string;
+    readonly progress: number;
+    readonly createdAt: string;
+    readonly resultId?: string;
+  }[];
 }
 
 export interface CompanyControlPlaneView {

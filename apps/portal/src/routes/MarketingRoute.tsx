@@ -87,6 +87,10 @@ export function MarketingRoute() {
     }
   }, [department]);
 
+  // Older API responses remain renderable while the backend rolls out the
+  // durable work projection.
+  const activeWork = department?.activeWork ?? [];
+
   async function decideApproval(approvalId: string, action: "approve" | "reject") {
     if (!organizationId) return;
     setBusy(true);
@@ -324,23 +328,46 @@ export function MarketingRoute() {
 
         {/* Connected tools */}
         <Card title="Herramientas">
-          <ul className="dfy-list">
-            {department.tools.map((tool) => (
-              <li key={tool.toolId}>
-                <span className="dfy-tool__label">
-                  <strong>{tool.label}</strong>
-                  <span className="dfy-muted dfy-muted--small"> · {tool.capability}</span>
-                </span>
-                <Badge tone={tool.status === "connected" ? "success" : "neutral"}>
-                  {tool.status === "connected" ? "Conectado" : "No conectado"}
-                </Badge>
-              </li>
-            ))}
-          </ul>
+          {department.tools.length === 0 ? (
+            <EmptyState
+              title="Todavía no hay herramientas conectadas"
+              description="Las herramientas aparecen aquí cuando la conexión operativa está verificada."
+            />
+          ) : (
+            <ul className="dfy-list">
+              {department.tools.map((tool) => (
+                <li key={tool.toolId}>
+                  <span className="dfy-tool__label">
+                    <strong>{tool.label}</strong>
+                    <span className="dfy-muted dfy-muted--small"> · {tool.capability}</span>
+                  </span>
+                  <Badge tone="success">Conectado</Badge>
+                </li>
+              ))}
+            </ul>
+          )}
           <p className="dfy-muted dfy-muted--small">
-            Nunca fingimos una conexión. Sin conectar, el equipo planifica y
-            analiza; conectar una herramienta le permite ejecutar.
+            Solo mostramos capacidades operativas verificadas en Conexiones.
           </p>
+        </Card>
+
+        {/* Durable department work */}
+        <Card title="Trabajo activo">
+          {activeWork.length === 0 ? (
+            <EmptyState
+              title="Nada en curso"
+              description="Las tareas activas de Marketing aparecerán aquí cuando existan."
+            />
+          ) : (
+            <ul className="dfy-list">
+              {activeWork.map((task) => (
+                <li key={task.id}>
+                  <strong>{task.title}</strong>
+                  <p className="dfy-muted dfy-muted--small">{task.statusMessage}</p>
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
 
         {/* Approvals */}

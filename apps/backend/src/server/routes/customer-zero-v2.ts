@@ -131,6 +131,8 @@ import {
   InMemoryDepartmentWorkStore,
   checkReplyForUnsupportedPromises,
   type DepartmentWorkCapability,
+  type DepartmentResult,
+  type DepartmentTask,
   type DepartmentWorkStore,
 } from "../../customer-zero/department-work.js";
 import { DepartmentWorkExecutor } from "../../customer-zero/department-work-executor.js";
@@ -2124,6 +2126,12 @@ export async function registerCustomerZeroV2Routes(
             organizationId,
             connectedToolIds,
             session.state.locale,
+            {
+              tasks,
+              results,
+              connections,
+              activity: buildMarketingOperationalActivity(tasks, results),
+            },
           )
         : null;
       const company = buildCompanyOperatingState({
@@ -4999,7 +5007,7 @@ async function buildCatalogConnectionViews(
 }
 
 /** Canonical operational connection projection shared by /conexiones and the CEO cockpit. */
-async function buildCanonicalConnectionViews(
+export async function buildCanonicalConnectionViews(
   session: CustomerZeroSession,
   locale: SupportedLocale,
 ): Promise<ToolConnectionView[]> {
@@ -5196,8 +5204,38 @@ function getWorkStore(): DepartmentWorkStore {
   return _workStoreSingleton;
 }
 
-function workStoreForRoutes(): DepartmentWorkStore {
+export function workStoreForRoutes(): DepartmentWorkStore {
   return getWorkStore();
+}
+
+export function buildMarketingOperationalActivity(
+  tasks: readonly DepartmentTask[],
+  results: readonly DepartmentResult[],
+) {
+  return [
+    ...tasks
+      .filter((task) => task.departmentId === "marketing")
+      .map((task) => ({
+        id: `task_${task.id}`,
+        departmentId: "marketing" as const,
+        actor: "Elvira",
+        kind: "analisis_realizado" as const,
+        message: task.source?.type === "inbox_email"
+          ? `Correo convertido en tarea: ${task.title}`
+          : `Tarea creada: ${task.title}`,
+        createdAt: task.createdAt,
+      })),
+    ...results
+      .filter((result) => result.departmentId === "marketing")
+      .map((result) => ({
+        id: `result_${result.id}`,
+        departmentId: "marketing" as const,
+        actor: "Elvira",
+        kind: "resultado_generado" as const,
+        message: `Resultado disponible: ${result.title}`,
+        createdAt: result.createdAt,
+      })),
+  ];
 }
 
 /**
