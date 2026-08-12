@@ -23,6 +23,7 @@ import {
   EngineSessionNotFoundError,
 } from "../errors.js";
 import type {
+  EngineBusinessToolDefinition,
   EngineHealth,
   EngineHistory,
   EngineHistoryItem,
@@ -97,7 +98,7 @@ export class OpenClawEngineAdapter implements EngineAdapter {
       const { runStatus, lastAssistant } = await this.client.runAndReadResult(
         {
           key: sessionKey(input.sessionId),
-          message: input.message,
+          message: renderOpenClawTurn(input),
         },
         this.client.config.requestTimeoutMs,
       );
@@ -335,6 +336,29 @@ export class OpenClawEngineAdapter implements EngineAdapter {
   }
 }
 
+/**
+ * OpenClaw's gateway session API accepts a message, not arbitrary provider
+ * tool schemas. Keep the adapter boundary provider-neutral by rendering the
+ * safe structured context and normalized tool definitions into a strict
+ * protocol envelope. Backend authorization remains independent of this text.
+ */
+function renderOpenClawTurn(input: EngineSendMessageInput): string {
+  const sections: string[] = [];
+  if (input.runtimeContext) {
+    sections.push(input.runtimeContext);
+  }
+  if (input.businessTools && input.businessTools.length > 0) {
+    sections.push(
+      `DEPARTIFY_BUSINESS_TOOLS_JSON:\n${JSON.stringify(input.businessTools as readonly EngineBusinessToolDefinition[])}`,
+    );
+  }
+  if (input.toolResult) {
+    sections.push(input.toolResult);
+  }
+  sections.push(`MENSAJE DEL CEO:\n${input.message}`);
+  return sections.join("\n\n");
+}
+
 export function sessionKey(departifyId: string): string {
   return `${SESSION_KEY_PREFIX}${departifyId}`;
 }
@@ -371,5 +395,3 @@ function contentToText(content: unknown): string | undefined {
   }
   return undefined;
 }
-
-

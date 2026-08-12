@@ -189,6 +189,20 @@ import {
 } from "../../customer-zero/google-tokens.js";
 import type { CompanyDiscoveryReport } from "@departify/business-discovery";
 import type { ServerDeps } from "../deps.js";
+import type { EngineAdapter } from "@departify/engine-adapter";
+import {
+  buildRuntimeCapabilityManifest,
+  type RuntimeCapabilityManifest,
+} from "../../customer-zero/capability-manifest.js";
+import {
+  type DepartifyToolCall,
+  type DepartifyToolResult,
+} from "../../customer-zero/departify-business-tools.js";
+import {
+  compileRuntimeBusinessContext,
+  type RuntimeBusinessContext,
+} from "../../customer-zero/department-context-compiler.js";
+import { runRuntimeBusinessTurn } from "../../customer-zero/runtime-business-orchestrator.js";
 import {
   evaluateDnaCompleteness,
   type CompanyDnaStore,
@@ -2272,12 +2286,16 @@ export async function registerCustomerZeroV2Routes(
       const body = request.body as { message: string; conversationId?: string };
       const session = await requireSession(organizationId, deps);
       try {
+        const runtime = deps.engine
+          ? await buildRuntimeBridge(session, deps)
+          : null;
         const result = await processCeoMessage(
           session,
           body.message,
           body.conversationId,
           deps.marketing,
           deps.engineRuntimePolicy,
+          runtime,
         );
         return reply.code(200).send(result);
       } catch (cause) {
@@ -2514,6 +2532,7 @@ function buildHostingerCatalogView(
     toolId: "hostinger_email",
     label: locale === "en" ? "Business email" : "Correo empresarial",
     capability: "email.read",
+    capabilities: status.capabilities,
     category: locale === "en" ? "Email" : "Correo",
     domains: ["email"],
     state: connected ? "connected" : configured ? "degraded" : "available",
@@ -2893,6 +2912,310 @@ export interface CeoMessageResult {
   readonly conversationId: string;
 }
 
+interface RuntimeBridgeInput {
+  readonly engine: EngineAdapter;
+  readonly sessionId: string;
+  readonly context: RuntimeBusinessContext;
+  readonly capabilities: RuntimeCapabilityManifest;
+  readonly executeTool: (call: DepartifyToolCall) => Promise<DepartifyToolResult>;
+}
+
+/**
+ * Build the fresh runtime bridge from the same projections used by the CEO
+ * overview and /conexiones. This function is intentionally called per turn;
+ * it never caches capability or task authorization.
+ */
+async function buildRuntimeBridge(
+  session: CustomerZeroSession,
+  deps: ServerDeps,
+): Promise<RuntimeBridgeInput | null> {
+  if (!deps.engine) return null;
+  const workStore = workStoreForRoutes();
+  const [connections, tasks, results, companyDna, approvals, recentMessages] = await Promise.all([
+    buildCanonicalConnectionViews(session, session.state.locale),
+    workStore.listTasksForOrg(session.organizationId, 50),
+    workStore.listResultsForOrg(session.organizationId, 20),
+    resolveCompanyDnaStore(deps).get(session.organizationId),
+    deps.marketing?.listApprovals(session.organizationId) ?? Promise.resolve([]),
+    session.state.currentConversationId
+      ? session.conversations.listMessages(session.organizationId, session.state.currentConversationId, 12)
+      : Promise.resolve([]),
+  ]);
+  const googleSummaries = await getGoogleTokenStore().listForOrg(session.organizationId);
+  const runtimeConnections = connections.map((connection) => ({
+    toolId: connection.toolId,
+    label: connection.label,
+    state: connection.state,
+    ...(connection.toolId === "gmail"
+      ? {
+          capabilities: googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "email.read"))
+            ? ["email.read", "email.search", "email.thread.read"]
+            : [],
+        }
+      : connection.toolId === "google_calendar"
+        ? {
+            capabilities: [
+              ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "calendar.read")) ? ["calendar.read"] : []),
+              ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "calendar.create")) ? ["calendar.create"] : []),
+            ],
+          }
+        : connection.toolId === "google_workspace" || connection.toolId === "google_drive"
+          ? {
+              capabilities: googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.read"))
+                ? ["drive.search", "drive.read"]
+                : [],
+            }
+          : connection.capabilities
+            ? { capabilities: connection.capabilities }
+            : {}),
+  }));
+  const capabilities = buildRuntimeCapabilityManifest(
+    runtimeConnections,
+  );
+  const context = compileRuntimeBusinessContext({
+    session,
+    companyDna,
+    capabilities,
+    connections: connections.map((connection) => ({
+      toolId: connection.toolId,
+      label: connection.label,
+      state: connection.state,
+    })),
+    tasks,
+    results,
+    approvals,
+    recentActivity: buildMarketingOperationalActivity(tasks, results),
+    recentConversation: recentMessages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    })),
+  });
+  const sessionId = `ceo:${session.organizationId}`;
+  const engineSession = await deps.engine.getSession(sessionId)
+    ?? await deps.engine.createSession({ sessionId });
+  return {
+    engine: deps.engine,
+    sessionId: engineSession.id,
+    context,
+    capabilities,
+    executeTool: (call) => executeRuntimeTool(session, deps, call),
+  };
+}
+
+function runtimeCandidate(message: string, session: CustomerZeroSession): boolean {
+  const lower = message.toLocaleLowerCase("es-ES");
+  if (isEmailApprovalResponse(message) || isEmailCancellation(message) || isEmailEditRequest(message)) {
+    return false;
+  }
+  if (isCalendarApproval(message) || isCalendarCancellation(message)) return false;
+  if (
+    session.state.pendingEmailWork ||
+    session.state.pendingCalendarWork ||
+    session.state.lastEmailContext
+  ) {
+    return true;
+  }
+  return /\b(correo|correos|email|mail|inbox|calendario|calendar|evento|reuni[oó]n|agenda|drive|pdf|archivo|documento|tarea|organiza|organizar|aprobaci[oó]n|resultado|pr[oó]ximos eventos|empresa|negocio|contexto|hazlo|con\s+[a-z0-9._%+-]+@)/i.test(lower);
+}
+
+function runtimeIntent(name: string): RoutingDecision["intent"] {
+  if (name.startsWith("departify.email.")) return "email_action";
+  if (name === "departify.calendar.list") return "calendar_read";
+  if (name === "departify.calendar.create") return "calendar_create";
+  if (name.startsWith("departify.drive.")) return "drive_query";
+  if (name === "departify.tasks.list" || name === "departify.tasks.create") return "direct_response";
+  if (name === "departify.approvals.list") return "request_approval";
+  if (name === "departify.results.list") return "explain_existing_result";
+  return "direct_response";
+}
+
+async function executeRuntimeTool(
+  session: CustomerZeroSession,
+  deps: ServerDeps,
+  call: DepartifyToolCall,
+): Promise<DepartifyToolResult> {
+  const args = call.arguments;
+  const isEs = session.state.locale !== "en";
+  const workStore = workStoreForRoutes();
+  const text = (key: string): string => String(args[key] ?? "").trim();
+  const receiptId = session.state.lastExecutionReceipt?.operationId;
+  const withReceipt = (result: DepartifyToolResult): DepartifyToolResult =>
+    receiptId ? { ...result, receiptId } : result;
+
+  switch (call.name) {
+    case "departify.company.context":
+      return {
+        status: "success",
+        operation: call.name,
+        summary: isEs
+          ? `Empresa: ${session.state.companyName ?? session.state.onboarding?.companyName ?? "sin nombre confirmado"}. Objetivo: ${session.state.onboarding?.goal ?? "sin objetivo confirmado"}.`
+          : `Company: ${session.state.companyName ?? session.state.onboarding?.companyName ?? "no confirmed name"}. Objective: ${session.state.onboarding?.goal ?? "no confirmed objective"}.`,
+        data: {
+          companyName: session.state.companyName ?? session.state.onboarding?.companyName ?? null,
+          objective: session.state.onboarding?.goal ?? null,
+        },
+      };
+
+    case "departify.email.list":
+    case "departify.email.search": {
+      const query = call.name === "departify.email.search" ? text("query") : "mis últimos correos del correo de empresa";
+      const reply = await readEmailAnswer(
+        session.organizationId,
+        call.name === "departify.email.search"
+          ? `busca en el correo de empresa ${query}`
+          : `mis últimos ${Number(args.limit ?? 3)} correos del correo de empresa`,
+        session.state.locale,
+        session,
+      );
+      if (!reply) {
+        return withReceipt({
+          status: "blocked",
+          operation: call.name,
+          summary: "El correo de empresa todavía no está conectado.",
+        });
+      }
+      return withReceipt({
+        status: reply.toLocaleLowerCase().includes("todavía no está conectado") ? "blocked" : "success",
+        operation: call.name,
+        summary: reply,
+      });
+    }
+
+    case "departify.email.send":
+    case "departify.email.reply": {
+      const body = text("body");
+      const recipient = text("recipient");
+      const message = call.name === "departify.email.reply"
+        ? `responde al último correo diciendo ${body}`
+        : `envía un correo a ${recipient}${text("subject") ? ` con asunto ${text("subject")}` : ""} diciendo ${body}`;
+      if (Boolean(args.confirm)) {
+        await runEmailTurn(session, "sí, envíalo", isEs);
+      } else {
+        await runEmailTurn(session, message, isEs);
+      }
+      const pending = session.state.pendingEmailWork;
+      if (pending?.status === "sent") {
+        return withReceipt({ status: "success", operation: call.name, summary: "El correo ha sido enviado y confirmado." });
+      }
+      return withReceipt({
+        status: pending?.status === "accepted_unverified" ? "accepted_unverified" : "blocked",
+        operation: call.name,
+        summary: pending?.status === "awaiting_approval"
+          ? "Borrador preparado; falta la aprobación explícita del CEO."
+          : "La operación de correo necesita información adicional antes de ejecutarse.",
+        data: {
+          pendingStatus: pending?.status ?? "missing",
+          missingFields: pending?.missingFields ?? [],
+        },
+      });
+    }
+
+    case "departify.calendar.list": {
+      const outcome = await runGoogleBusinessTurn(
+        session,
+        `mis próximos eventos ${text("range")}`,
+        "calendar_read",
+        isEs,
+      );
+      return withReceipt({ status: "success", operation: call.name, summary: outcome.reply });
+    }
+
+    case "departify.calendar.create": {
+      const title = text("title") || "Reunión";
+      const start = text("start");
+      const attendees = Array.isArray(args.attendees)
+        ? args.attendees.filter((value): value is string => typeof value === "string")
+        : [];
+      const current = session.state.pendingCalendarWork;
+      if (Boolean(args.confirm) && current) {
+        const outcome = await runPendingCalendarTurn(session, "hazlo", isEs);
+        return withReceipt({
+          status: session.state.lastCalendarOperation?.status === "verified" ? "success" : "blocked",
+          operation: call.name,
+          summary: outcome.reply,
+        });
+      }
+      const startDate = start ? new Date(start) : null;
+      if (!startDate || Number.isNaN(startDate.getTime())) {
+        const outcome = await runGoogleBusinessTurn(session, `crea una reunión llamada ${title}`, "calendar_create", isEs);
+        return { status: "blocked", operation: call.name, summary: outcome.reply };
+      }
+      const duration = Number(args.durationMinutes ?? 30);
+      session.state.pendingCalendarWork = {
+        summary: title,
+        hour: startDate.getHours(),
+        minute: startDate.getMinutes(),
+        startIso: startDate.toISOString(),
+        endIso: new Date(startDate.getTime() + duration * 60_000).toISOString(),
+        timezone: process.env["DEPARTIFY_TIMEZONE"] ?? "Europe/Madrid",
+        attendees,
+        status: "awaiting_approval",
+        createdAt: new Date().toISOString(),
+      };
+      return {
+        status: "blocked",
+        operation: call.name,
+        summary: "Evento preparado; falta la aprobación explícita del CEO.",
+        data: { title, start: startDate.toISOString(), attendeeCount: attendees.length },
+      };
+    }
+
+    case "departify.drive.search":
+    case "departify.drive.read": {
+      const query = text("query") || "PDFs de Departify";
+      const outcome = await runDriveTurn(session, `busca en Drive ${query}`, isEs);
+      return withReceipt({ status: "success", operation: call.name, summary: outcome.reply });
+    }
+
+    case "departify.tasks.list": {
+      const tasks = await workStore.listTasksForOrg(session.organizationId, 20);
+      return {
+        status: "success",
+        operation: call.name,
+        summary: tasks.length === 0 ? "No hay tareas duraderas." : `Hay ${tasks.length} tareas duraderas.`,
+        data: { tasks: tasks.map((task) => ({ id: task.id, title: task.title, status: task.status, departmentId: task.departmentId })) },
+      };
+    }
+
+    case "departify.tasks.create": {
+      const title = text("title");
+      const summary = text("summary");
+      if (!title || !summary) return { status: "blocked", operation: call.name, summary: "Faltan el título y el resumen de la tarea." };
+      const task = await workStore.createTask({
+        organizationId: session.organizationId,
+        departmentId: "company",
+        objectiveId: null,
+        requestedBy: "ceo",
+        title,
+        summary,
+        capability: "memory.remember",
+        toolId: call.name,
+        status: "queued",
+        statusMessage: "Tarea creada desde el Command Center.",
+        progress: 0,
+        requiredCapabilities: ["memory.remember"],
+        startedAt: null,
+        completedAt: null,
+        resultId: null,
+        errorCode: null,
+        errorMessage: null,
+        timeoutMs: 3_600_000,
+      });
+      return { status: "success", operation: call.name, summary: `Tarea creada: ${task.title}.`, data: { taskId: task.id } };
+    }
+
+    case "departify.approvals.list": {
+      const approvals = await deps.marketing?.listApprovals(session.organizationId) ?? [];
+      return { status: "success", operation: call.name, summary: `Hay ${approvals.filter((approval) => approval.status === "pending").length} aprobaciones pendientes.`, data: { approvals: approvals.map((approval) => ({ id: approval.id, title: approval.title, status: approval.status })) } };
+    }
+
+    case "departify.results.list": {
+      const results = await workStore.listResultsForOrg(session.organizationId, 20);
+      return { status: "success", operation: call.name, summary: `Hay ${results.length} resultados duraderos.`, data: { results: results.map((result) => ({ id: result.id, title: result.title, summary: result.summary })) } };
+    }
+  }
+}
+
 /**
  * P-B part 15 — one authoritative chat turn. The user message and the
  * assistant reply are persisted to a durable, organization-scoped
@@ -2908,6 +3231,7 @@ export async function processCeoMessage(
   conversationId?: string,
   marketing?: MarketingServiceType,
   engineRuntimePolicy?: "strict" | "legacy-fallback",
+  runtime?: RuntimeBridgeInput | null,
 ): Promise<CeoMessageResult> {
   let conversation: ConversationRecord;
   try {
@@ -2927,6 +3251,49 @@ export async function processCeoMessage(
   await session.conversations.addMessage(conversation.id, "user", message);
 
   const baseInput = buildCommandCenterInput(session, message);
+  // ENGINE 02 — give OpenClaw a fresh business context for operational turns.
+  // Approval/cancellation/edit fast paths remain deterministic below. If the
+  // engine is unavailable or declines to select a normalized tool, the
+  // existing safe router continues to own the turn.
+  if (runtime && runtimeCandidate(message, session)) {
+    try {
+      const runtimeTurn = await runRuntimeBusinessTurn({
+        engine: runtime.engine,
+        sessionId: runtime.sessionId,
+        organizationId,
+        message,
+        context: runtime.context,
+        executeTool: runtime.executeTool,
+        log: (event) => {
+          if (event.event === "context_compiled" || event.event === "tool_selected" || event.event === "tool_result") {
+            console.info("[runtime-business-context]", {
+              event: event.event,
+              organizationId: event.organizationId,
+              toolName: event.toolName,
+              status: event.status,
+              contextBytes: event.contextBytes,
+              durationMs: event.durationMs,
+            });
+          }
+        },
+      });
+      if (runtimeTurn.toolCall && runtimeTurn.toolResult) {
+        return completeRuntimeCeoTurn(
+          session,
+          conversation,
+          message,
+          runtimeTurn.text,
+          runtimeTurn.toolCall.name,
+          runtimeTurn.toolResult.status,
+        );
+      }
+    } catch {
+      console.info("[runtime-business-context]", {
+        event: "engine_fallback",
+        organizationId,
+      });
+    }
+  }
   // A reconnect request is itself capability-dependent. Hydrate the Gmail
   // projection from the durable operational resolver before routing, so a
   // fresh conversation or a restarted backend cannot ask the CEO to
@@ -3449,6 +3816,65 @@ export async function processCeoMessage(
     connectionSuggestion:
       emailConnectionSuggestion ?? routed.connectionSuggestion ?? null,
     pendingToolId: routed.pendingToolId ?? null,
+    conversationId: conversation.id,
+  };
+}
+
+async function completeRuntimeCeoTurn(
+  session: CustomerZeroSession,
+  conversation: ConversationRecord,
+  message: string,
+  reply: string,
+  toolName: string,
+  toolStatus: string,
+): Promise<CeoMessageResult> {
+  const safeReply = reply
+    .replace(/<departify_tool_call>[\s\S]*?<\/departify_tool_call>/gi, "")
+    .trim();
+  const finalReply = safeReply || "La operación ha terminado con un estado verificable.";
+  try {
+    await session.conversations.addMessage(conversation.id, "assistant", finalReply);
+  } catch (cause) {
+    console.info("[runtime-business-context]", {
+      event: "assistant_persist_failed",
+      organizationId: session.organizationId,
+      error: cause instanceof Error ? cause.message : "unknown",
+    });
+  }
+  session.state.conversation = [
+    ...session.state.conversation,
+    { role: "user", content: message },
+    { role: "assistant", content: finalReply },
+  ];
+  const intent = runtimeIntent(toolName);
+  const state = toolStatus === "success" || toolStatus === "accepted_unverified"
+    ? "tool_completed" as const
+    : toolStatus === "blocked"
+      ? "blocked" as const
+      : "error" as const;
+  return {
+    organizationId: session.organizationId,
+    reply: finalReply,
+    events: [
+      {
+        kind: "transcript",
+        role: "assistant",
+        content: finalReply,
+        speaker: "departify",
+      },
+      {
+        kind: "work_state",
+        state,
+        message: finalReply,
+      },
+    ],
+    routing: {
+      intent,
+      departments: [],
+      rationale: `OpenClaw selected the authorized normalized tool ${toolName}.`,
+    },
+    connectionSuggestion: null,
+    pendingToolId: null,
     conversationId: conversation.id,
   };
 }
@@ -4927,6 +5353,8 @@ export interface ToolConnectionView {
   readonly toolId: string;
   readonly label: string;
   readonly capability: string;
+  /** Capabilities exposed by the verified connection, when known. */
+  readonly capabilities?: readonly string[];
   readonly category: string;
   /** Business domains this tool belongs to (primary first). */
   readonly domains: readonly ToolDomain[];
@@ -4969,10 +5397,12 @@ async function buildCatalogConnectionViews(
       : undefined;
     const category = locale === "en" ? tool.categoryEn : tool.categoryEs;
     if (!connection) {
+      const definition = CONNECTION_DEFINITIONS.find((entry) => entry.id === tool.id);
       return {
         toolId: tool.id,
         label: tool.label,
         capability: tool.capability,
+        ...(definition ? { capabilities: definition.capabilities.map((entry) => entry.id) } : {}),
         category,
         domains: domainsFor(tool.id),
         state: "available",
@@ -4994,6 +5424,12 @@ async function buildCatalogConnectionViews(
       toolId: tool.id,
       label: tool.label,
       capability: tool.capability,
+      ...(() => {
+        const definition = CONNECTION_DEFINITIONS.find((entry) => entry.id === tool.id);
+        return definition
+          ? { capabilities: definition.capabilities.map((entry) => entry.id) }
+          : {};
+      })(),
       category,
       domains: domainsFor(tool.id),
       state: consolidatedLifecycle,

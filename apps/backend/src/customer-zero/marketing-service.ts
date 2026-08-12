@@ -57,8 +57,11 @@ import { publicCredentialSource } from "./credential-resolver.js";
 import {
   compileDepartmentContext,
   renderCompiledContextForEngine,
+  compileRuntimeBusinessContext,
+  renderRuntimeBusinessContextForEngine,
   type CompiledDepartmentContext,
 } from "./department-context-compiler.js";
+import { buildRuntimeCapabilityManifest } from "./capability-manifest.js";
 import type { CustomerZeroSession } from "./customer-zero-session.js";
 import type { DepartmentResult, DepartmentTask } from "./department-work.js";
 import { MARKETING_ROSTER } from "./marketing-roster.js";
@@ -741,6 +744,28 @@ export class MarketingService {
   }): Promise<ElviraMessageOutput> {
     const compiled = compileDepartmentContext(input.session);
     const engineContext = renderCompiledContextForEngine(compiled);
+    const [companyDna, runtimeApprovals, runtimeRecentActivity] = await Promise.all([
+      this.companyDna?.get(input.organizationId) ?? Promise.resolve(null),
+      this.approvalsRepo.list(input.organizationId, "marketing"),
+      this.activityRepo.listRecent(input.organizationId, "marketing", 8),
+    ]);
+    const runtimeConnections = [...input.session.state.connections.values()].map((connection) => ({
+      toolId: connection.toolId,
+      label: connection.label,
+      state: connection.lifecycle ?? connection.status,
+      capabilities: [connection.capability],
+    }));
+    const runtimeCapabilities = buildRuntimeCapabilityManifest(runtimeConnections);
+    const runtimeContext = compileRuntimeBusinessContext({
+      session: input.session,
+      companyDna,
+      capabilities: runtimeCapabilities,
+      connections: runtimeConnections,
+      tasks: [],
+      results: [],
+      approvals: runtimeApprovals,
+      recentActivity: runtimeRecentActivity,
+    });
 
     const active = await this.activeObjective(input.organizationId);
     const engineSessionId = await this.ensureEngineSession(input.organizationId);
@@ -748,6 +773,7 @@ export class MarketingService {
     const result = await this.engine.sendMessage({
       sessionId: engineSessionId,
       message: engineMessage,
+      runtimeContext: renderRuntimeBusinessContextForEngine(runtimeContext, "[]"),
     });
     const reply = result.text || this.fallbackReply(input.locale);
 

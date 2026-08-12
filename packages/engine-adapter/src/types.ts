@@ -21,6 +21,21 @@ export interface EngineSendMessageInput {
   message: string;
   /** Optional OpenClaw model override (provider/model). Defaults to agent model. */
   model?: string;
+  /** Safe, structured runtime context rendered by the provider adapter. */
+  runtimeContext?: string;
+  /** Normalized Departify business tools available for this turn. */
+  businessTools?: readonly EngineBusinessToolDefinition[];
+  /** Structured result from a backend-authorized business tool call. */
+  toolResult?: string;
+}
+
+/** Provider-neutral business tool metadata. Never contains credentials. */
+export interface EngineBusinessToolDefinition {
+  readonly name: string;
+  readonly description: string;
+  readonly requiredCapability?: string;
+  readonly sideEffect: boolean;
+  readonly inputSchema: Readonly<Record<string, unknown>>;
 }
 
 export type EngineMessageStatus = "completed" | "failed";
