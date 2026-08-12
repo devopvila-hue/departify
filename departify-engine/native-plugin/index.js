@@ -81,11 +81,11 @@ function toolParameters(name) {
     case "departify.company.context":
       return { type: "object", properties: { section: { type: "string", enum: ["summary", "objective", "marketing", "all"] } }, additionalProperties: false };
     case "departify.email.list":
-      return { type: "object", properties: { limit: { type: "integer", minimum: 1, maximum: 20 } }, additionalProperties: false };
+      return { type: "object", properties: { limit: { type: "integer", minimum: 1, maximum: 20, description: "Number of records to return" }, offset: { type: "integer", minimum: 0, maximum: 50, description: "Number of newest records to skip for a follow-up" } }, additionalProperties: false };
     case "departify.email.search":
-      return { type: "object", required: ["query"], properties: { query: string("Search terms") , limit: { type: "integer", minimum: 1, maximum: 20 } }, additionalProperties: false };
+      return { type: "object", required: ["query"], properties: { query: string("Search terms") , limit: { type: "integer", minimum: 1, maximum: 20 }, offset: { type: "integer", minimum: 0, maximum: 50, description: "Number of newest matching records to skip for a follow-up" } }, additionalProperties: false };
     case "departify.calendar.list":
-      return { type: "object", properties: { range: string("today, tomorrow, week, or upcoming") }, additionalProperties: false };
+      return { type: "object", properties: { range: string("today, tomorrow, week, or upcoming"), timeOfDay: { type: "string", enum: ["morning", "afternoon", "evening"], description: "Optional part of the requested day" } }, additionalProperties: false };
     case "departify.drive.search":
       return { type: "object", properties: { query: string("Optional file or folder search terms"), parentId: string("Optional authorized parent folder id"), mimeType: string("Optional MIME type filter"), includeFolders: { type: "boolean", description: "List folders instead of searching file content" }, limit: { type: "integer", minimum: 1, maximum: 50 } }, additionalProperties: false };
     case "departify.drive.read":

@@ -45,6 +45,8 @@ test("registers the closed read-only native tool surface", async () => {
   const company = tools.find((tool) => tool.name === "departify.company.context");
   assert.deepEqual(company.parameters.properties.section.enum, ["summary", "objective", "marketing", "all"]);
   assert.equal(company.parameters.additionalProperties, false);
+  assert.equal(tools.find((tool) => tool.name === "departify.email.list").parameters.properties.offset.type, "integer");
+  assert.deepEqual(tools.find((tool) => tool.name === "departify.calendar.list").parameters.properties.timeOfDay.enum, ["morning", "afternoon", "evening"]);
   assert.equal(tools.some((tool) => tool.name.includes("send") || tool.name.includes("create")), false);
 });
 

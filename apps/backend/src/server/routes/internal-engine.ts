@@ -14,7 +14,7 @@ import { resolveCompanyDnaStore } from "../../customer-zero/company-readiness.js
 import {
   buildCanonicalConnectionViews,
   buildMarketingOperationalActivity,
-  readEmailAnswer,
+  readEmailNativeResult,
   runCalendarReadTurn,
   requireSession,
   workStoreForRoutes,
@@ -84,6 +84,19 @@ function nativeArgs(value: unknown): Record<string, unknown> {
 
 function nativeText(args: Record<string, unknown>, key: string): string {
   return typeof args[key] === "string" ? args[key].trim() : "";
+}
+
+function nativeBoundedInt(
+  args: Record<string, unknown>,
+  key: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const value = typeof args[key] === "number" ? args[key] : Number(args[key]);
+  return Number.isFinite(value)
+    ? Math.min(maximum, Math.max(minimum, Math.trunc(value)))
+    : fallback;
 }
 
 function runtimeProviderUnavailable(reply: string): boolean {
@@ -336,18 +349,38 @@ export async function registerInternalEngineRoutes(
           capabilities: safeNativeCapabilities(context.capabilities),
         };
       } else if (toolName === "departify.email.list" || toolName === "departify.email.search") {
-        const query = toolName === "departify.email.search" ? nativeText(args, "query") : "mis últimos correos";
-        const summary = await readEmailAnswer(
+        const nativeEmail = await readEmailNativeResult(
           identity.organizationId,
-          toolName === "departify.email.search" ? `busca en el correo de empresa ${query}` : query,
-          session.state.locale,
-          session,
+          {
+            ...(toolName === "departify.email.search"
+              ? { query: nativeText(args, "query") }
+              : {}),
+            locale: session.state.locale,
+            session,
+            limit: nativeBoundedInt(args, "limit", 5, 1, 20),
+            offset: nativeBoundedInt(args, "offset", 0, 0, 50),
+          },
         );
-        const blocked = !summary || runtimeProviderUnavailable(summary);
-        result = { status: blocked ? "blocked" : "success", operation: toolName, summary: summary ?? "No hay resultados disponibles." };
+        const blocked = !nativeEmail || runtimeProviderUnavailable(nativeEmail.summary);
+        result = {
+          status: blocked ? "blocked" : "success",
+          operation: toolName,
+          summary: nativeEmail?.summary ?? "No hay resultados disponibles.",
+          ...(nativeEmail ? { data: { items: nativeEmail.items, totalFound: nativeEmail.totalFound } } : {}),
+        };
       } else if (toolName === "departify.calendar.list") {
-        const outcome = await runCalendarReadTurn(session, nativeText(args, "range") || "mis próximos eventos", isEs);
-        result = { status: runtimeProviderUnavailable(outcome.reply) ? "blocked" : "success", operation: toolName, summary: outcome.reply };
+        const outcome = await runCalendarReadTurn(
+          session,
+          nativeText(args, "range") || "mis próximos eventos",
+          isEs,
+          { timeOfDay: nativeText(args, "timeOfDay") },
+        );
+        result = {
+          status: runtimeProviderUnavailable(outcome.reply) ? "blocked" : "success",
+          operation: toolName,
+          summary: outcome.reply,
+          ...(outcome.data ? { data: outcome.data } : {}),
+        };
       } else if (toolName === "departify.drive.search" || toolName === "departify.drive.read") {
         const driveCapability = toolName === "departify.drive.read" ? "drive.read" : "drive.search";
         const identityForDrive = await findOperationalGoogleIdentityForOrg(identity.organizationId, driveCapability);

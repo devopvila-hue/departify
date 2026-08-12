@@ -4848,14 +4848,15 @@ export async function runCalendarReadTurn(
   session: CustomerZeroSession,
   message: string,
   isEs: boolean,
-): Promise<{ reply: string }> {
+  options?: { readonly timeOfDay?: string },
+): Promise<{ reply: string; data?: { readonly events: readonly CalendarReadEvent[] } }> {
   const identity = await findOperationalGoogleIdentityForOrg(session.organizationId, "calendar.read");
   if (!identity) {
     return { reply: isEs
       ? "Calendar todavía no está activado. Puedes dar acceso a Calendar desde Conexiones."
       : "Calendar is not activated yet. You can give Calendar access from Connections." };
   }
-  const range = calendarRange(message);
+  const range = calendarRange(message, options?.timeOfDay);
   const receipt = startExecutionReceipt({
     operationId: connectorOperationId("calendar_read"),
     intent: "calendar.read",
@@ -4874,17 +4875,24 @@ export async function runCalendarReadTurn(
     return { reply: calendarFailure(result.message, isEs) };
   }
   const events = result.value ?? [];
+  const safeEvents = events.map((event) => ({
+    id: event.id,
+    summary: event.summary,
+    startIso: event.startIso,
+    endIso: event.endIso,
+    ...(event.location ? { location: event.location } : {}),
+  }));
   session.state.lastExecutionReceipt = completeExecutionReceipt(receipt, {
     safeMetadata: { resultCount: events.length },
   });
-  if (events.length === 0) return { reply: isEs ? "No tienes reuniones en ese periodo." : "You have no meetings in that period." };
+  if (events.length === 0) return { reply: isEs ? "No tienes reuniones en ese periodo." : "You have no meetings in that period.", data: { events: [] } };
   const lines = events.slice(0, 8).map((event) =>
     `• ${formatCalendarTime(event.startIso, range.timezone)} — ${event.summary}${event.location ? ` (${event.location})` : ""}`,
   );
   const prefix = /\b(hueco|disponible)\b/i.test(message)
     ? (isEs ? "No veo eventos bloqueando toda la tarde; estos son los compromisos que sí tienes:" : "I do not see events blocking the whole afternoon; these are the commitments I found:")
     : isEs ? "Tu agenda:" : "Your calendar:";
-  return { reply: `${prefix}\n\n${lines.join("\n")}` };
+  return { reply: `${prefix}\n\n${lines.join("\n")}`, data: { events: safeEvents } };
 }
 
 async function runCalendarCreateTurn(
@@ -5195,7 +5203,7 @@ function connectorOperationId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function calendarRange(message: string): { start: string; end: string; timezone: string } {
+function calendarRange(message: string, timeOfDay?: string): { start: string; end: string; timezone: string } {
   const timezone = businessTimezone();
   const now = new Date();
   const base = localDateParts(now, timezone);
@@ -5203,11 +5211,15 @@ function calendarRange(message: string): { start: string; end: string; timezone:
   const isUpcoming = /\b(pr[oó]xim(?:o|os|a|as)|siguientes?|upcoming|next)\b/i.test(message);
   const startDay = addLocalDays(base, dayOffset);
   const isWeek = /\b(semana|week)\b/i.test(message);
-  const start = isUpcoming ? now : zonedDate(startDay, 0, 0, timezone);
+  const periodStartHour = timeOfDay === "morning" ? 0 : timeOfDay === "afternoon" ? 12 : timeOfDay === "evening" ? 18 : 0;
+  const periodEndHour = timeOfDay === "morning" ? 12 : timeOfDay === "afternoon" ? 18 : timeOfDay === "evening" ? 24 : 24;
+  const start = isUpcoming ? now : zonedDate(startDay, periodStartHour, 0, timezone);
   const end = isWeek
     ? zonedDate(addLocalDays(startDay, 7), 23, 59, timezone)
     : isUpcoming
       ? zonedDate(addLocalDays(startDay, 30), 23, 59, timezone)
+    : timeOfDay
+      ? zonedDate(addLocalDays(startDay, periodEndHour === 24 ? 1 : 0), periodEndHour === 24 ? 0 : periodEndHour, 0, timezone)
       : zonedDate(addLocalDays(startDay, 1), 0, 0, timezone);
   return { start: start.toISOString(), end: end.toISOString(), timezone };
 }
@@ -5789,6 +5801,201 @@ function buildEmailConnectionSuggestion(
  * provider internals.
  */
 export async function readEmailAnswer(
+  organizationId: string,
+  message: string,
+  locale: SupportedLocale,
+  session?: CustomerZeroSession,
+): Promise<string | null> {
+  const result = await readEmailLegacyAnswer(organizationId, message, locale, session);
+  return result;
+}
+
+export interface NativeEmailItem {
+  readonly id: string;
+  readonly threadId: string;
+  readonly sender: string;
+  readonly senderEmail: string;
+  readonly subject: string;
+  readonly receivedAt: string;
+  readonly snippet: string;
+  readonly unread: boolean;
+}
+
+export interface NativeEmailReadResult {
+  readonly summary: string;
+  readonly items: readonly NativeEmailItem[];
+  readonly totalFound: number;
+}
+
+export interface CalendarReadEvent {
+  readonly id: string;
+  readonly summary: string;
+  readonly startIso: string;
+  readonly endIso: string;
+  readonly location?: string;
+}
+
+export async function readEmailNativeResult(
+  organizationId: string,
+  input: {
+    readonly message?: string;
+    readonly query?: string;
+    readonly locale: SupportedLocale;
+    readonly session?: CustomerZeroSession;
+    readonly limit?: number;
+    readonly offset?: number;
+  },
+): Promise<NativeEmailReadResult | null> {
+  const message = input.message ?? (input.query ? `busca correos sobre ${input.query}` : `dame los ${input.limit ?? 5} últimos correos`);
+  const preferred = /correo\s+de\s+empresa|hostinger/i.test(message)
+    ? "hostinger" as const
+    : /\bgmail\b|google\s+mail/i.test(message)
+      ? "google" as const
+      : undefined;
+  const provider = await resolveOperationalEmailProvider(organizationId, preferred);
+  const limit = Math.min(10, Math.max(1, Math.trunc(input.limit ?? 5)));
+  const offset = Math.min(50, Math.max(0, Math.trunc(input.offset ?? 0)));
+  const maxResults = Math.min(10, limit + offset);
+  if (provider === "corporate") return readCorporateEmailNativeResult(organizationId, message, input.locale, input.session, maxResults, offset);
+  if (provider === "hostinger") return readHostingerEmailNativeResult(message, input.locale, input.session, maxResults, offset);
+  if (provider === "google") return runGmailNativeRead(organizationId, message, input.locale, input.session, maxResults, offset);
+  return null;
+}
+
+function nativeEmailResult(
+  summary: string,
+  items: readonly NativeEmailItem[],
+  totalFound: number,
+): NativeEmailReadResult {
+  return { summary, items, totalFound };
+}
+
+async function runGmailNativeRead(
+  organizationId: string,
+  message: string,
+  locale: SupportedLocale,
+  session: CustomerZeroSession | undefined,
+  maxResults: number,
+  offset: number,
+): Promise<NativeEmailReadResult | null> {
+  const clientId = process.env["GOOGLE_OAUTH_CLIENT_ID"]?.trim();
+  const clientSecret = process.env["GOOGLE_OAUTH_CLIENT_SECRET"]?.trim();
+  if (!clientId || !clientSecret) return null;
+  const target = await findOperationalGoogleIdentityForOrg(organizationId, "email.read");
+  if (!target) return null;
+  const plan = gmailDeriveReadPlan(message);
+  const adapter = new (await import("../../customer-zero/gmail-adapter.js")).GmailAdapter(
+    { organizationId, userId: target.userId },
+    clientId,
+    clientSecret,
+  );
+  const result = await adapter.searchMessages(plan.query, maxResults);
+  if (!result.success || !result.value) return null;
+  const items = result.value.map(summarizeGmailMessage);
+  if (session && result.value[0]) {
+    session.state.lastEmailContext = {
+      provider: "google",
+      providerMessageId: result.value[0].id,
+      providerThreadId: result.value[0].threadId,
+      subject: result.value[0].subject,
+      senderEmail: result.value[0].from.email,
+    };
+  }
+  const selected = items.slice(offset);
+  return nativeEmailResult(
+    renderGmailSummary({ intent: plan.intent, items: selected, locale, totalFound: items.length, requestedMaxResults: maxResults }),
+    selected,
+    items.length,
+  );
+}
+
+async function readHostingerEmailNativeResult(
+  message: string,
+  locale: SupportedLocale,
+  session: CustomerZeroSession | undefined,
+  maxResults: number,
+  offset: number,
+): Promise<NativeEmailReadResult | null> {
+  const plan = gmailDeriveReadPlan(message);
+  const adapter = new HostingerEmailAdapter();
+  const raw = plan.intent === "search"
+    ? await adapter.searchMessages(message, maxResults)
+    : await adapter.readRecentMessages(maxResults);
+  const items = raw.map((m) => ({
+    id: m.providerMessageId,
+    threadId: m.providerThreadId ?? m.providerMessageId,
+    sender: m.from.displayName
+      ? `${decodeHtmlEntities(m.from.displayName)} <${decodeHtmlEntities(m.from.email)}>`
+      : decodeHtmlEntities(m.from.email),
+    senderEmail: decodeHtmlEntities(m.from.email),
+    subject: decodeHtmlEntities(m.subject) || (locale === "en" ? "(no subject)" : "(sin asunto)"),
+    receivedAt: m.receivedAt,
+    snippet: decodeHtmlEntities(m.preview),
+    unread: m.unread,
+  }));
+  if (session && raw[0]) {
+    session.state.lastEmailContext = {
+      provider: "hostinger",
+      providerMessageId: raw[0].providerMessageId,
+      ...(raw[0].providerThreadId ? { providerThreadId: raw[0].providerThreadId } : {}),
+      subject: raw[0].subject,
+      senderEmail: raw[0].from.email,
+    };
+  }
+  const selected = items.slice(offset);
+  return nativeEmailResult(
+    renderGmailSummary({ intent: plan.intent, items: selected, locale, totalFound: items.length, requestedMaxResults: maxResults }),
+    selected,
+    items.length,
+  );
+}
+
+async function readCorporateEmailNativeResult(
+  organizationId: string,
+  message: string,
+  locale: SupportedLocale,
+  session: CustomerZeroSession | undefined,
+  maxResults: number,
+  offset: number,
+): Promise<NativeEmailReadResult | null> {
+  const summaries = await getCorporateEmailStore().listForOrg(organizationId);
+  const target = summaries.find((s) => s.operationalVerifiedAt !== null);
+  if (!target) return null;
+  const account = await getCorporateEmailStore().get(organizationId, target.userId);
+  if (!account) return null;
+  const { readCorporateInbox } = await import("../../customer-zero/corporate-email-adapter.js");
+  const plan = gmailDeriveReadPlan(message);
+  const raw = await readCorporateInbox(account, maxResults);
+  const items = raw.map((m) => ({
+    id: m.id,
+    threadId: m.threadId,
+    sender: m.from.displayName
+      ? `${decodeHtmlEntities(m.from.displayName)} <${decodeHtmlEntities(m.from.email)}>`
+      : decodeHtmlEntities(m.from.email),
+    senderEmail: decodeHtmlEntities(m.from.email),
+    subject: decodeHtmlEntities(m.subject) || (locale === "en" ? "(no subject)" : "(sin asunto)"),
+    receivedAt: m.date,
+    snippet: decodeHtmlEntities(m.snippet),
+    unread: m.isUnread,
+  }));
+  if (session && raw[0]) {
+    session.state.lastEmailContext = {
+      provider: "corporate",
+      providerMessageId: raw[0].id,
+      providerThreadId: raw[0].threadId,
+      subject: raw[0].subject,
+      senderEmail: raw[0].from.email,
+    };
+  }
+  const selected = items.slice(offset);
+  return nativeEmailResult(
+    renderGmailSummary({ intent: plan.intent, items: selected, locale, totalFound: items.length, requestedMaxResults: maxResults }),
+    selected,
+    items.length,
+  );
+}
+
+async function readEmailLegacyAnswer(
   organizationId: string,
   message: string,
   locale: SupportedLocale,
