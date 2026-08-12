@@ -3767,7 +3767,7 @@ export async function processCeoMessage(
         toolNames: runtime.nativeToolNames,
       });
       const nativeContext = renderRuntimeBusinessContextForNativeEngine(runtime.context);
-      let nativeResult = await runtime.engine.sendMessage({
+      const nativeResult = await runtime.engine.sendMessage({
         sessionId: runtime.sessionId,
         // Native mode receives the CEO's actual utterance. The existing
         // operational normalizer belongs to ENGINE 02's legacy protocol and
@@ -3776,27 +3776,7 @@ export async function processCeoMessage(
         runtimeContext: nativeContext,
         nativeBusinessTools: true,
       });
-      let selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
-      const nativeReadIntent = routeCommandCenter(baseInput).decision.intent;
-      const retryableNativeRead = [
-        "calendar_read",
-        "drive_query",
-        "external_tool_query",
-        "multi_capability",
-      ].includes(nativeReadIntent);
-      if (
-        nativeResult.status === "completed" &&
-        selectedTools.length === 0 &&
-        retryableNativeRead
-      ) {
-        nativeResult = await runtime.engine.sendMessage({
-          sessionId: runtime.sessionId,
-          message,
-          runtimeContext: `${nativeContext}\nNATIVE_READ_RETRY:\nThe previous response did not invoke a required native read capability. Re-evaluate the current CEO message and call every relevant listed native capability before answering.`,
-          nativeBusinessTools: true,
-        });
-        selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
-      }
+      const selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
       if (trace) {
         trace.selectedToolNames = selectedTools;
         trace.toolCallCount = selectedTools.length;
