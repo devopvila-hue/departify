@@ -39,7 +39,9 @@ ENV OPENCLAW_VERSION=${OPENCLAW_VERSION} \
 COPY --chown=root:root --chmod=0755 scripts/entrypoint.sh /app/scripts/entrypoint.sh
 COPY --chown=root:root --chmod=0755 scripts/render-config.mjs /app/scripts/render-config.mjs
 COPY --chown=root:root --chmod=0644 bootstrap/ /app/bootstrap/
-COPY --chown=root:root --chmod=0644 native-plugin/ /app/native-plugin/
+# OpenClaw drops to uid 1000 before loading plugins; the directory itself
+# must be traversable by that user even though plugin files stay read-only.
+COPY --chown=root:root --chmod=0755 native-plugin/ /app/native-plugin/
 
 # Health probe: combine /healthz (liveness) and /readyz (readiness) by hitting
 # the same loopback port the gateway binds to. The official docker-healthcheck.js
