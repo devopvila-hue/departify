@@ -12,7 +12,8 @@ function runtimeConfig() {
 
 function sessionKeyFromContext(ctx) {
   const sessionKey = typeof ctx?.sessionKey === "string" ? ctx.sessionKey.trim() : "";
-  if (!/^departify:ceo:[^:]+$/.test(sessionKey)) {
+  const agentId = typeof ctx?.agentId === "string" ? ctx.agentId.trim() : "main";
+  if (agentId !== "main" || !/^(?:departify:ceo:|agent:main:departify:ceo:)[^:]+$/.test(sessionKey)) {
     throw new Error("Departify native tool requires a scoped CEO session");
   }
   return sessionKey;
@@ -27,8 +28,8 @@ async function readJson(response) {
 }
 
 async function executeCompanyContext(ctx, params) {
-  const { apiUrl, runtimeToken } = runtimeConfig();
   const sessionKey = sessionKeyFromContext(ctx);
+  const { apiUrl, runtimeToken } = runtimeConfig();
   const tokenResponse = await fetch(`${apiUrl}/internal/native-tools/runtime-token`, {
     method: "POST",
     headers: {

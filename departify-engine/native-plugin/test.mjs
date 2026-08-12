@@ -50,3 +50,13 @@ test("uses trusted session identity and returns the structured gateway result", 
     delete process.env.DEPARTIFY_RUNTIME_TOKEN;
   }
 });
+
+test("accepts OpenClaw's scoped agent session key but rejects another agent", async () => {
+  let factory;
+  plugin.register({ registerTool(candidate) { factory = candidate; } });
+  assert.doesNotThrow(() => factory({ sessionKey: "agent:main:departify:ceo:org-a", agentId: "main" }));
+  await assert.rejects(
+    () => factory({ sessionKey: "agent:other:departify:ceo:org-a", agentId: "other" })[0].execute("call-2", {}),
+    /scoped CEO session/,
+  );
+});

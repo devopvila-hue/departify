@@ -119,6 +119,19 @@ export async function registerInternalEngineRoutes(
         ...(connection.capabilities ? { capabilities: connection.capabilities } : {}),
       }));
       const capabilities = buildRuntimeCapabilityManifest(runtimeConnections);
+      const companyContextCapability = capabilities.capabilities.find(
+        (capability) => capability.id === "company.context",
+      );
+      if (!companyContextCapability?.available) {
+        console.info("[native-tool-trace]", {
+          nativeTool: true,
+          toolName: NATIVE_TOOL_NAME,
+          organizationHash: safeTraceHash(validation.claims.organizationId),
+          authorized: false,
+          status: "capability_unavailable",
+        });
+        return reply.code(403).send({ error: "capability_unavailable" });
+      }
       const context = compileRuntimeBusinessContext({
         session,
         companyDna,

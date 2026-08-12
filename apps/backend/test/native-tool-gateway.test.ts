@@ -8,6 +8,7 @@ import { issueScopedRuntimeToken } from "../src/customer-zero/runtime-identity.j
 
 class GatewayTestEngine implements EngineAdapter {
   readonly inputs: EngineSendMessageInput[] = [];
+  nativeSelection = true;
   async createSession(input?: { sessionId?: string }): Promise<EngineSession> {
     return { id: input?.sessionId ?? "ceo:test", status: "active" };
   }
@@ -17,7 +18,7 @@ class GatewayTestEngine implements EngineAdapter {
       sessionId: input.sessionId,
       text: input.nativeBusinessTools ? "Contexto de empresa consultado." : "ok",
       status: "completed",
-      ...(input.nativeBusinessTools
+      ...(input.nativeBusinessTools && this.nativeSelection
         ? { toolCalls: [{ name: "departify.company.context", status: "completed" as const }] }
         : {}),
     };
@@ -33,21 +34,30 @@ class GatewayTestEngine implements EngineAdapter {
 describe("native company context gateway", () => {
   let server: FastifyInstance;
   let engine: GatewayTestEngine;
+  let offServer: FastifyInstance;
+  let offEngine: GatewayTestEngine;
   const secret = "native-gateway-test-secret";
 
   beforeAll(async () => {
     const tenant = makeFakeTenant();
     engine = new GatewayTestEngine();
+    offEngine = new GatewayTestEngine();
     server = await buildServer(loadBackendConfig(), {
       auth: tenant,
       organizations: tenant,
       engine,
       nativeBusinessTools: true,
     });
+    offServer = await buildServer(loadBackendConfig(), {
+      auth: tenant,
+      organizations: tenant,
+      engine: offEngine,
+    });
   });
 
   afterEach(() => {
     delete process.env.DEPARTIFY_RUNTIME_TOKEN;
+    engine.nativeSelection = true;
   });
 
   it("returns bounded canonical context and ignores model organization arguments", async () => {
@@ -130,5 +140,58 @@ describe("native company context gateway", () => {
     expect(lastInput?.nativeBusinessTools).toBe(true);
     expect(lastInput?.runtimeContext).toBeUndefined();
     expect(lastInput?.businessTools).toBeUndefined();
+  });
+
+  it("does not report native success when OpenClaw returns no native selection", async () => {
+    engine.nativeSelection = false;
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Native No Selection",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const organizationId = start.json().organizationId as string;
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/command-center/message`,
+      headers: { authorization: "Bearer token-a" },
+      payload: { message: "¿Qué sabes de mi empresa?" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().reply).not.toContain("Contexto de empresa consultado");
+    expect(engine.inputs.at(-1)?.nativeBusinessTools).toBe(true);
+  });
+
+  it("keeps ENGINE 02 textual mode when the native flag is off", async () => {
+    const start = await offServer.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Legacy Route",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const organizationId = start.json().organizationId as string;
+    const response = await offServer.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/command-center/message`,
+      headers: { authorization: "Bearer token-a" },
+      payload: { message: "¿Qué sabes de mi empresa?" },
+    });
+    expect(response.statusCode).toBe(200);
+    const input = offEngine.inputs.at(-1);
+    expect(input?.nativeBusinessTools).toBeUndefined();
+    expect(input?.runtimeContext).toContain("DEPARTIFY_RUNTIME_BUSINESS_CONTEXT");
+    expect(input?.businessTools).toBeDefined();
   });
 });

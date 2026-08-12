@@ -52,7 +52,25 @@ describe("native runtime identity", () => {
       organizationId: "org-a",
       agentId: "main",
     });
+    expect(organizationFromOpenClawSessionKey("agent:main:departify:ceo:org-a")).toEqual({
+      organizationId: "org-a",
+      agentId: "main",
+    });
     expect(organizationFromOpenClawSessionKey("departify:ceo:org-a:org-b")).toBeNull();
+    expect(organizationFromOpenClawSessionKey("agent:other:departify:ceo:org-a")).toBeNull();
     expect(organizationFromOpenClawSessionKey("agent:main:main")).toBeNull();
+  });
+
+  it("rejects a scoped token issued for another runtime agent", () => {
+    const issued = issueScopedRuntimeToken({
+      secret: "runtime-secret",
+      organizationId: "org-a",
+      sessionKey: "departify:ceo:org-a",
+      agentId: "other-agent",
+    });
+    expect(validateScopedRuntimeToken({
+      token: issued.token,
+      secret: "runtime-secret",
+    })).toMatchObject({ valid: false, reason: "invalid_claims" });
   });
 });

@@ -95,6 +95,7 @@ export function validateScopedRuntimeToken(input: {
   if (
     claims.sub !== "openclaw-native-tool" ||
     claims.aud !== (input.expectedAudience ?? DEFAULT_AUDIENCE) ||
+    claims.agentId !== "main" ||
     !claims.organizationId ||
     !claims.sessionKey ||
     !Number.isFinite(claims.exp) ||
@@ -113,7 +114,7 @@ export function validateScopedRuntimeToken(input: {
 export function organizationFromOpenClawSessionKey(
   sessionKey: string,
 ): { organizationId: string; agentId: string } | null {
-  const match = /^departify:ceo:([^:]+)$/.exec(sessionKey.trim());
+  const match = /^(?:departify:ceo:|agent:main:departify:ceo:)([^:]+)$/.exec(sessionKey.trim());
   if (!match?.[1]) return null;
   return { organizationId: match[1], agentId: "main" };
 }

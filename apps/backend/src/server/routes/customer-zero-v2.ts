@@ -3036,10 +3036,6 @@ function shouldBypassRuntimeForPendingOperation(
   );
 }
 
-function isBusinessObjectiveRequest(message: string): boolean {
-  return /\b(?:quiero|necesito|busco|me\s+gustar[ií]a|objetivo)\b[\s\S]*\b(?:conseguir|captar|ganar|aumentar|mejorar|crecer|vender|clientes?|ventas?|ingresos?)\b/i.test(message);
-}
-
 function newCeoTurnTrace(
   session: CustomerZeroSession,
   requestCorrelationId: string,
@@ -3722,20 +3718,6 @@ export async function processCeoMessage(
   }
 
   if (runtime?.nativeBusinessTools) {
-    const nativeCompanyContextRequest = !isCalendarCreateRequest(operationalMessage) &&
-      !isCalendarReadRequest(operationalMessage) &&
-      !isEmailReadQuestion(operationalMessage) &&
-      !isEmailReadFollowUp(operationalMessage) &&
-      !isEmailReplyRequest(operationalMessage) &&
-      !isEmailSendRequest(operationalMessage) &&
-      !isDriveRequest(operationalMessage) &&
-      !/\b(?:tarea|tareas)\b/i.test(operationalMessage) &&
-      !isBusinessObjectiveRequest(operationalMessage);
-    if (!nativeCompanyContextRequest) {
-      // The vertical slice is read-only company context. Existing
-      // capability-specific routing remains authoritative for all other
-      // operational families and for business objectives.
-    } else {
     if (trace) {
       trace.capabilityIds = ["company.context"];
       trace.exposedToolNames = ["departify.company.context"];
@@ -3743,7 +3725,10 @@ export async function processCeoMessage(
     try {
       const nativeResult = await runtime.engine.sendMessage({
         sessionId: runtime.sessionId,
-        message: operationalMessage,
+        // Native mode receives the CEO's actual utterance. The existing
+        // operational normalizer belongs to ENGINE 02's legacy protocol and
+        // must not become a native-tool intent classifier.
+        message,
         nativeBusinessTools: true,
       });
       const selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
@@ -3782,7 +3767,6 @@ export async function processCeoMessage(
         authorized: false,
         status: "engine_failed",
       });
-    }
     }
   }
 
