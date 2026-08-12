@@ -876,6 +876,8 @@ export const api = {
     getJson<{
       organizationId: string;
       results: DepartmentResult[];
+      dashboardCount?: number;
+      dashboardLimit?: number;
     }>(`/api/customer-zero/${org}/results`),
   inbox: (org: string, query?: { category?: string; state?: string; limit?: number }) => {
     const params = new URLSearchParams();

@@ -30,6 +30,8 @@ import {
 } from "./mautic-adapter.js";
 import {
   InMemoryDepartmentWorkStore,
+  MAX_ACTIVE_DASHBOARDS,
+  DASHBOARD_RESULT_CAPABILITIES,
   type DepartmentTask,
   type DepartmentResult,
   type DepartmentWorkStore,
@@ -344,6 +346,16 @@ export class DepartmentWorkExecutor {
    * conversation store.
    */
   async run(input: ExecuteWorkInput): Promise<ExecuteWorkOutput> {
+    // Dashboard capacity is a control-plane invariant. Check it before
+    // resolving credentials or invoking any provider so a sixth dashboard is
+    // never started or implied by the model.
+    if (
+      DASHBOARD_RESULT_CAPABILITIES.includes(input.capability as DepartmentWorkCapability) &&
+      await this.deps.workStore.countDashboardsForOrg(input.organizationId) >= MAX_ACTIVE_DASHBOARDS
+    ) {
+      return this.fail(input, "dashboard_limit", "The organization already has the maximum number of active dashboards.");
+    }
+
     // 1. Capability gating — refuse to run if the capability is not
     //    available for the org. This is what makes
     //    "promise-without-capability" structurally impossible.

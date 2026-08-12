@@ -10,6 +10,8 @@
  *       scrolled up and clicking it snaps back to the bottom.
  *   S4. A passive update does NOT yank the viewport down while the CEO
  *       is reading older history (scroll position preserved).
+ *   S5. Loading an existing conversation requests the latest-message
+ *       position after the history has rendered.
  */
 
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
@@ -230,5 +232,22 @@ describe("Central Chat UX P0 — chat interaction", () => {
       el.dispatchEvent(new Event("scroll"));
     });
     expect(el.scrollTop).toBe(100);
+  });
+
+  it("S5. an existing conversation restores the viewport to the latest message", async () => {
+    const { container } = renderChat();
+    await screen.findByText(/elvira toma la iniciativa/i);
+    const el = scroller(container);
+    setupScrollMetrics(el, 900, 300);
+
+    // The history load happens asynchronously. This render represents the
+    // first layout pass after the loaded transcript is in the DOM.
+    fireEvent.change(await screen.findByLabelText(/mensaje para departify/i), {
+      target: { value: "" },
+    });
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+    });
+    await waitFor(() => expect(el.scrollTop).toBe(el.scrollHeight));
   });
 });

@@ -65,12 +65,36 @@ export const UNSUPPORTED_PROMISE_PATTERNS: readonly RegExp[] = [
   /\blo\s+(dejo|dejare|dejaré)\s+fijado\b/i,
 ];
 
+/** Claims that describe execution already underway without naming a durable
+ * task/result. The control plane may only allow these when it can point to
+ * new persisted work created by the current request. */
+export const UNBACKED_WORK_CLAIM_PATTERNS: readonly RegExp[] = [
+  /\blo\s+estoy\s+(haciendo|extrayendo|generando|preparando|analizando|trabajando)\b/i,
+  /\b(?:extrayendo|aplicando\s+el\s+scoring|generando\s+el\s+gr[aá]fico|generando\s+el\s+dashboard)\b/i,
+  /\bdame\s+unos\s+minutos\b/i,
+  /\bte\s+lo\s+(?:entrego|dejo)\s+(?:en\s+)?(?:unos\s+minutos|resultados)\b/i,
+  /\b(?:estar[aá]|est[aá])\s+(?:disponible|listo|colgado)\b/i,
+  /\by[aá]\s+estoy\s+trabajando\s+en\s+ello\b/i,
+];
+
 /** True when a CEO reply contains a "promise without capability"
  *  pattern. The orchestrator must replace the engine's reply with
  *  an honest business-language fallback in that case. */
 export function detectUnsupportedPromise(reply: string): boolean {
   return UNSUPPORTED_PROMISE_PATTERNS.some((pattern) => pattern.test(reply));
 }
+
+export function detectUnbackedWorkClaim(reply: string): boolean {
+  return UNBACKED_WORK_CLAIM_PATTERNS.some((pattern) => pattern.test(reply));
+}
+
+export const MAX_ACTIVE_DASHBOARDS = 5;
+export const DASHBOARD_RESULT_CAPABILITIES: readonly DepartmentWorkCapability[] = [
+  "crm.contacts.list",
+  "crm.contacts.summary",
+  "crm.segments.list",
+  "crm.campaigns.list",
+];
 
 /** Mapping from a "results.publish" intent to the capability needed. */
 export const PROMISE_TO_CAPABILITY: Readonly<
@@ -192,6 +216,7 @@ export interface DepartmentWorkStore {
   createResult(input: CreateDepartmentResultInput): Promise<DepartmentResult>;
   getResult(id: string): Promise<DepartmentResult | null>;
   listResultsForOrg(organizationId: string, limit?: number): Promise<DepartmentResult[]>;
+  countDashboardsForOrg(organizationId: string): Promise<number>;
   /** New tasks / status changes since a given iso timestamp. */
   feedSince(organizationId: string, since: string): Promise<{
     tasks: readonly DepartmentTask[];
@@ -272,6 +297,12 @@ export class InMemoryDepartmentWorkStore implements DepartmentWorkStore {
       .filter((r) => r.organizationId === organizationId)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, limit);
+  }
+
+  async countDashboardsForOrg(organizationId: string): Promise<number> {
+    return [...this.results.values()].filter(
+      (result) => result.organizationId === organizationId && result.chart !== undefined,
+    ).length;
   }
 
   async feedSince(organizationId: string, since: string): Promise<{
@@ -392,6 +423,11 @@ export function departmentWorkFailureMessage(
   const base = es
     ? `Elvira no ha podido completar el análisis de ${task.summary}.`
     : `Elvira could not complete the analysis of ${task.summary}.`;
+  if (task.errorCode === "dashboard_limit") {
+    return es
+      ? "Ya hay 5 dashboards activos. No he creado otro. Elimina uno o pide que se reutilice/actualice uno existente."
+      : "There are already 5 active dashboards. I did not create another one. Delete one or reuse/update an existing dashboard.";
+  }
   if (task.errorCode === "auth") {
     return es
       ? `${base} Las credenciales de Mautic han fallado. Te paso a Conexiones para revisarlo.`

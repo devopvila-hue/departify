@@ -200,6 +200,16 @@ export class SupabaseDepartmentWorkStore implements DepartmentWorkStore {
     return (data ?? []).map((row) => mapResult(row as ResultRow));
   }
 
+  async countDashboardsForOrg(organizationId: string): Promise<number> {
+    const { count, error } = await this.admin
+      .from("department_results")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", organizationId)
+      .not("chart", "is", null);
+    if (error) throw error;
+    return count ?? 0;
+  }
+
   async feedSince(organizationId: string, since: string): Promise<{
     tasks: readonly DepartmentTask[];
     results: readonly DepartmentResult[];

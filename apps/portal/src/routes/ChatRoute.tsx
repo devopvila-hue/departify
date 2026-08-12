@@ -6,6 +6,7 @@ import {
   type CommandCenterEvent,
   type CommandCenterMessageResult,
   type ConversationView,
+  type DepartmentResult,
   type MaxActiveConversationsError,
   type MessageView,
 } from "@/app/api";
@@ -75,6 +76,7 @@ export function ChatRoute() {
     maxActive: number;
   }>({ open: false, activeCount: 0, maxActive: 5 });
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const [followRequested, setFollowRequested] = useState(false);
 
   const focusFromUrl = useMemo(() => {
     const params = new URLSearchParams(location.search);
@@ -109,6 +111,11 @@ export function ChatRoute() {
       setCurrentConversationId(conversationId);
       setCurrentSummary(data.conversation.summary ?? null);
       setHistoryOpen(false);
+      // History is rendered asynchronously. Request a single follow-to-last
+      // pass after the transcript has been committed; the effect below then
+      // moves the existing scroller to the bottom without fighting streaming
+      // or the user's later manual scroll.
+      setFollowRequested(true);
     },
     [organizationId],
   );
@@ -144,7 +151,6 @@ export function ChatRoute() {
   //   3. Conversation switch → snap to bottom.
   const stickToBottomRef = useRef(true);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
-  const [followRequested, setFollowRequested] = useState(false);
 
   // Observe whether the CEO is near the bottom of the transcript.
   useEffect(() => {
@@ -167,8 +173,18 @@ export function ChatRoute() {
     if (!followRequested) return;
     const node = scrollerRef.current;
     if (!node) return;
-    node.scrollTop = node.scrollHeight;
-    setFollowRequested(false);
+    const follow = () => {
+      node.scrollTop = node.scrollHeight;
+      setFollowRequested(false);
+    };
+    // Wait for the history DOM to be laid out before reading scrollHeight.
+    // This is one scheduled pass per explicit request, not a polling loop.
+    if (typeof window.requestAnimationFrame === "function") {
+      const frame = window.requestAnimationFrame(follow);
+      return () => window.cancelAnimationFrame(frame);
+    }
+    const timeout = window.setTimeout(follow, 0);
+    return () => window.clearTimeout(timeout);
   }, [followRequested, transcript, events]);
 
   // Auto-follow passive updates only while the CEO is near the bottom.
@@ -209,6 +225,12 @@ export function ChatRoute() {
                   content: result.summary + "\n\n" + result.content,
                 },
               ];
+            });
+            setEvents((prev) => {
+              if (prev.some((event) => event.kind === "result" && event.item.id === result.id)) {
+                return prev;
+              }
+              return [...prev, resultEvent(result)];
             });
           }
         }
@@ -644,6 +666,21 @@ function filterContextualEvents(
     if (event.kind === "multiple_departments_note") return false;
     return true;
   });
+}
+
+function resultEvent(result: DepartmentResult): CommandCenterEvent {
+  return {
+    kind: "result",
+    item: {
+      id: result.id,
+      title: result.title,
+      description: result.summary,
+      status: "completed",
+      result: result.summary,
+      capability: result.producedByCapability,
+      kind: "dashboard",
+    },
+  };
 }
 
 function EventCard(props: {

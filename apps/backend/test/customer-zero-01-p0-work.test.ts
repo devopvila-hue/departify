@@ -25,6 +25,8 @@ import {
   checkReplyForUnsupportedPromises,
   checkTaskTimeouts,
   detectUnsupportedPromise,
+  detectUnbackedWorkClaim,
+  MAX_ACTIVE_DASHBOARDS,
   type DepartmentTask,
 } from "../src/customer-zero/department-work.js";
 import {
@@ -415,6 +417,76 @@ describe("P0 J — promise guard", () => {
     expect(detectUnsupportedPromise(reply)).toBe(false);
     const guard = checkReplyForUnsupportedPromises(reply);
     expect(guard.allowed).toBe(true);
+  });
+});
+
+describe("P0 — no false progress", () => {
+  it("blocks claims of active work when they are not backed by a task", () => {
+    expect(detectUnbackedWorkClaim("Lo estoy haciendo ahora mismo. Dame unos minutos.")).toBe(true);
+    expect(detectUnbackedWorkClaim("No puedo ejecutarlo porque Mautic no está conectado.")).toBe(false);
+  });
+
+  it("counts dashboards through the durable work store", async () => {
+    const store = new InMemoryDepartmentWorkStore();
+    for (let index = 0; index < MAX_ACTIVE_DASHBOARDS; index += 1) {
+      await store.createResult({
+        organizationId: "org_dashboard",
+        departmentId: "marketing",
+        relatedWorkItemId: null,
+        title: `Dashboard ${index + 1}`,
+        summary: "Resultado real",
+        content: "Datos reales",
+        chart: {
+          kind: "bar",
+          title: `Dashboard ${index + 1}`,
+          series: [{ name: "Datos", values: [index + 1] }],
+        },
+        source: "test",
+        producedByCapability: "results.publish",
+      });
+    }
+    expect(await store.countDashboardsForOrg("org_dashboard")).toBe(MAX_ACTIVE_DASHBOARDS);
+  });
+
+  it("blocks a sixth dashboard before credentials or provider execution", async () => {
+    fakeCredentials();
+    stubMauticOk();
+    const store = new InMemoryDepartmentWorkStore();
+    for (let index = 0; index < MAX_ACTIVE_DASHBOARDS; index += 1) {
+      await store.createResult({
+        organizationId: "org_dashboard",
+        departmentId: "marketing",
+        relatedWorkItemId: null,
+        title: `Dashboard ${index + 1}`,
+        summary: "Resultado real",
+        content: "Datos reales",
+        chart: {
+          kind: "bar",
+          title: `Dashboard ${index + 1}`,
+          series: [{ name: "Datos", values: [index + 1] }],
+        },
+        source: "test",
+        producedByCapability: "crm.contacts.summary",
+      });
+    }
+    const executor = makeExecutor({ store, activityRepo: makeActivityRepo(), injected: [] });
+
+    const outcome = await executor.run({
+      organizationId: "org_dashboard",
+      conversationId: "conv_dashboard",
+      departmentId: "marketing",
+      objectiveId: null,
+      requestedBy: "ceo",
+      title: "Sexto dashboard",
+      summary: "No debe ejecutarse",
+      capability: "crm.contacts.summary",
+      locale: "es",
+    });
+
+    expect(outcome.task.status).toBe("failed");
+    expect(outcome.task.errorCode).toBe("dashboard_limit");
+    expect(outcome.result).toBeNull();
+    expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
   });
 });
 

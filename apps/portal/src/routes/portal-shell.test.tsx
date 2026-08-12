@@ -6,6 +6,7 @@ import { OrgProvider } from "@/app/org-context";
 import { HomeRoute } from "@/routes/HomeRoute";
 import { DecisionsRoute } from "@/routes/DecisionsRoute";
 import { MarketingRoute } from "@/routes/MarketingRoute";
+import { SettingsRoute } from "@/routes/SettingsRoute";
 import { AppShell } from "@/components/AppShell";
 
 const head = {
@@ -125,6 +126,18 @@ describe("portal shell", () => {
     expect(screen.getAllByRole("link", { name: /empresa/i }).length).toBeGreaterThanOrEqual(2);
     expect(screen.queryByText(/agentes/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/workflow/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps Configuración separate from Empresa and labels unsupported settings honestly", async () => {
+    mockFetch((url) => {
+      if (url.includes("/connections")) return { connections: [], cards: [], unmappedTools: [] };
+      return { organizationId: "org_moon", companyName: "MOON Shared Living", conversation: [] };
+    });
+    mount(<SettingsRoute />);
+    expect(await screen.findByTestId("settings-route")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^preferencias operativas$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /lo que departify sabe/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/todavía no disponible/i)).toBeInTheDocument();
   });
 
   it("homes the Command Center single chat and speaks in business terms", async () => {

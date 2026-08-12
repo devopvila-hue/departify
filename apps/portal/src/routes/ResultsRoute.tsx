@@ -16,6 +16,8 @@ export function ResultsRoute() {
   const { organizationId } = useOrg();
   const [overview, setOverview] = useState<CeoOverview | null>(null);
   const [departmentResults, setDepartmentResults] = useState<DepartmentResult[]>([]);
+  const [dashboardCount, setDashboardCount] = useState(0);
+  const [dashboardLimit, setDashboardLimit] = useState(5);
 
   useEffect(() => {
     if (!organizationId) return;
@@ -23,7 +25,11 @@ export function ResultsRoute() {
       if (data) setOverview(data);
     });
     void api.results(organizationId).then((data) => {
-      if (data) setDepartmentResults(data.results ?? []);
+      if (data) {
+        setDepartmentResults(data.results ?? []);
+        setDashboardCount(data.dashboardCount ?? 0);
+        setDashboardLimit(data.dashboardLimit ?? 5);
+      }
     });
   }, [organizationId]);
 
@@ -41,6 +47,12 @@ export function ResultsRoute() {
           <p className="dfy-hero__goal">
             Para: <strong>{overview.goal}</strong>
           </p>
+        )}
+        {dashboardCount === dashboardLimit - 1 && (
+          <p className="dfy-note" role="status">Te queda espacio para 1 dashboard más.</p>
+        )}
+        {dashboardCount >= dashboardLimit && (
+          <p className="dfy-note" role="status">Has alcanzado los {dashboardLimit} dashboards activos. Para crear otro, elimina uno o reutiliza/actualiza uno existente.</p>
         )}
       </section>
 

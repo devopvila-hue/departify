@@ -11,6 +11,7 @@ import { InboxRoute } from "@/routes/InboxRoute";
 import { MarketingRoute } from "@/routes/MarketingRoute";
 import { ResultsRoute } from "@/routes/ResultsRoute";
 import { RootRoute } from "@/routes/RootRoute";
+import { SettingsRoute } from "@/routes/SettingsRoute";
 import { ShellGate } from "@/components/ShellGate";
 import { TasksRoute } from "@/routes/TasksRoute";
 
@@ -27,7 +28,7 @@ import { TasksRoute } from "@/routes/TasksRoute";
  *   /aprobaciones        → inbox of approvals (DecisionesRoute)
  *   /resultados          → historical archive of results
  *   /empresa             → Company DNA
- *   /configuracion       → advanced settings (placeholder)
+ *   /configuracion       → operational preferences and connection states
  *   /marketing           → Marketing department detail + Elvira
  *   /decisiones          → legacy alias for /aprobaciones
  */
@@ -56,7 +57,7 @@ export const router = createBrowserRouter([
       { path: "/aprobaciones", element: <DecisionsRoute /> },
       { path: "/resultados", element: <ResultsRoute /> },
       { path: "/empresa", element: <CompanyRoute /> },
-      { path: "/configuracion", element: <CompanyRoute /> },
+      { path: "/configuracion", element: <SettingsRoute /> },
       { path: "/marketing", element: <MarketingRoute /> },
       { path: "/decisiones", element: <DecisionsRoute /> },
     ],

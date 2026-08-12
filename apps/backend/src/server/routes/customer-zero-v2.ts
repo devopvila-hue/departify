@@ -136,7 +136,9 @@ import {
 import { isCapabilityAvailable } from "../../customer-zero/capability-registry.js";
 import {
   InMemoryDepartmentWorkStore,
+  MAX_ACTIVE_DASHBOARDS,
   checkReplyForUnsupportedPromises,
+  detectUnbackedWorkClaim,
   type DepartmentWorkCapability,
   type DepartmentResult,
   type DepartmentTask,
@@ -896,7 +898,12 @@ export async function registerCustomerZeroV2Routes(
       await requireSession(organizationId, deps);
       const workStore = getWorkStore();
       const results = await workStore.listResultsForOrg(organizationId, limit);
-      return { organizationId, results };
+      return {
+        organizationId,
+        results,
+        dashboardCount: await workStore.countDashboardsForOrg(organizationId),
+        dashboardLimit: MAX_ACTIVE_DASHBOARDS,
+      };
     },
   );
 
@@ -3667,6 +3674,7 @@ export async function processCeoMessage(
     throw cause;
   }
   const organizationId = session.organizationId;
+  const turnStartedAt = Date.now();
 
   await session.conversations.addMessage(conversation.id, "user", message);
 
@@ -3913,6 +3921,7 @@ export async function processCeoMessage(
   const isEs = session.state.locale !== "en";
   let assistantReply = routed.reply;
   let marketingTurn: { role: "user" | "assistant"; content: string } | null = null;
+  let completedWorkResult: DepartmentResult | null = null;
   // Customer Zero Email P0 — when the email pipeline surfaces a
   // "Conecta tu correo" contextual card, it travels on this field so the
   // portal renders it as a connection_need event for THIS turn.
@@ -4312,6 +4321,7 @@ export async function processCeoMessage(
         );
         assistantReply = outcome.finalMessage;
         marketingTurn = { role: "assistant", content: assistantReply };
+        completedWorkResult = outcome.result;
       } catch {
         // Executor already records the failure and emits a final
         // message; nothing to do here.
@@ -4322,6 +4332,21 @@ export async function processCeoMessage(
   // The business response is already complete at this point. Persisting the
   // transcript is important, but a transient secondary write failure must
   // not turn a valid Gmail/tool answer into a whole-turn 500.
+  if (detectUnbackedWorkClaim(assistantReply)) {
+    const durableWork = (await workStoreForRoutes().listTasksForOrg(organizationId, 50))
+      .filter((task) => new Date(task.createdAt).getTime() >= turnStartedAt - 1000)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    const hasDurableWork = Boolean(durableWork);
+    assistantReply = hasDurableWork
+      ? isEs
+        ? `He registrado el trabajo «${durableWork!.title}» con estado «${durableWork!.status}». Puedes verlo en Tareas; sólo aparecerá en Resultados cuando exista un entregable real.`
+        : `I recorded the work “${durableWork!.title}” with status “${durableWork!.status}”. You can see it in Tasks; it will appear in Results only when a real deliverable exists.`
+      : isEs
+        ? "No puedo afirmar que ese trabajo esté ejecutándose: todavía no existe una tarea o resultado durable. No he inventado progreso ni una entrega."
+        : "I cannot claim that work is running: there is no durable task or result yet. I have not invented progress or a deliverable.";
+    marketingTurn = { role: "assistant", content: assistantReply };
+  }
+
   try {
     await session.conversations.addMessage(
       conversation.id,
@@ -4397,6 +4422,21 @@ export async function processCeoMessage(
     session.state.locale,
   );
 
+  if (completedWorkResult) {
+    events.push({
+      kind: "result",
+      item: {
+        id: completedWorkResult.id,
+        title: completedWorkResult.title,
+        description: completedWorkResult.summary,
+        status: "completed",
+        result: completedWorkResult.summary,
+        capability: completedWorkResult.producedByCapability,
+        kind: "dashboard",
+      },
+    });
+  }
+
   // Front of the events list: the new assistant turn + its work states.
   // The proactive opening is kept as context after the new turn so the
   // chat continues to feel alive without overriding the latest reply.
@@ -4423,7 +4463,11 @@ async function completeRuntimeCeoTurn(
   const safeReply = reply
     .replace(/<departify_tool_call>[\s\S]*?<\/departify_tool_call>/gi, "")
     .trim();
-  const finalReply = safeReply || "La operación ha terminado con un estado verificable.";
+  const finalReply = detectUnbackedWorkClaim(safeReply)
+    ? session.state.locale === "en"
+      ? "I cannot claim that work is running: no durable task or result proves it. I have not invented progress or a deliverable."
+      : "No puedo afirmar que ese trabajo esté ejecutándose: ninguna tarea o resultado durable lo demuestra. No he inventado progreso ni una entrega."
+    : safeReply || "La operación ha terminado con un estado verificable.";
   try {
     await session.conversations.addMessage(conversation.id, "assistant", finalReply);
   } catch (cause) {
