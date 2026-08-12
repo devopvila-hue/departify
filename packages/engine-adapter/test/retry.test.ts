@@ -99,6 +99,22 @@ describe("request() retry loop", () => {
       deviceKeyPem:
         "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIHtzzZqKwVnJm2H5kA6qG6MzYkMfBQsZQeP7JgX3BlDc\n-----END PRIVATE KEY-----",
     });
+    const previousWebSocket = globalThis.WebSocket;
+    class FakeWebSocket {
+      static readonly OPEN = 1;
+      readonly readyState = FakeWebSocket.OPEN;
+      onopen?: () => void;
+      onclose?: () => void;
+      onerror?: () => void;
+      onmessage?: (event: MessageEvent) => void;
+      constructor() {
+        queueMicrotask(() => this.onopen?.());
+      }
+      close(): void {
+        this.onclose?.();
+      }
+    }
+    vi.stubGlobal("WebSocket", FakeWebSocket);
     const anyClient = client as unknown as {
       nonce: string | null;
       challengeTs: number;
@@ -123,7 +139,11 @@ describe("request() retry loop", () => {
       anyClient.challengeTs = 2222;
     });
 
-    await anyClient.connect();
+    try {
+      await anyClient.connect();
+    } finally {
+      vi.stubGlobal("WebSocket", previousWebSocket);
+    }
 
     // The connect frame must be signed against the FRESH challenge (nonce-2),
     // not the stale nonce-1 from the previous connection.
