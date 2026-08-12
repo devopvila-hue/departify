@@ -315,7 +315,6 @@ export class OpenClawGatewayClient {
   ): Promise<{ result: unknown; events?: RunEvents }> {
     await this.ensureConnected();
     const runEvents: RunEvents = { assistantChunks: [], toolCalls: [] };
-    const startEventCapture = collectEvents ? this.startEventCapture(runEvents) : null;
 
     let sendResult: unknown;
     try {
@@ -324,7 +323,6 @@ export class OpenClawGatewayClient {
       // never embedded in the send frame.
       sendResult = await this.requestOnce("sessions.send", params);
     } catch (err) {
-      startEventCapture?.stop();
       throw this.mapToEngineError(err, "sessions.send");
     }
 
@@ -332,22 +330,28 @@ export class OpenClawGatewayClient {
       (sendResult as { runId?: string })?.runId ??
       (sendResult as { id?: string })?.id;
     if (!runId) {
-      startEventCapture?.stop();
       throw new EngineProtocolError("Gateway did not return a run id", {
         operation: "sessions.send",
         provider: "openclaw",
       });
     }
+    if (collectEvents) {
+      // `sessions.send` returns before the agent stream starts. Begin the
+      // capture only after that boundary so late events from the previous
+      // run cannot contaminate this turn.
+      runEvents.toolCalls = [];
+    }
+    const runEventCapture = collectEvents ? this.startEventCapture(runEvents, runId) : null;
 
     let wait: unknown;
     try {
       wait = await this.requestOnce("agent.wait", { runId, timeoutMs: waitTimeoutMs });
     } catch (err) {
       const mapped = this.mapToEngineError(err, "agent.wait");
-      startEventCapture?.stop();
+      runEventCapture?.stop();
       throw mapped;
     }
-    startEventCapture?.stop();
+    runEventCapture?.stop();
     return collectEvents ? { result: wait, events: runEvents } : { result: wait };
   }
 
@@ -375,9 +379,10 @@ export class OpenClawGatewayClient {
       toolCalls?: Array<{ name: string; status: string }>;
     };
   }> {
+    const key = String(params.key);
+    const historyBefore = await this.chatHistory(key);
     const { result } = await this.runAgent(params, waitTimeoutMs, false);
     const runStatus = String((result as { status?: unknown })?.status ?? "");
-    const key = String(params.key);
     const history = await this.chatHistory(key);
     const messages = history?.messages ?? [];
     const lastAssistant = [...messages]
@@ -397,20 +402,19 @@ export class OpenClawGatewayClient {
       tool_calls?: Array<{ name?: string }>;
       toolCalls?: Array<{ name?: string }>;
     };
-    // Tool calls appear across the turn as:
-    //  - assistant content parts `{type:"toolCall", name}` (OpenAI/Vertex)
-    //  - explicit `tool_calls`/`toolCalls` fields
-    //  - `toolResult` role messages with `toolName`
-    // Scan the whole turn so any real tool call is captured, not just the
-    // final assistant text message.
+    // Tool calls must come from the history delta produced by this run.
+    // Scanning the whole session history re-reports tools from earlier CEO
+    // turns as if they belonged to this turn, breaking follow-up continuity.
     const toolNamesSet = new Set<string>();
-    for (const m of messages) {
+    const currentMessages = messages.length >= historyBefore.messages.length
+      ? messages.slice(historyBefore.messages.length)
+      : messages;
+    for (const m of currentMessages) {
       const mm = m as {
-        role?: string;
-        content?: unknown;
         toolName?: string;
         tool_calls?: Array<{ name?: string }>;
         toolCalls?: Array<{ name?: string }>;
+        content?: unknown;
       };
       if (mm.toolName) toolNamesSet.add(mm.toolName);
       for (const tc of mm.tool_calls ?? []) {
@@ -420,11 +424,9 @@ export class OpenClawGatewayClient {
         if (tc?.name) toolNamesSet.add(String(tc.name));
       }
       if (Array.isArray(mm.content)) {
-        for (const p of mm.content) {
-          const part = p as { type?: string; name?: string };
-          if (part.type === "toolCall" && part.name) {
-            toolNamesSet.add(String(part.name));
-          }
+        for (const part of mm.content) {
+          const item = part as { type?: string; name?: string };
+          if (item.type === "toolCall" && item.name) toolNamesSet.add(String(item.name));
         }
       }
     }
@@ -612,7 +614,7 @@ export class OpenClawGatewayClient {
     };
   }
 
-  private startEventCapture(runEvents: RunEvents): { stop: () => void } {
+  private startEventCapture(runEvents: RunEvents, activeRunId: string): { stop: () => void } {
     const handler = (ev: MessageEvent) => {
       let frame: { type?: string; event?: string; payload?: AgentEvent };
       try {
@@ -622,6 +624,7 @@ export class OpenClawGatewayClient {
       }
       if (frame.type !== "event" || frame.event !== "agent") return;
       const payload = frame.payload ?? {};
+      if (payload.runId && payload.runId !== activeRunId) return;
       const stream = payload.stream;
       const data = payload.data ?? {};
       if (stream === "assistant") {

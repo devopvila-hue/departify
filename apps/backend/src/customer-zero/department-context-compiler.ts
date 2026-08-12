@@ -806,11 +806,10 @@ function operationFromSession(
     };
   }
 
-  return session.state.lastCalendarOperation
+  return session.state.lastCalendarOperation &&
+    session.state.lastCalendarOperation.operation !== "list"
     ? {
-        type: session.state.lastCalendarOperation.operation === "list"
-          ? "calendar.read"
-          : "calendar.create",
+        type: "calendar.create",
         state: session.state.lastCalendarOperation.status,
         reference: {
           eventId: session.state.lastCalendarOperation.eventId ?? null,

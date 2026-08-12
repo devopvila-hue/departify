@@ -3268,6 +3268,27 @@ function runtimeIntent(name: string): RoutingDecision["intent"] {
   return "direct_response";
 }
 
+function runtimeIntentForTools(
+  names: readonly string[],
+): RoutingDecision["intent"] {
+  if (names.length > 1) return "multi_capability";
+  return runtimeIntent(names[0] ?? "departify.company.context");
+}
+
+/** Native ENGINE 03.2 exposes reads only. Existing mutation/follow-up state
+ * must remain in the deterministic control plane until native mutations exist. */
+function shouldUseNativeReadPath(
+  message: string,
+  session: CustomerZeroSession,
+): boolean {
+  if (isCalendarCreateRequest(message) || isEmailSendRequest(message)) return false;
+  if (
+    session.state.pendingCalendarWork &&
+    (isCalendarAttendeeFollowUp(message) || isCalendarDateOrTimeFollowUp(message))
+  ) return false;
+  return true;
+}
+
 function runtimeToolsMatchRequest(
   message: string,
   toolNames: readonly string[],
@@ -3733,7 +3754,7 @@ export async function processCeoMessage(
     return completeDeterministicOperationTurn(session, conversation, message, reply, operation, "already_verified");
   }
 
-  if (runtime?.nativeBusinessTools) {
+  if (runtime?.nativeBusinessTools && shouldUseNativeReadPath(operationalMessage, session)) {
     if (trace) {
       trace.exposedToolNames = [...runtime.nativeToolNames];
     }
@@ -3745,21 +3766,42 @@ export async function processCeoMessage(
         sessionId: runtime.sessionId,
         toolNames: runtime.nativeToolNames,
       });
-      const nativeResult = await runtime.engine.sendMessage({
+      const nativeContext = renderRuntimeBusinessContextForNativeEngine(runtime.context);
+      let nativeResult = await runtime.engine.sendMessage({
         sessionId: runtime.sessionId,
         // Native mode receives the CEO's actual utterance. The existing
         // operational normalizer belongs to ENGINE 02's legacy protocol and
         // must not become a native-tool intent classifier.
         message,
-        runtimeContext: renderRuntimeBusinessContextForNativeEngine(runtime.context),
+        runtimeContext: nativeContext,
         nativeBusinessTools: true,
       });
-      const selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
+      let selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
+      const nativeReadIntent = routeCommandCenter(baseInput).decision.intent;
+      const retryableNativeRead = [
+        "calendar_read",
+        "drive_query",
+        "external_tool_query",
+        "multi_capability",
+      ].includes(nativeReadIntent);
+      if (
+        nativeResult.status === "completed" &&
+        selectedTools.length === 0 &&
+        retryableNativeRead
+      ) {
+        nativeResult = await runtime.engine.sendMessage({
+          sessionId: runtime.sessionId,
+          message,
+          runtimeContext: `${nativeContext}\nNATIVE_READ_RETRY:\nThe previous response did not invoke a required native read capability. Re-evaluate the current CEO message and call every relevant listed native capability before answering.`,
+          nativeBusinessTools: true,
+        });
+        selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
+      }
       if (trace) {
         trace.selectedToolNames = selectedTools;
         trace.toolCallCount = selectedTools.length;
         trace.contextBytes = Buffer.byteLength(
-          renderRuntimeBusinessContextForNativeEngine(runtime.context),
+          nativeContext,
           "utf8",
         );
         trace.toolResultStatuses = nativeResult.status === "completed" ? ["success"] : ["failed"];
@@ -4416,9 +4458,8 @@ async function completeRuntimeCeoTurn(
     { role: "user", content: message },
     { role: "assistant", content: finalReply },
   ];
-  const primaryTool = toolNames[0] ?? "departify.company.context";
   const primaryStatus = toolStatuses[0] ?? "success";
-  const intent = runtimeIntent(primaryTool);
+  const intent = runtimeIntentForTools(toolNames);
   const state = primaryStatus === "success" || primaryStatus === "accepted_unverified"
     ? "tool_completed" as const
     : primaryStatus === "blocked"
