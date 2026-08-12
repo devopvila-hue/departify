@@ -52,7 +52,23 @@ export function isLoopbackUrl(url: string): boolean {
 function readDeviceKey(path?: string): string | undefined {
   if (!path) return undefined;
   if (!existsSync(path)) return undefined;
-  return readFileSync(path, "utf8");
+  return normalizeDeviceKey(readFileSync(path, "utf8"));
+}
+
+/**
+ * OpenClaw's local CLI stores the approved device as a JSON envelope, while
+ * production secret injection supplies the PEM directly. Accept both at the
+ * adapter boundary; the gateway client still receives only the private PEM.
+ */
+export function normalizeDeviceKey(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{")) return value;
+  try {
+    const parsed = JSON.parse(trimmed) as { privateKeyPem?: unknown };
+    return typeof parsed.privateKeyPem === "string" ? parsed.privateKeyPem : value;
+  } catch {
+    return value;
+  }
 }
 
 export class OpenClawEngineAdapter implements EngineAdapter {
@@ -68,7 +84,9 @@ export class OpenClawEngineAdapter implements EngineAdapter {
       );
     }
     this.model = config.model;
-    const deviceKeyPem = config.deviceKeyPem ?? readDeviceKey(config.deviceKeyPath);
+    const deviceKeyPem = config.deviceKeyPem
+      ? normalizeDeviceKey(config.deviceKeyPem)
+      : readDeviceKey(config.deviceKeyPath);
     this.client = new OpenClawGatewayClient({
       url,
       ...(config.gatewayToken ? { token: config.gatewayToken } : {}),
@@ -199,7 +217,7 @@ export class OpenClawEngineAdapter implements EngineAdapter {
         toolName?: string;
       };
       const role = normalizeRole(m.role);
-      const text = contentToText(m.content);
+      const text = normalizeHistoryText(contentToText(m.content), role);
       const createdAt = m.timestamp
         ? new Date(m.timestamp).toISOString()
         : undefined;
@@ -416,4 +434,14 @@ function contentToText(content: unknown): string | undefined {
     if (typeof t === "string") return t;
   }
   return undefined;
+}
+
+/** Hide the adapter's trusted turn envelope from the normalized history API. */
+function normalizeHistoryText(
+  text: string | undefined,
+  role: "user" | "assistant" | "system" | "tool",
+): string | undefined {
+  if (role !== "user" || text === undefined) return text;
+  const prefix = "MENSAJE DEL CEO:\n";
+  return text.startsWith(prefix) ? text.slice(prefix.length) : text;
 }
