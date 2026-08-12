@@ -199,6 +199,38 @@ export interface RoutingDecision {
   readonly rationale: string;
 }
 
+export type DeliverableRequestKind =
+  | "contacts_scoring"
+  | "contacts_summary"
+  | "unknown";
+
+export interface DeliverableRequest {
+  readonly requested: boolean;
+  readonly kind: DeliverableRequestKind;
+}
+
+/**
+ * Classifies the business shape of a requested deliverable. This is a
+ * control-plane guard, not a provider/tool selector: native OpenClaw still
+ * owns native tool selection, while Departify decides whether a plain
+ * capability acknowledgement is allowed to end an actionable request.
+ */
+export function classifyDeliverableRequest(message: string): DeliverableRequest {
+  const asksForDeliverable =
+    /\b(haz(?:me)?|crea(?:me|r)?|genera(?:me|r)?|prepara(?:me|r)?|analiza(?:r)?|construye|dame|muestra(?:me)?|ens[eé]ña(?:me)?|make|create|generate|prepare|analy[sz]e)\b/i.test(message) &&
+    /\b(dashboard|panel|informe|report(?:e)?|gr[aá]fic(?:o|a)|chart|visualizaci[oó]n|resultados?|entregable)\b/i.test(message);
+
+  if (!asksForDeliverable) return { requested: false, kind: "unknown" };
+
+  const mentionsContacts = /\b(mautic|crm|contact(?:o|os)?|lead(?:s)?|clientes?)\b/i.test(message);
+  const asksForScoring = /\b(scoring|score|puntuaci[oó]n|puntuar|priorizaci[oó]n|priorizar|ranking|rank(?:ing)?)\b/i.test(message);
+  if (mentionsContacts && asksForScoring) {
+    return { requested: true, kind: "contacts_scoring" };
+  }
+  if (mentionsContacts) return { requested: true, kind: "contacts_summary" };
+  return { requested: true, kind: "unknown" };
+}
+
 /* -------------------------------------------------------------------------
  * Deterministic routing rules.
  *
@@ -328,7 +360,11 @@ const ROUTING_RULES: readonly RoutingRule[] = [
         /\b(cu[áa]ntos\s+contactos?|cu[áa]ntas?\s+personas?|how many contacts|lista de contactos|busca\s+(en\s+mautic\s+)?(contactos?|clientes?)|search\s+contacts|qu[ée]\s+(hay|tenemos|tiene|cu[aá]ntos)\s+(en\s+)?mautic)\b/i.test(
           input.message,
         );
-      if (!isDataQuery) return false;
+      const deliverable = classifyDeliverableRequest(input.message);
+      const asksForConnectedMauticWork =
+        deliverable.requested &&
+        /\b(mautic|crm|contact(?:o|os)?|lead(?:s)?|clientes?)\b/i.test(input.message);
+      if (!isDataQuery && !asksForConnectedMauticWork) return false;
       // Only route to a real query when the relevant external tool is already
       // connected. A connected Mautic answers contact questions; otherwise the
       // message falls through to `request_connection`.

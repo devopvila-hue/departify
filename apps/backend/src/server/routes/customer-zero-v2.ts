@@ -86,6 +86,7 @@ import {
   isEmailReadQuestion,
   isCalendarReadRequest,
   isMultiCapabilityRequest,
+  classifyDeliverableRequest,
   normalizeOperationalLanguage,
   routeCommandCenter,
   type CommandCenterEvent,
@@ -3679,6 +3680,7 @@ export async function processCeoMessage(
   await session.conversations.addMessage(conversation.id, "user", message);
 
   const operationalMessage = normalizeOperationalLanguage(message);
+  const deliverableRequest = classifyDeliverableRequest(operationalMessage);
   const baseInput = buildCommandCenterInput(session, operationalMessage);
   const pendingDecision = pendingDecisionForSession(session, operationalMessage);
   const lastReceipt = session.state.lastExecutionReceipt;
@@ -3798,7 +3800,11 @@ export async function processCeoMessage(
       // exposed native tool. A plain model response must not be relabeled as
       // a tool result or bypass the existing safe router.
       const selectedExposedTools = selectedTools.filter((name) => runtime.nativeToolNames.includes(name));
-      if (nativeResult.status === "completed" && selectedExposedTools.length > 0) {
+      if (
+        nativeResult.status === "completed" &&
+        selectedExposedTools.length > 0 &&
+        !deliverableRequest.requested
+      ) {
         return completeRuntimeCeoTurn(
           session,
           conversation,
@@ -3877,6 +3883,7 @@ export async function processCeoMessage(
       if (
         runtimeTurn.toolCall &&
         runtimeTurn.toolResult &&
+        !deliverableRequest.requested &&
         runtimeToolsMatchRequest(operationalMessage, selectedTools, session)
       ) {
         return completeRuntimeCeoTurn(
@@ -3930,6 +3937,7 @@ export async function processCeoMessage(
   // (vs. a Gmail read). Drives the work-state pills so a Gmail read
   // never claims "Consultando Mautic…".
   let mauticDispatched = false;
+  let deliverableHandled = false;
 
   // Customer Zero Email P0 — the email action pipeline. Runs for BOTH
   // fresh email requests (intent === "email_action") AND continuations
@@ -4139,7 +4147,7 @@ export async function processCeoMessage(
     marketingTurn = { role: "assistant", content: assistantReply };
   }
 
-  if (routed.decision.intent === "external_tool_query") {
+  if (routed.decision.intent === "external_tool_query" && !deliverableRequest.requested) {
     // Email-aware dispatch: an email READ question resolves the org's
     // operational EMAIL provider (corporate IMAP first, Google as the
     // default identity) and reads real inbox data through it. Falls
@@ -4287,10 +4295,19 @@ export async function processCeoMessage(
     routed.decision.intent === "external_tool_query" &&
     mauticLifecycleForP0 === "connected"
   ) {
-    const asksForAnalysis = /\b(analiz[ae]r?|informe|report[ae]|resum[ie]n|prepara(r)?|deja(r)?\s+en\s+resultados)\b/i.test(
-      operationalMessage,
-    );
-    if (asksForAnalysis) {
+    const asksForAnalysis =
+      deliverableRequest.kind === "contacts_summary" ||
+      /\b(analiz[ae]r?|informe|report[ae]|resum[ie]n|prepara(r)?|deja(r)?\s+en\s+resultados)\b/i.test(
+        operationalMessage,
+      );
+    if (deliverableRequest.kind === "contacts_scoring") {
+      deliverableHandled = true;
+      assistantReply = isEs
+        ? "Puedo acceder a Mautic, pero todavía no tengo disponible la capacidad para generar ese scoring como dashboard."
+        : "I can access Mautic, but I do not yet have the capability to generate that scoring as a dashboard.";
+      marketingTurn = { role: "assistant", content: assistantReply };
+    } else if (asksForAnalysis) {
+      deliverableHandled = true;
       try {
         const executor = createWorkExecutor(organizationId);
         const outcome = await executor.run({
@@ -4326,7 +4343,23 @@ export async function processCeoMessage(
         // Executor already records the failure and emits a final
         // message; nothing to do here.
       }
+    } else if (deliverableRequest.requested) {
+      deliverableHandled = true;
+      assistantReply = isEs
+        ? "Puedo acceder a Mautic, pero todavía no tengo disponible la capacidad para generar ese entregable."
+        : "I can access Mautic, but I do not yet have the capability to generate that deliverable.";
+      marketingTurn = { role: "assistant", content: assistantReply };
     }
+  }
+
+  // A deliverable request must never fall through to a capability/status
+  // acknowledgement or an unrelated department reply. If no real executor
+  // claimed it above, close the turn honestly as unsupported.
+  if (deliverableRequest.requested && !deliverableHandled) {
+    assistantReply = isEs
+      ? "Entiendo que pides un entregable, pero todavía no tengo disponible la capacidad real para generarlo."
+      : "I understand you are asking for a deliverable, but the real capability to generate it is not available yet.";
+    marketingTurn = { role: "assistant", content: assistantReply };
   }
 
   // The business response is already complete at this point. Persisting the
