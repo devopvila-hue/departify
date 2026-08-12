@@ -59,6 +59,29 @@ describe("Command Center routing", () => {
     expect(normalizeOperationalLanguage("respone al ultimo mail con ok")).toBe(
       "responde al ultimo mail con ok",
     );
+    expect(normalizeOperationalLanguage("cea un evento en 10 mintos con hola")).toBe(
+      "crea un evento en 10 minutos con hola",
+    );
+  });
+
+  it("keeps Calendar create ownership through human typos and preserves Marketing objectives", () => {
+    for (const message of [
+      "crea un evento en 10 minutos con hola",
+      "cea un evento en 10 mintos con hola",
+      "pon una reunión mañana a las 11",
+      "agenda una reunión mañana a las 11",
+      "añade un evento mañana",
+    ]) {
+      const normalized = normalizeOperationalLanguage(message);
+      const decision = routeCommandCenter(makeInput({ message: normalized }));
+      expect(decision.decision.intent, message).toBe("calendar_create");
+      expect(decision.decision.departments, message).toEqual([]);
+    }
+
+    expect(routeCommandCenter(makeInput({ message: "quiero conseguir más clientes este mes" })).decision).toMatchObject({
+      intent: "delegate_marketing",
+      departments: ["marketing"],
+    });
   });
 
   it("keeps the Founder multi-intent request in operational routing", () => {

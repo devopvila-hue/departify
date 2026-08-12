@@ -1107,16 +1107,22 @@ export function isEmailReadFollowUp(message: string): boolean {
 }
 
 const OPERATIONAL_TERMS = [
+  "crea",
+  "crear",
   "calendario",
   "calendar",
   "evento",
   "eventos",
+  "minuto",
+  "minutos",
   "reunion",
   "reuniones",
   "responde",
   "responder",
   "contesta",
   "contestar",
+  "mail",
+  "mails",
   "correo",
   "correos",
   "email",
@@ -1154,7 +1160,10 @@ function editDistance(left: string, right: string): number {
 export function normalizeOperationalLanguage(message: string): string {
   return message.replace(/[\p{L}\p{N}]+/gu, (token) => {
     const normalized = accentless(token);
-    if (normalized.length < 6) return token;
+    // Short operational verbs such as `crea` still need bounded typo
+    // tolerance (`cea`). The vocabulary is deliberately small and the
+    // minimum length prevents ordinary function words from being rewritten.
+    if (normalized.length < 3) return token;
     const candidates = OPERATIONAL_TERMS.filter((term) =>
       Math.abs(term.length - normalized.length) <= 1 &&
       editDistance(normalized, accentless(term)) <= 1,

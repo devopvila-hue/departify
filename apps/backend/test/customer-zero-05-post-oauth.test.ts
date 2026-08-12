@@ -776,6 +776,60 @@ describe("P0 — post-OAuth HTTP: connect → callback → /conexiones", () => {
     expect(chat.json().reply).not.toMatch(/Lo paso a Elvira|Marketing/i);
   });
 
+  it("P0 Calendar create: typoed request remains Calendar-owned when capability is unavailable", async () => {
+    const org = await startOrg();
+    const chat = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message: "cea un evento en 10 mintos con hola" },
+    });
+    expect(chat.statusCode).toBe(200);
+    expect(chat.json().reply).toMatch(/Calendar no tiene activada la creación/i);
+    expect(chat.json().reply).not.toMatch(/Elvira|Marketing/i);
+  });
+
+  it("P0 Calendar create: typoed request prepares once, approves once, and never duplicates", async () => {
+    const org = await startOrg();
+    await getGoogleTokenStore().put({
+      organizationId: org,
+      userId: "user-a",
+      provider: "gmail",
+      accessToken: "access-calendar-create",
+      refreshToken: "refresh-calendar-create",
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      scopes: [
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/calendar.events",
+      ],
+      email: "ceo@departify.app",
+      displayName: "CEO",
+      operationalVerifiedAt: new Date().toISOString(),
+      operationalProbeError: null,
+      operationalCapabilities: ["calendar.read", "calendar.create"],
+    });
+    mockGoogleFetch({});
+    const send = async (message: string) => authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message`,
+      payload: { message },
+    });
+
+    const draft = await send("cea un evento en 10 mintos con hola");
+    expect(draft.statusCode).toBe(200);
+    expect(draft.json().reply).toMatch(/He preparado este evento/i);
+    expect(draft.json().reply).toContain("hola");
+    expect(draft.json().reply).not.toMatch(/Elvira|Marketing/i);
+    expect(calendarCreateCalls).toBe(0);
+
+    const created = await send("hazlo");
+    expect(created.json().reply).toContain("Google lo ha confirmado");
+    expect(calendarCreateCalls).toBe(1);
+
+    const repeated = await send("hazlo");
+    expect(repeated.statusCode).toBe(200);
+    expect(calendarCreateCalls).toBe(1);
+  });
+
   it("P0 founder transcript keeps Gmail and Calendar operation ownership across exact follow-ups", async () => {
     const org = await startOrg();
     await getGoogleTokenStore().put({

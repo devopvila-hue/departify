@@ -138,6 +138,7 @@ describe("Engine 02 — Runtime Business Context + Capability Bridge", () => {
       { toolId: "google_calendar", label: "Google Calendar", state: "needs_connection", capabilities: ["calendar.read", "calendar.create"] },
     ]);
     expect(isRuntimeCapabilityAvailable(connected, "calendar.create")).toBe(true);
+    expect(toolsForManifest(connected).some((tool) => tool.name === "departify.calendar.create")).toBe(true);
     expect(isRuntimeCapabilityAvailable(disconnected, "calendar.create")).toBe(false);
     expect(toolsForManifest(disconnected).some((tool) => tool.name === "departify.calendar.create")).toBe(false);
     expect(authorizeDepartifyToolCall({
