@@ -20,7 +20,10 @@ import {
   getOrCreateCustomerZeroSession,
   resetCustomerZeroSessionsForTest,
 } from "../src/customer-zero/customer-zero-session.js";
-import { __resetWorkStoreForTests } from "../src/server/routes/customer-zero-v2.js";
+import {
+  __resetWorkStoreForTests,
+  isRuntimeExplicitApproval,
+} from "../src/server/routes/customer-zero-v2.js";
 
 const AUTH = { authorization: "Bearer token-a" };
 
@@ -180,5 +183,12 @@ describe("Engine 02 runtime business route", () => {
     expect(second.statusCode).toBe(200);
     expect(second.json().reply).toContain("tarea durable");
     expect(await workStore.listTasksForOrg(organizationId)).toHaveLength(1);
+  });
+
+  it("never treats a model confirm flag as CEO approval for an external side effect", () => {
+    expect(isRuntimeExplicitApproval("con alex@example.com", "calendar")).toBe(false);
+    expect(isRuntimeExplicitApproval("hazlo", "calendar")).toBe(true);
+    expect(isRuntimeExplicitApproval("responde al último correo", "email")).toBe(false);
+    expect(isRuntimeExplicitApproval("sí, envíalo", "email")).toBe(true);
   });
 });

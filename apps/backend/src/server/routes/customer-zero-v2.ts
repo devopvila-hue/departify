@@ -2917,7 +2917,10 @@ interface RuntimeBridgeInput {
   readonly sessionId: string;
   readonly context: RuntimeBusinessContext;
   readonly capabilities: RuntimeCapabilityManifest;
-  readonly executeTool: (call: DepartifyToolCall) => Promise<DepartifyToolResult>;
+  readonly executeTool: (
+    call: DepartifyToolCall,
+    userMessage: string,
+  ) => Promise<DepartifyToolResult>;
 }
 
 /**
@@ -3010,7 +3013,7 @@ async function buildRuntimeBridge(
     sessionId: engineSession.id,
     context,
     capabilities,
-    executeTool: (call) => executeRuntimeTool(session, deps, call, inboxStore),
+    executeTool: (call, userMessage) => executeRuntimeTool(session, deps, call, inboxStore, userMessage),
   };
 }
 
@@ -3028,6 +3031,20 @@ function runtimeCandidate(message: string, session: CustomerZeroSession): boolea
     return true;
   }
   return /\b(correo|correos|email|mail|inbox|calendario|calendar|evento|reuni[oó]n|agenda|drive|pdf|archivo|documento|tarea|organiza|organizar|aprobaci[oó]n|resultado|pr[oó]ximos eventos|empresa|negocio|contexto|hazlo|con\s+[a-z0-9._%+-]+@)/i.test(lower);
+}
+
+/**
+ * Model-provided `confirm` is only advisory. A side effect may be approved
+ * by the runtime bridge only when the CEO's current turn is itself an
+ * unambiguous approval state-machine transition.
+ */
+export function isRuntimeExplicitApproval(
+  message: string,
+  operation: "email" | "calendar",
+): boolean {
+  return operation === "email"
+    ? isEmailApprovalResponse(message)
+    : isCalendarApproval(message);
 }
 
 function runtimeIntent(name: string): RoutingDecision["intent"] {
@@ -3118,6 +3135,7 @@ async function executeRuntimeTool(
   deps: ServerDeps,
   call: DepartifyToolCall,
   inboxStore: InboxStore,
+  userMessage: string,
 ): Promise<DepartifyToolResult> {
   const args = call.arguments;
   const isEs = session.state.locale !== "en";
@@ -3173,7 +3191,7 @@ async function executeRuntimeTool(
       const message = call.name === "departify.email.reply"
         ? `responde al último correo diciendo ${body}`
         : `envía un correo a ${recipient}${text("subject") ? ` con asunto ${text("subject")}` : ""} diciendo ${body}`;
-      if (args.confirm) {
+      if (args.confirm && isRuntimeExplicitApproval(userMessage, "email")) {
         await runEmailTurn(session, "sí, envíalo", isEs);
       } else {
         await runEmailTurn(session, message, isEs);
@@ -3216,7 +3234,20 @@ async function executeRuntimeTool(
         ? args.attendees.filter((value): value is string => typeof value === "string")
         : [];
       const current = session.state.pendingCalendarWork;
-      if (Boolean(args.confirm) && current) {
+      if (current && !isRuntimeExplicitApproval(userMessage, "calendar") && attendees.length > 0) {
+        session.state.pendingCalendarWork = {
+          ...current,
+          attendees: [...new Set([...current.attendees, ...attendees])],
+          status: "awaiting_approval",
+        };
+        return withReceipt({
+          status: "blocked",
+          operation: call.name,
+          summary: "He añadido el asistente al evento preparado; falta la aprobación explícita del CEO.",
+          data: { attendeeCount: session.state.pendingCalendarWork.attendees.length },
+        });
+      }
+      if (Boolean(args.confirm) && current && isRuntimeExplicitApproval(userMessage, "calendar")) {
         const outcome = await runPendingCalendarTurn(session, "hazlo", isEs);
         return withReceipt({
           status: session.state.lastCalendarOperation?.status === "verified" ? "success" : "blocked",

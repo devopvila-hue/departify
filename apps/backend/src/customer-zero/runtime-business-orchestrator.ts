@@ -29,7 +29,10 @@ export interface RuntimeBusinessTurnInput {
   readonly organizationId: string;
   readonly message: string;
   readonly context: RuntimeBusinessContext;
-  readonly executeTool: (call: DepartifyToolCall) => Promise<DepartifyToolResult>;
+  readonly executeTool: (
+    call: DepartifyToolCall,
+    userMessage: string,
+  ) => Promise<DepartifyToolResult>;
   readonly log?: (event: RuntimeBusinessTelemetry) => void;
 }
 
@@ -142,7 +145,7 @@ export async function runRuntimeBusinessTurn(
       toolName: call.name,
     });
     try {
-      toolResult = await input.executeTool(call);
+      toolResult = await input.executeTool(call, input.message);
     } catch {
       toolResult = {
         status: "failed",
@@ -178,4 +181,3 @@ export async function runRuntimeBusinessTurn(
     durationMs: Date.now() - startedAt,
   };
 }
-
