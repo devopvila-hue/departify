@@ -209,6 +209,7 @@ import {
 import { nativeToolsForManifest } from "../../customer-zero/native-business-tools.js";
 import {
   compileRuntimeBusinessContext,
+  renderRuntimeBusinessContextForNativeEngine,
   type RuntimeBusinessContext,
 } from "../../customer-zero/department-context-compiler.js";
 import { runRuntimeBusinessTurn } from "../../customer-zero/runtime-business-orchestrator.js";
@@ -3750,12 +3751,17 @@ export async function processCeoMessage(
         // operational normalizer belongs to ENGINE 02's legacy protocol and
         // must not become a native-tool intent classifier.
         message,
+        runtimeContext: renderRuntimeBusinessContextForNativeEngine(runtime.context),
         nativeBusinessTools: true,
       });
       const selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
       if (trace) {
         trace.selectedToolNames = selectedTools;
         trace.toolCallCount = selectedTools.length;
+        trace.contextBytes = Buffer.byteLength(
+          renderRuntimeBusinessContextForNativeEngine(runtime.context),
+          "utf8",
+        );
         trace.toolResultStatuses = nativeResult.status === "completed" ? ["success"] : ["failed"];
       }
       // A native turn is successful only when OpenClaw actually selected an

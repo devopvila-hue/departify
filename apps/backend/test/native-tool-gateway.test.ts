@@ -191,7 +191,8 @@ describe("native company context gateway", () => {
     expect(engine.nativePolicies.at(-1)?.toolNames).toContain("departify.company.context");
     const trace = engine.inputs.at(-1);
     expect(trace?.nativeBusinessTools).toBe(true);
-    expect(lastInput?.runtimeContext).toBeUndefined();
+    expect(lastInput?.runtimeContext).toContain("DEPARTIFY_NATIVE_RUNTIME_CONTEXT");
+    expect(lastInput?.runtimeContext).not.toContain("DEPARTIFY_BUSINESS_TOOL_DEFINITIONS");
     expect(lastInput?.businessTools).toBeUndefined();
   });
 
