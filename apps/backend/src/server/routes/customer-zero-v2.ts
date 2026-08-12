@@ -2287,7 +2287,7 @@ export async function registerCustomerZeroV2Routes(
       const session = await requireSession(organizationId, deps);
       try {
         const runtime = deps.engine
-          ? await buildRuntimeBridge(session, deps)
+          ? await buildRuntimeBridge(session, deps, inboxStore)
           : null;
         const result = await processCeoMessage(
           session,
@@ -2928,29 +2928,40 @@ interface RuntimeBridgeInput {
 async function buildRuntimeBridge(
   session: CustomerZeroSession,
   deps: ServerDeps,
+  inboxStore: InboxStore,
 ): Promise<RuntimeBridgeInput | null> {
   if (!deps.engine) return null;
   const workStore = workStoreForRoutes();
-  const [connections, tasks, results, companyDna, approvals, recentMessages] = await Promise.all([
+  const [connections, tasks, results, companyDna, approvals, activeObjective, recentMessages, googleSummaries] = await Promise.all([
     buildCanonicalConnectionViews(session, session.state.locale),
     workStore.listTasksForOrg(session.organizationId, 50),
     workStore.listResultsForOrg(session.organizationId, 20),
     resolveCompanyDnaStore(deps).get(session.organizationId),
     deps.marketing?.listApprovals(session.organizationId) ?? Promise.resolve([]),
+    deps.marketing
+      ? deps.marketing.listObjectives(session.organizationId).then((objectives) =>
+          objectives.find((objective) => objective.status === "active") ?? null,
+        )
+      : Promise.resolve(null),
     session.state.currentConversationId
       ? session.conversations.listMessages(session.organizationId, session.state.currentConversationId, 12)
       : Promise.resolve([]),
+    getGoogleTokenStore().listForOrg(session.organizationId),
   ]);
-  const googleSummaries = await getGoogleTokenStore().listForOrg(session.organizationId);
   const runtimeConnections = connections.map((connection) => ({
     toolId: connection.toolId,
     label: connection.label,
     state: connection.state,
     ...(connection.toolId === "gmail"
       ? {
-          capabilities: googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "email.read"))
-            ? ["email.read", "email.search", "email.thread.read"]
-            : [],
+          capabilities: [
+            ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "email.read"))
+              ? ["email.read", "email.search", "email.thread.read"]
+              : []),
+            ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "email.send"))
+              ? ["email.send.personal"]
+              : []),
+          ],
         }
       : connection.toolId === "google_calendar"
         ? {
@@ -2984,6 +2995,7 @@ async function buildRuntimeBridge(
     tasks,
     results,
     approvals,
+    activeObjective,
     recentActivity: buildMarketingOperationalActivity(tasks, results),
     recentConversation: recentMessages.map((message) => ({
       role: message.role,
@@ -2998,7 +3010,7 @@ async function buildRuntimeBridge(
     sessionId: engineSession.id,
     context,
     capabilities,
-    executeTool: (call) => executeRuntimeTool(session, deps, call),
+    executeTool: (call) => executeRuntimeTool(session, deps, call, inboxStore),
   };
 }
 
@@ -3029,10 +3041,83 @@ function runtimeIntent(name: string): RoutingDecision["intent"] {
   return "direct_response";
 }
 
+async function currentInboxItemForSession(
+  session: CustomerZeroSession,
+  inboxStore: InboxStore,
+): Promise<InboxItem | null> {
+  const reference = session.state.lastEmailContext;
+  if (!reference) return null;
+  const items = await inboxStore.list({ organizationId: session.organizationId, limit: 100 });
+  return items.find((item) =>
+    item.sourceMessageId === reference.providerMessageId &&
+    (item.source === reference.provider || providerForInboxSource(item.source) === reference.provider),
+  ) ?? null;
+}
+
+async function createTaskFromCurrentInboxEmail(
+  session: CustomerZeroSession,
+  workStore: DepartmentWorkStore,
+  inboxStore: InboxStore,
+  call: DepartifyToolCall,
+  title: string,
+): Promise<DepartifyToolResult> {
+  const item = await currentInboxItemForSession(session, inboxStore);
+  if (!item) {
+    return {
+      status: "blocked",
+      operation: call.name,
+      summary: "No encuentro el correo actual en el Inbox unificado; sincronízalo antes de convertirlo en tarea.",
+    };
+  }
+  const existing = await workStore.findTaskBySource(session.organizationId, item.id);
+  if (existing) {
+    return {
+      status: "success",
+      operation: call.name,
+      summary: `Ese correo ya está convertido en la tarea «${existing.title}».`,
+      data: { taskId: existing.id, inboxItemId: item.id, idempotent: true },
+    };
+  }
+  const task = await workStore.createTask({
+    organizationId: session.organizationId,
+    departmentId: item.departmentId ?? "marketing",
+    objectiveId: null,
+    requestedBy: "ceo",
+    title: title || `Correo: ${item.subject || "sin asunto"}`,
+    summary: `Datos del correo de ${item.sender.email}: ${item.preview || item.subject || "sin contenido resumido"}`,
+    capability: "results.publish",
+    toolId: call.name,
+    status: "queued",
+    statusMessage: "Tarea creada desde el Inbox unificado.",
+    progress: 0,
+    requiredCapabilities: [],
+    startedAt: null,
+    completedAt: null,
+    resultId: null,
+    errorCode: null,
+    errorMessage: null,
+    timeoutMs: 60_000,
+    source: {
+      type: "inbox_email",
+      inboxItemId: item.id,
+      provider: item.source,
+      providerMessageId: item.sourceMessageId,
+    },
+  });
+  await inboxStore.setRelatedWorkItem(item.id, task.id);
+  return {
+    status: "success",
+    operation: call.name,
+    summary: `He convertido el correo «${item.subject || "sin asunto"}» en una tarea.`,
+    data: { taskId: task.id, inboxItemId: item.id },
+  };
+}
+
 async function executeRuntimeTool(
   session: CustomerZeroSession,
   deps: ServerDeps,
   call: DepartifyToolCall,
+  inboxStore: InboxStore,
 ): Promise<DepartifyToolResult> {
   const args = call.arguments;
   const isEs = session.state.locale !== "en";
@@ -3088,7 +3173,7 @@ async function executeRuntimeTool(
       const message = call.name === "departify.email.reply"
         ? `responde al último correo diciendo ${body}`
         : `envía un correo a ${recipient}${text("subject") ? ` con asunto ${text("subject")}` : ""} diciendo ${body}`;
-      if (Boolean(args.confirm)) {
+      if (args.confirm) {
         await runEmailTurn(session, "sí, envíalo", isEs);
       } else {
         await runEmailTurn(session, message, isEs);
@@ -3117,7 +3202,11 @@ async function executeRuntimeTool(
         "calendar_read",
         isEs,
       );
-      return withReceipt({ status: "success", operation: call.name, summary: outcome.reply });
+      return withReceipt({
+        status: runtimeProviderUnavailable(outcome.reply) ? "blocked" : "success",
+        operation: call.name,
+        summary: outcome.reply,
+      });
     }
 
     case "departify.calendar.create": {
@@ -3164,7 +3253,11 @@ async function executeRuntimeTool(
     case "departify.drive.read": {
       const query = text("query") || "PDFs de Departify";
       const outcome = await runDriveTurn(session, `busca en Drive ${query}`, isEs);
-      return withReceipt({ status: "success", operation: call.name, summary: outcome.reply });
+      return withReceipt({
+        status: runtimeProviderUnavailable(outcome.reply) ? "blocked" : "success",
+        operation: call.name,
+        summary: outcome.reply,
+      });
     }
 
     case "departify.tasks.list": {
@@ -3180,6 +3273,9 @@ async function executeRuntimeTool(
     case "departify.tasks.create": {
       const title = text("title");
       const summary = text("summary");
+      if (args.fromCurrentEmail) {
+        return createTaskFromCurrentInboxEmail(session, workStore, inboxStore, call, title);
+      }
       if (!title || !summary) return { status: "blocked", operation: call.name, summary: "Faltan el título y el resumen de la tarea." };
       const task = await workStore.createTask({
         organizationId: session.organizationId,
@@ -3214,6 +3310,10 @@ async function executeRuntimeTool(
       return { status: "success", operation: call.name, summary: `Hay ${results.length} resultados duraderos.`, data: { results: results.map((result) => ({ id: result.id, title: result.title, summary: result.summary })) } };
     }
   }
+}
+
+function runtimeProviderUnavailable(reply: string): boolean {
+  return /(?:todavía no está|no está activado|no está disponible|no he podido consultar|not activated|not available)/i.test(reply);
 }
 
 /**

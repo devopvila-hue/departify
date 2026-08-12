@@ -39,6 +39,7 @@ interface CapabilityRule {
   readonly id: string;
   readonly sourceCapabilities: readonly string[];
   readonly alwaysAvailable?: boolean;
+  readonly unsupported?: boolean;
 }
 
 /** The smallest normalized surface required by Customer Zero today. */
@@ -63,6 +64,7 @@ export const RUNTIME_CAPABILITY_RULES: readonly CapabilityRule[] = [
   { id: "calendar.create", sourceCapabilities: ["calendar.create"] },
   { id: "drive.search", sourceCapabilities: ["drive.search"] },
   { id: "drive.read", sourceCapabilities: ["drive.read"] },
+  { id: "drive.write", sourceCapabilities: [], unsupported: true },
   { id: "tasks.list", sourceCapabilities: [], alwaysAvailable: true },
   { id: "tasks.create", sourceCapabilities: [], alwaysAvailable: true },
   { id: "approvals.list", sourceCapabilities: [], alwaysAvailable: true },
@@ -112,7 +114,9 @@ export function buildRuntimeCapabilityManifest(
       id: rule.id,
       available,
       providers: [...providers],
-      ...(available ? {} : { reason: "not_connected" as const }),
+      ...(available
+        ? {}
+        : { reason: rule.unsupported ? ("unsupported" as const) : ("not_connected" as const) }),
     } satisfies RuntimeCapability;
   });
 
@@ -132,4 +136,3 @@ export function isRuntimeCapabilityAvailable(
     (entry) => entry.id === capability && entry.available,
   );
 }
-

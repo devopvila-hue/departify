@@ -186,11 +186,18 @@ export const DEPARTIFY_TOOL_DEFINITIONS: readonly DepartifyToolDefinition[] = [
     sideEffect: true,
     inputSchema: {
       type: "object",
-      required: ["title", "summary"],
+      anyOf: [
+        { required: ["title", "summary"] },
+        { required: ["fromCurrentEmail"] },
+      ],
       properties: {
         title: stringProperty("Task title"),
         summary: stringProperty("Task summary"),
         capability: stringProperty("Required business capability, when known"),
+        fromCurrentEmail: {
+          type: "boolean",
+          description: "Convert the currently referenced inbox email into this task",
+        },
       },
       additionalProperties: false,
     },

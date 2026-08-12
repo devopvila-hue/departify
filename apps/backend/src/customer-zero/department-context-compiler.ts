@@ -32,7 +32,11 @@ import { publicCredentialSource } from "./credential-resolver.js";
 import { listDepartmentMemory } from "./department-memory.js";
 import type { CompanyDnaRecord } from "./company-dna.js";
 import type { DepartmentResult, DepartmentTask } from "./department-work.js";
-import type { ApprovalRequest, DepartmentActivity } from "./marketing-domain.js";
+import type {
+  ApprovalRequest,
+  BusinessObjective,
+  DepartmentActivity,
+} from "./marketing-domain.js";
 import { MARKETING_ROSTER } from "./marketing-roster.js";
 import type { RuntimeCapabilityManifest } from "./capability-manifest.js";
 
@@ -650,6 +654,7 @@ export interface RuntimeBusinessContextInput {
   readonly tasks: readonly DepartmentTask[];
   readonly results: readonly DepartmentResult[];
   readonly approvals: readonly ApprovalRequest[];
+  readonly activeObjective?: BusinessObjective | null;
   readonly recentActivity?: readonly DepartmentActivity[];
   readonly recentConversation?: readonly {
     readonly role: "user" | "assistant";
@@ -697,10 +702,20 @@ export interface RuntimeBusinessContext {
     readonly label: string;
     readonly state: string;
   }[];
+  readonly activeObjective: {
+    readonly title: string;
+    readonly desiredOutcome: string;
+    readonly status: string;
+  } | null;
   readonly departments: readonly {
     readonly id: "marketing";
     readonly name: string;
     readonly head: { readonly name: string; readonly role: string };
+    readonly activeObjective: {
+      readonly title: string;
+      readonly desiredOutcome: string;
+      readonly status: string;
+    } | null;
     readonly specialists: readonly {
       readonly id: string;
       readonly name: string;
@@ -825,6 +840,15 @@ export function compileRuntimeBusinessContext(
   const departmentProvisioned = input.companyDna
     ? Boolean(dna?.departmentProvisionedAt)
     : Boolean(base.ready);
+  const activeObjective = input.activeObjective
+    ? {
+        title: input.activeObjective.title,
+        desiredOutcome: input.activeObjective.desiredOutcome,
+        status: input.activeObjective.status,
+      }
+    : base.companyDNA.goal
+      ? { title: base.companyDNA.goal, desiredOutcome: base.companyDNA.goal, status: "active" }
+      : null;
   const specialists = departmentProvisioned
     ? MARKETING_ROSTER.map((employee) => ({
         id: employee.id,
@@ -863,11 +887,13 @@ export function compileRuntimeBusinessContext(
         : {}),
     },
     connections: input.connections.map(({ toolId, label, state }) => ({ toolId, label, state })),
+    activeObjective,
     departments: [
       {
         id: "marketing",
         name: "Marketing",
         head: { name: "Elvira", role: "Directora de Marketing" },
+        activeObjective,
         specialists,
         activeWork: marketingWork.map(({ id, title, status }) => ({ id, title, status })),
       },
@@ -907,6 +933,7 @@ export function renderRuntimeBusinessContextForEngine(
     toolManifest,
     "TOOL PROTOCOL:",
     "Use a normalized Departify tool only when it is listed and its capability is available. Do not mention providers, credentials, or internal runtime details.",
+    "If the CEO asks for an unavailable capability such as drive.write, explain the limitation and never claim a mutation occurred.",
     "If a tool is needed, emit exactly <departify_tool_call>{\"name\":\"departify.*\",\"arguments\":{...}}</departify_tool_call> and no invented success claim. Otherwise answer the CEO normally.",
     "A tool result will be returned in <departify_tool_result> data; provider truth and approval state are authoritative.",
   ].join("\n");

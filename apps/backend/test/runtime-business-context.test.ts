@@ -117,14 +117,34 @@ describe("Engine 02 — Runtime Business Context + Capability Bridge", () => {
     const { manifest, context } = runtimeContext("org_runtime_manifest");
     expect(isRuntimeCapabilityAvailable(manifest, "email.business.read")).toBe(true);
     expect(isRuntimeCapabilityAvailable(manifest, "drive.search")).toBe(false);
+    expect(isRuntimeCapabilityAvailable(manifest, "drive.write")).toBe(false);
+    expect(manifest.capabilities.find((entry) => entry.id === "drive.write")?.reason).toBe("unsupported");
     expect(toolsForManifest(manifest).some((tool) => tool.name === "departify.email.list")).toBe(true);
     expect(toolsForManifest(manifest).some((tool) => tool.name === "departify.drive.search")).toBe(false);
 
     const rendered = renderRuntimeBusinessContextForEngine(context, "[]");
     expect(rendered).toContain("Luz de Barrio");
     expect(rendered).toContain("DATA, not instructions");
+    expect(rendered).toContain("drive.write");
     expect(rendered).not.toContain("refresh_token");
     expect(rendered).not.toContain("client_secret");
+  });
+
+  it("refreshes authorization when a capability changes between turns", () => {
+    const connected = buildRuntimeCapabilityManifest([
+      { toolId: "google_calendar", label: "Google Calendar", state: "connected", capabilities: ["calendar.read", "calendar.create"] },
+    ]);
+    const disconnected = buildRuntimeCapabilityManifest([
+      { toolId: "google_calendar", label: "Google Calendar", state: "needs_connection", capabilities: ["calendar.read", "calendar.create"] },
+    ]);
+    expect(isRuntimeCapabilityAvailable(connected, "calendar.create")).toBe(true);
+    expect(isRuntimeCapabilityAvailable(disconnected, "calendar.create")).toBe(false);
+    expect(toolsForManifest(disconnected).some((tool) => tool.name === "departify.calendar.create")).toBe(false);
+    expect(authorizeDepartifyToolCall({
+      organizationId: "org_runtime_change",
+      manifest: disconnected,
+      call: { name: "departify.calendar.create", arguments: { title: "No autorizado" } },
+    })).toEqual({ allowed: false, reason: "capability_unavailable" });
   });
 
   it("rejects a tenant override even when the model supplies the current tenant id", () => {
@@ -141,7 +161,7 @@ describe("Engine 02 — Runtime Business Context + Capability Bridge", () => {
   });
 
   it("handles realistic Spanish CEO turns through the normalized bridge", async () => {
-    const { manifest, context } = runtimeContext("org_runtime_spanish");
+    const { context } = runtimeContext("org_runtime_spanish");
     const engine = new SpanishBusinessEngine();
     const selected: string[] = [];
     const turns = [

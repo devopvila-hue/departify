@@ -742,6 +742,7 @@ export class MarketingService {
     locale: SupportedLocale;
     session: CustomerZeroSession;
   }): Promise<ElviraMessageOutput> {
+    const active = await this.activeObjective(input.organizationId);
     const compiled = compileDepartmentContext(input.session);
     const engineContext = renderCompiledContextForEngine(compiled);
     const [companyDna, runtimeApprovals, runtimeRecentActivity] = await Promise.all([
@@ -764,10 +765,10 @@ export class MarketingService {
       tasks: [],
       results: [],
       approvals: runtimeApprovals,
+      activeObjective: active,
       recentActivity: runtimeRecentActivity,
     });
 
-    const active = await this.activeObjective(input.organizationId);
     const engineSessionId = await this.ensureEngineSession(input.organizationId);
     const engineMessage = `${engineContext}\n\nMENSAJE DEL CEO:\n${input.message}`;
     const result = await this.engine.sendMessage({
