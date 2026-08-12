@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MarketingService } from "../src/customer-zero/marketing-service.js";
 import { InMemoryCompanyDnaStore } from "../src/customer-zero/company-dna.js";
 import type { DepartmentResult, DepartmentTask } from "../src/customer-zero/department-work.js";
+import { buildCompanyOperatingState } from "../src/customer-zero/ceo-overview.js";
 
 const organizationId = "org_marketing_roster";
 
@@ -108,5 +109,33 @@ describe("canonical Marketing roster projections", () => {
         status: "connected",
       },
     ]);
+
+    const company = buildCompanyOperatingState({
+      base: {
+        goal: "Conseguir clientes",
+        companyName: "Empresa real",
+        heads: [status.head],
+        decisions: [],
+        activity: [],
+        results: [],
+        connections: [],
+        working: 0,
+        done: 0,
+      },
+      head: status.head,
+      tasks: [activeTask],
+      results: [result],
+      inboxItems: [],
+      connections: [],
+      dna: null,
+      marketing: status,
+      marketingApprovals: [],
+    });
+
+    expect(company.summary.digitalEmployees).toBe(status.employees.length);
+    expect(company.departments[0]?.employees).toHaveLength(status.employees.length);
+    expect(company.summary.workingNow).toBe(1);
+    expect(company.activity.some((entry) => entry.message.includes(activeTask.title))).toBe(true);
+    expect(company.results.some((item) => item.id === result.id)).toBe(true);
   });
 });
