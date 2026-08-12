@@ -280,7 +280,10 @@ const config = {
   },
   models: { providers },
   tools: {
-    profile: "messaging",
+    // The CEO agent needs OpenClaw's agentic surfaces (web, memory, sessions,
+    // and skill workshop) to discover/compose safe procedures. Keep the
+    // host-facing and mutating surfaces explicitly denied below.
+    profile: "coding",
     alsoAllow: [
       ...(enableNativeBusinessTools
         ? [
@@ -293,6 +296,7 @@ const config = {
             "departify.tasks.list",
             "departify.approvals.list",
             "departify.results.list",
+            "departify.work.deliverable",
           ]
         : []),
       ...(execMode === "test" ? ["exec", "process", "read"] : []),
@@ -322,7 +326,26 @@ const config = {
           },
         }
       : { exec: { security: "deny" } }),
-    deny: ["gateway", "cron", "web_search", "web_fetch", "browser", "write", "edit", "apply_patch"],
+    // `coding` is intentionally narrowed: no host shell, arbitrary code
+    // execution, writes/patches, browser, cron, nodes, or media side effects.
+    // Native business operations remain the only provider-facing surface.
+    deny: [
+      "gateway",
+      "cron",
+      "browser",
+      "nodes",
+      "write",
+      "edit",
+      "apply_patch",
+      "exec",
+      "process",
+      "code_execution",
+      "image",
+      "image_generate",
+      "music_generate",
+      "video_generate",
+      "tts",
+    ],
     fs: { workspaceOnly: true },
   },
   channels: {},

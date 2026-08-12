@@ -19,7 +19,7 @@ function registeredPlugin() {
   return { factory, gatewayHandler };
 }
 
-test("registers the closed read-only native tool surface", async () => {
+test("registers the native tool surface", async () => {
   const { factory, gatewayHandler } = registeredPlugin();
   assert.deepEqual(TOOL_NAMES, [
     "departify.company.context",
@@ -31,6 +31,7 @@ test("registers the closed read-only native tool surface", async () => {
     "departify.tasks.list",
     "departify.approvals.list",
     "departify.results.list",
+    "departify.work.deliverable",
   ]);
   const beforePolicy = factory({ sessionKey: `departify:ceo:${ORG_A}`, agentId: "main" });
   assert.deepEqual(beforePolicy, []);
@@ -39,15 +40,19 @@ test("registers the closed read-only native tool surface", async () => {
     params: { sessionKey: `departify:ceo:${ORG_A}`, agentId: "main", toolNames: TOOL_NAMES },
     respond(ok, result) { response = { ok, result }; },
   });
-  assert.deepEqual(response, { ok: true, result: { ok: true, toolCount: 9 } });
+  assert.deepEqual(response, { ok: true, result: { ok: true, toolCount: 10 } });
   const tools = factory({ sessionKey: `departify:ceo:${ORG_A}`, agentId: "main" });
-  assert.equal(tools.length, 9);
+  assert.equal(tools.length, 10);
   const company = tools.find((tool) => tool.name === "departify.company.context");
   assert.deepEqual(company.parameters.properties.section.enum, ["summary", "objective", "marketing", "all"]);
   assert.equal(company.parameters.additionalProperties, false);
   assert.equal(tools.find((tool) => tool.name === "departify.email.list").parameters.properties.offset.type, "integer");
   assert.deepEqual(tools.find((tool) => tool.name === "departify.calendar.list").parameters.properties.timeOfDay.enum, ["morning", "afternoon", "evening"]);
-  assert.equal(tools.some((tool) => tool.name.includes("send") || tool.name.includes("create")), false);
+  const deliverable = tools.find((tool) => tool.name === "departify.work.deliverable");
+  assert.deepEqual(deliverable.parameters.required, ["objective", "capability", "transformation"]);
+  assert.deepEqual(deliverable.parameters.properties.capability.enum, ["crm.contacts.list"]);
+  assert.deepEqual(deliverable.parameters.properties.transformation.enum, ["score"]);
+  assert.equal(tools.some((tool) => tool.name.includes("send")), false);
 });
 
 test("uses trusted session identity and returns the structured gateway result", async () => {
