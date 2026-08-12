@@ -351,7 +351,7 @@ export class OpenClawEngineAdapter implements EngineAdapter {
  * safe structured context and normalized tool definitions into a strict
  * protocol envelope. Backend authorization remains independent of this text.
  */
-function renderOpenClawTurn(input: EngineSendMessageInput): string {
+export function renderOpenClawTurn(input: EngineSendMessageInput): string {
   const sections: string[] = [];
   if (input.nativeBusinessTools) {
     sections.push(

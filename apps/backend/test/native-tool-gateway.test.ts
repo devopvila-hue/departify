@@ -97,6 +97,7 @@ describe("native company context gateway", () => {
       company: { name: "Native Context A" },
     });
     expect(JSON.stringify(response.json())).not.toMatch(/access_token|refresh_token|service_role|authorization/i);
+    expect(JSON.stringify(response.json())).not.toMatch(/Google|Gmail|Hostinger|Mautic|provider/i);
   });
 
   it("rejects a token from tenant A when its signed claims are changed to tenant B", async () => {

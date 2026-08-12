@@ -63,9 +63,10 @@ function nativeRuntimeConnections(
           }
         : connection.toolId === "google_workspace" || connection.toolId === "google_drive"
           ? {
-              capabilities: googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.read"))
-                ? ["drive.search", "drive.read"]
-                : [],
+              capabilities: [
+                ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.search")) ? ["drive.search"] : []),
+                ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.read")) ? ["drive.read"] : []),
+              ],
             }
           : connection.capabilities
             ? { capabilities: connection.capabilities }
@@ -85,6 +86,18 @@ function nativeText(args: Record<string, unknown>, key: string): string {
 
 function runtimeProviderUnavailable(reply: string): boolean {
   return /(?:todavía no está|no está activado|no está disponible|no he podido consultar|not activated|not available)/i.test(reply);
+}
+
+function safeNativeCapabilities(manifest: ReturnType<typeof buildRuntimeCapabilityManifest>) {
+  return {
+    version: manifest.version,
+    generatedAt: manifest.generatedAt,
+    capabilities: manifest.capabilities.map((capability) => ({
+      id: capability.id,
+      available: capability.available,
+      ...(capability.reason ? { reason: capability.reason } : {}),
+    })),
+  };
 }
 
 function safeTraceHash(value: string): string {
@@ -222,7 +235,7 @@ export async function registerInternalEngineRoutes(
         activeObjective: context.activeObjective,
         departments: section === "objective" ? [] : context.departments,
         activeWork: section === "summary" ? [] : context.activeWork,
-        capabilities: context.capabilities,
+        capabilities: safeNativeCapabilities(context.capabilities),
       };
       console.info("[native-tool-trace]", {
         nativeTool: true,
@@ -315,7 +328,7 @@ export async function registerInternalEngineRoutes(
           activeObjective: context.activeObjective,
           departments: section === "objective" ? [] : context.departments,
           activeWork: section === "summary" ? [] : context.activeWork,
-          capabilities: context.capabilities,
+          capabilities: safeNativeCapabilities(context.capabilities),
         };
       } else if (toolName === "departify.email.list" || toolName === "departify.email.search") {
         const query = toolName === "departify.email.search" ? nativeText(args, "query") : "mis últimos correos";
@@ -331,7 +344,8 @@ export async function registerInternalEngineRoutes(
         const outcome = await runCalendarReadTurn(session, nativeText(args, "range") || "mis próximos eventos", isEs);
         result = { status: runtimeProviderUnavailable(outcome.reply) ? "blocked" : "success", operation: toolName, summary: outcome.reply };
       } else if (toolName === "departify.drive.search" || toolName === "departify.drive.read") {
-        const identityForDrive = await findOperationalGoogleIdentityForOrg(identity.organizationId, "drive.read");
+        const driveCapability = toolName === "departify.drive.read" ? "drive.read" : "drive.search";
+        const identityForDrive = await findOperationalGoogleIdentityForOrg(identity.organizationId, driveCapability);
         if (!identityForDrive) {
           result = { status: "blocked", operation: toolName, summary: "Drive todavía no está activado." };
         } else {
@@ -361,7 +375,19 @@ export async function registerInternalEngineRoutes(
               result = { status: "success", operation: toolName, data: file ? { id: file.id, name: file.name, mimeType: file.mimeType, preview: file.preview?.slice(0, 4000) ?? "" } : {} };
             }
           } else {
-            const driveResult = await adapter.searchFiles({ query: nativeText(args, "query") || "Departify", pageSize: Number(args.limit ?? 20) });
+            const includeFolders = args.includeFolders === true;
+            const driveResult = includeFolders
+              ? await adapter.listFiles({
+                  mimeType: "application/vnd.google-apps.folder",
+                  ...(nativeText(args, "parentId") ? { parentId: nativeText(args, "parentId") } : {}),
+                  pageSize: Number(args.limit ?? 20),
+                })
+              : await adapter.searchFiles({
+                  ...(nativeText(args, "query") ? { query: nativeText(args, "query") } : {}),
+                  ...(nativeText(args, "parentId") ? { parentId: nativeText(args, "parentId") } : {}),
+                  ...(nativeText(args, "mimeType") ? { mimeType: nativeText(args, "mimeType") } : {}),
+                  pageSize: Number(args.limit ?? 20),
+                });
             if (!driveResult.success) {
               session.state.lastExecutionReceipt = failExecutionReceipt(receipt, driveResult.errorCode ?? "provider_error");
               result = { status: "blocked", operation: toolName, summary: driveResult.message ?? "Drive no está disponible." };

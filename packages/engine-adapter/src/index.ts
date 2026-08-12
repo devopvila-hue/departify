@@ -29,7 +29,7 @@ export type {
   EngineHistoryRole,
   EngineHealth,
 } from "./types.js";
-export { OpenClawEngineAdapter } from "./openclaw/openclaw-adapter.js";
+export { OpenClawEngineAdapter, renderOpenClawTurn } from "./openclaw/openclaw-adapter.js";
 export {
   OpenClawGatewayClient,
   mapGatewayError,

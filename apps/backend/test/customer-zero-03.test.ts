@@ -523,6 +523,23 @@ describe("GoogleDriveAdapter", () => {
     expect(out.errorCode).toBe("invalid_response");
   });
 
+  it("16b Drive search can list folders and continue inside a parent", async () => {
+    seedTokens();
+    const requested: string[] = [];
+    globalThis.fetch = (async (input: string | URL) => {
+      requested.push(String(input));
+      return jsonResponse(200, {
+        files: [{ id: "folder_1", name: "Departify", mimeType: "application/vnd.google-apps.folder", modifiedTime: "2026-08-10T10:00:00Z" }],
+      });
+    }) as typeof fetch;
+    const adapter = new GoogleDriveAdapter({ organizationId: "org_a", userId: "ceo_a" });
+    const out = await adapter.listFiles({ mimeType: "application/vnd.google-apps.folder", parentId: "root_1" });
+    expect(out.success).toBe(true);
+    const query = new URL(requested[0]!).searchParams.get("q") ?? "";
+    expect(query).toContain("mimeType = 'application/vnd.google-apps.folder'");
+    expect(query).toContain("'root_1' in parents");
+  });
+
   it("lists real PDFs by MIME type without making a write request", async () => {
     seedTokens();
     let requestedUrl = "";

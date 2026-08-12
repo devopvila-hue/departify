@@ -2947,6 +2947,7 @@ interface RuntimeBridgeInput {
 interface CeoTurnTraceState {
   readonly requestCorrelationId: string;
   readonly organizationHash: string;
+  readonly startedAt: number;
   /** Opaque/hash-based form: never log the raw organization id. */
   readonly logicalSessionKey: string;
   engineSessionId: string | null;
@@ -3046,6 +3047,7 @@ function newCeoTurnTrace(
   return {
     requestCorrelationId,
     organizationHash,
+    startedAt: Date.now(),
     logicalSessionKey: `ceo:${organizationHash}`,
     engineSessionId: null,
     turnNumber: session.state.conversation.filter((entry) => entry.role === "user").length + 1,
@@ -3101,6 +3103,7 @@ function emitCeoTurnTrace(
     providerMutationResult: trace.providerMutationResult,
     routingBypassed: trace.routingBypassed,
     resultStatus: trace.toolResultStatuses.at(-1) ?? "completed",
+    durationMs: Date.now() - trace.startedAt,
   });
 }
 
@@ -3161,9 +3164,10 @@ async function buildRuntimeBridge(
           }
         : connection.toolId === "google_workspace" || connection.toolId === "google_drive"
           ? {
-              capabilities: googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.read"))
-                ? ["drive.search", "drive.read"]
-                : [],
+              capabilities: [
+                ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.search")) ? ["drive.search"] : []),
+                ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.read")) ? ["drive.read"] : []),
+              ],
             }
           : connection.capabilities
             ? { capabilities: connection.capabilities }

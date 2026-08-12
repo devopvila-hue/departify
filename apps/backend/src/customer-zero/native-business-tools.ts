@@ -16,6 +16,17 @@ export const NATIVE_READ_TOOL_NAMES = [
   "departify.results.list",
 ] as const;
 
+export const NATIVE_DRIVE_READ_INPUT = {
+  type: "object",
+  properties: {
+    query: { type: "string", description: "Optional file or folder search terms" },
+    parentId: { type: "string", description: "Optional authorized parent folder id" },
+    mimeType: { type: "string", description: "Optional MIME type filter" },
+    limit: { type: "integer", minimum: 1, maximum: 50 },
+  },
+  additionalProperties: false,
+} as const;
+
 export type NativeReadToolName = (typeof NATIVE_READ_TOOL_NAMES)[number];
 
 const REQUIRED_CAPABILITY: Partial<Record<NativeReadToolName, string>> = {

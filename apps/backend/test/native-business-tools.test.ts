@@ -36,4 +36,16 @@ describe("native business read surface", () => {
     ]);
     expect(nativeToolsForManifest(manifest).some((name) => /send|reply|create|write/.test(name))).toBe(false);
   });
+
+  it("keeps Drive search independently available from Drive read", () => {
+    const manifest = buildRuntimeCapabilityManifest([{
+      toolId: "google_drive",
+      label: "Drive",
+      state: "connected",
+      capabilities: ["drive.search"],
+    }]);
+    const tools = nativeToolsForManifest(manifest);
+    expect(tools).toContain("departify.drive.search");
+    expect(tools).not.toContain("departify.drive.read");
+  });
 });

@@ -35,12 +35,15 @@ export interface DriveFile {
 }
 
 export interface DriveSearchInput {
-  readonly query: string;
+  readonly query?: string;
+  readonly parentId?: string;
+  readonly mimeType?: string;
   readonly pageSize?: number;
 }
 
 export interface DriveListInput {
   readonly mimeType?: string;
+  readonly parentId?: string;
   readonly pageSize?: number;
 }
 
@@ -157,10 +160,14 @@ export class GoogleDriveAdapter {
   async searchFiles(input: DriveSearchInput): Promise<DriveAdapterResult<readonly DriveFile[]>> {
     const accessToken = await this.getAccessToken();
     if (!accessToken) return fail("Google no está conectado.", "auth");
-    const sanitized = input.query.replace(/[\r\n]/g, " ").trim();
-    if (sanitized.length === 0) return fail("Búsqueda vacía.", "invalid_response");
+    const sanitized = (input.query ?? "").replace(/[\r\n]/g, " ").trim();
+    const clauses = ["trashed = false"];
+    if (sanitized) clauses.push(`(name contains '${sanitized.replace(/'/g, "\\'")}' or fullText contains '${sanitized.replace(/'/g, "\\'")}')`);
+    if (input.parentId) clauses.push(`'${input.parentId.replace(/'/g, "\\'")}' in parents`);
+    if (input.mimeType) clauses.push(`mimeType = '${input.mimeType.replace(/'/g, "\\'")}'`);
+    if (clauses.length === 1) return fail("Búsqueda vacía.", "invalid_response");
     const params = new URLSearchParams({
-      q: `name contains '${sanitized.replace(/'/g, "\\'")}' or fullText contains '${sanitized.replace(/'/g, "\\'")}'`,
+      q: clauses.join(" and "),
       pageSize: String(input.pageSize ?? 20),
       fields: "files(id,name,mimeType,size,modifiedTime,webViewLink,owners(emailAddress))",
     });
@@ -206,6 +213,7 @@ export class GoogleDriveAdapter {
     if (!accessToken) return fail("Google no está conectado.", "auth");
     const clauses = ["trashed = false"];
     if (input.mimeType) clauses.push(`mimeType = '${input.mimeType.replace(/'/g, "\\'")}'`);
+    if (input.parentId) clauses.push(`'${input.parentId.replace(/'/g, "\\'")}' in parents`);
     const params = new URLSearchParams({
       q: clauses.join(" and "),
       pageSize: String(input.pageSize ?? 100),
