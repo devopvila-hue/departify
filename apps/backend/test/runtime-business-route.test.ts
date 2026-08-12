@@ -24,11 +24,17 @@ import {
   __resetWorkStoreForTests,
   isRuntimeExplicitApproval,
 } from "../src/server/routes/customer-zero-v2.js";
+import {
+  createInMemoryGoogleTokenStore,
+  getGoogleTokenStore,
+  installGoogleTokenStore,
+} from "../src/customer-zero/google-tokens.js";
 
 const AUTH = { authorization: "Bearer token-a" };
 
 class FakeRuntimeEngine implements EngineAdapter {
   readonly inputs: EngineSendMessageInput[] = [];
+  mode: "task" | "calendar" = "task";
   private readonly session: EngineSession = {
     id: "ceo:runtime-test",
     status: "active",
@@ -42,8 +48,19 @@ class FakeRuntimeEngine implements EngineAdapter {
   async sendMessage(input: EngineSendMessageInput): Promise<EngineMessageResult> {
     this.inputs.push(input);
     const text = input.toolResult
-      ? "He convertido el correo actual en una tarea durable."
-      : `<departify_tool_call>{"name":"departify.tasks.create","arguments":{"fromCurrentEmail":true,"title":"Revisar consulta de pricing"}}</departify_tool_call>`;
+      ? this.mode === "calendar"
+        ? "Evento preparado y bloqueado hasta la aprobación."
+        : "He convertido el correo actual en una tarea durable."
+      : this.mode === "calendar"
+        ? `<departify_tool_call>${JSON.stringify({
+            name: "departify.calendar.create",
+            arguments: {
+              title: "hola",
+              start: new Date(Date.now() + 10 * 60_000).toISOString(),
+              durationMinutes: 30,
+            },
+          })}</departify_tool_call>`
+        : `<departify_tool_call>{"name":"departify.tasks.create","arguments":{"fromCurrentEmail":true,"title":"Revisar consulta de pricing"}}</departify_tool_call>`;
     return {
       sessionId: input.sessionId,
       messageId: `message-${this.inputs.length}`,
@@ -99,6 +116,8 @@ describe("Engine 02 runtime business route", () => {
     resetCustomerZeroSessionsForTest();
     __resetWorkStoreForTests();
     engine.inputs.length = 0;
+    engine.mode = "task";
+    installGoogleTokenStore(null);
   });
 
   function authedInject(options: InjectOptions) {
@@ -190,5 +209,60 @@ describe("Engine 02 runtime business route", () => {
     expect(isRuntimeExplicitApproval("hazlo", "calendar")).toBe(true);
     expect(isRuntimeExplicitApproval("responde al último correo", "email")).toBe(false);
     expect(isRuntimeExplicitApproval("sí, envíalo", "email")).toBe(true);
+  });
+
+  it("bridges an OpenClaw Calendar create selection into pending approval with the resolved relative time", async () => {
+    const start = await authedInject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      payload: {
+        companyName: "Runtime Calendar Test",
+        hasWebsite: false,
+        description: "Servicio B2B para equipos comerciales.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const organizationId = start.json().organizationId as string;
+    installGoogleTokenStore(createInMemoryGoogleTokenStore());
+    await getGoogleTokenStore().put({
+      organizationId,
+      userId: "user-a",
+      provider: "gmail",
+      accessToken: "access-calendar-runtime",
+      refreshToken: "refresh-calendar-runtime",
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      scopes: [
+        "https://www.googleapis.com/auth/calendar.readonly",
+        "https://www.googleapis.com/auth/calendar.events",
+      ],
+      email: "ceo@departify.app",
+      displayName: "CEO",
+      operationalVerifiedAt: new Date().toISOString(),
+      operationalProbeError: null,
+      operationalCapabilities: ["calendar.read", "calendar.create"],
+    });
+    engine.mode = "calendar";
+    const before = Date.now();
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/command-center/message`,
+      payload: { message: "cea un evento en 10 mintos con hola" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(engine.inputs[0]?.businessTools?.some((tool) => tool.name === "departify.calendar.create")).toBe(true);
+    expect(engine.inputs[0]?.runtimeContext).toContain("calendar.create");
+    const session = getOrCreateCustomerZeroSession(organizationId);
+    expect(session.state.pendingCalendarWork).toMatchObject({
+      summary: "hola",
+      status: "awaiting_approval",
+      timezone: "Europe/Madrid",
+    });
+    const startIso = session.state.pendingCalendarWork?.startIso;
+    expect(startIso).toBeTruthy();
+    expect(new Date(startIso!).getTime()).toBeGreaterThanOrEqual(before + 9 * 60_000);
+    expect(new Date(startIso!).getTime()).toBeLessThanOrEqual(before + 11 * 60_000);
+    expect(session.state.lastCalendarOperation).toBeUndefined();
   });
 });
