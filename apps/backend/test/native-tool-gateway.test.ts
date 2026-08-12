@@ -196,7 +196,7 @@ describe("native company context gateway", () => {
     expect(lastInput?.businessTools).toBeUndefined();
   });
 
-  it("does not report native success when OpenClaw returns no native selection", async () => {
+  it("keeps a completed native reasoning response instead of falling through to legacy routing", async () => {
     engine.nativeSelection = false;
     const start = await server.inject({
       method: "POST",
@@ -215,12 +215,77 @@ describe("native company context gateway", () => {
       method: "POST",
       url: `/api/customer-zero/${organizationId}/command-center/message`,
       headers: { authorization: "Bearer token-a" },
-      payload: { message: "¿Qué sabes de mi empresa?" },
+      payload: { message: "Hazme un mailing de tres correos para vender Departify." },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json().reply).not.toContain("Contexto de empresa consultado");
+    expect(response.json().reply).toContain("Contexto de empresa consultado");
+    expect(response.json().reply).not.toMatch(/Elvira|Marketing|No puedo afirmar/i);
     expect(engine.inputs.at(-1)?.nativeBusinessTools).toBe(true);
     expect(engine.nativePolicies.at(-1)?.toolNames).toContain("departify.company.context");
+  });
+
+  it("keeps an ambiguous native business response in the same CEO path", async () => {
+    engine.nativeSelection = false;
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Native Ambiguous Work",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const organizationId = start.json().organizationId as string;
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/command-center/message`,
+      headers: { authorization: "Bearer token-a" },
+      payload: { message: "Quiero crear listas con mis contactos pero no sé cómo categorizarlos." },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().reply).toContain("Contexto de empresa consultado");
+    expect(response.json().reply).not.toMatch(/Lo paso a Elvira|Marketing/i);
+    expect(engine.inputs.at(-1)?.nativeBusinessTools).toBe(true);
+  });
+
+  it("keeps native session continuity across two natural CEO turns", async () => {
+    engine.nativeSelection = false;
+    const beforeInputs = engine.inputs.length;
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Native Continuity",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const organizationId = start.json().organizationId as string;
+    const first = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/command-center/message`,
+      headers: { authorization: "Bearer token-a" },
+      payload: { message: "Quiero crear listas con mis contactos pero no sé cómo categorizarlos." },
+    });
+    const second = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/command-center/message`,
+      headers: { authorization: "Bearer token-a" },
+      payload: { message: "Usa las categorías que consideres mejores." },
+    });
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    const turnInputs = engine.inputs.slice(beforeInputs);
+    expect(turnInputs).toHaveLength(2);
+    expect(turnInputs[0]?.sessionId).toBe(turnInputs[1]?.sessionId);
+    expect(turnInputs.every((input) => input.nativeBusinessTools === true)).toBe(true);
+    expect(second.json().reply).not.toMatch(/Lo paso a Elvira|Marketing/i);
   });
 
   it("keeps ENGINE 02 textual mode when the native flag is off", async () => {

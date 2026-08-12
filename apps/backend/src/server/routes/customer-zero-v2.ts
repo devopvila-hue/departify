@@ -2306,12 +2306,16 @@ export async function registerCustomerZeroV2Routes(
       const trace = newCeoTurnTrace(session, request.id);
       try {
         const normalizedMessage = normalizeOperationalLanguage(body.message);
-        const bypassRuntime = shouldBypassRuntimeForPendingOperation(session, normalizedMessage);
+        const bypassRuntime = shouldBypassRuntimeForPendingOperation(
+          session,
+          normalizedMessage,
+          deps.nativeBusinessTools === true,
+        );
         const pendingRead = Boolean(
           session.state.pendingCalendarWork && isCalendarReadRequest(normalizedMessage),
         );
         if (bypassRuntime) trace.routingBypassed = true;
-        const runtime = deps.engine && !bypassRuntime && !pendingRead
+        const runtime = deps.engine && !bypassRuntime && (deps.nativeBusinessTools === true || !pendingRead)
           ? await buildRuntimeBridge(session, deps, inboxStore, trace)
           : null;
         const result = await processCeoMessage(
@@ -3038,10 +3042,11 @@ function pendingDecisionForSession(
 function shouldBypassRuntimeForPendingOperation(
   session: CustomerZeroSession,
   message: string,
+  nativeBusinessTools = false,
 ): boolean {
   const decision = pendingDecisionForSession(session, message);
   if (decision === "APPROVE" || decision === "CANCEL") return true;
-  if (session.state.pendingCalendarWork && isCalendarReadRequest(message)) return true;
+  if (!nativeBusinessTools && session.state.pendingCalendarWork && isCalendarReadRequest(message)) return true;
   return Boolean(
     !session.state.pendingCalendarWork &&
     session.state.lastCalendarOperation?.status === "verified" &&
@@ -3284,18 +3289,16 @@ function runtimeIntentForTools(
   return runtimeIntent(names[0] ?? "departify.company.context");
 }
 
-/** Native ENGINE 03.2 exposes reads only. Existing mutation/follow-up state
- * must remain in the deterministic control plane until native mutations exist. */
-function shouldUseNativeReadPath(
-  message: string,
-  session: CustomerZeroSession,
-): boolean {
-  if (isCalendarCreateRequest(message) || isEmailSendRequest(message)) return false;
-  if (
-    session.state.pendingCalendarWork &&
-    (isCalendarAttendeeFollowUp(message) || isCalendarDateOrTimeFollowUp(message))
-  ) return false;
-  return true;
+/** Native mode owns all CEO reasoning. Approval/cancellation transitions are
+ * returned before this function; every other non-empty message reaches
+ * OpenClaw first. Legacy mutation adapters may still enforce their gate after
+ * the native response. */
+function shouldUseNativeAgentPath(message: string): boolean {
+  return message.trim().length > 0;
+}
+
+function nativeMutationRequiresDeterministicGate(message: string): boolean {
+  return isCalendarCreateRequest(message) || isEmailSendRequest(message) || isEmailReplyRequest(message);
 }
 
 function runtimeToolsMatchRequest(
@@ -3765,7 +3768,7 @@ export async function processCeoMessage(
     return completeDeterministicOperationTurn(session, conversation, message, reply, operation, "already_verified");
   }
 
-  if (runtime?.nativeBusinessTools && shouldUseNativeReadPath(operationalMessage, session)) {
+  if (runtime?.nativeBusinessTools && shouldUseNativeAgentPath(operationalMessage)) {
     if (trace) {
       trace.exposedToolNames = [...runtime.nativeToolNames];
     }
@@ -3797,14 +3800,10 @@ export async function processCeoMessage(
         );
         trace.toolResultStatuses = nativeResult.status === "completed" ? ["success"] : ["failed"];
       }
-      // A native turn is successful only when OpenClaw actually selected an
-      // exposed native tool. A plain model response must not be relabeled as
-      // a tool result or bypass the existing safe router.
       const selectedExposedTools = selectedTools.filter((name) => runtime.nativeToolNames.includes(name));
       if (
         nativeResult.status === "completed" &&
-        selectedExposedTools.length > 0 &&
-        (!deliverableRequest.requested || selectedExposedTools.includes("departify.work.deliverable"))
+        !nativeMutationRequiresDeterministicGate(operationalMessage)
       ) {
         const nativeWorkResult = selectedExposedTools.includes("departify.work.deliverable")
           ? (await workStoreForRoutes().listResultsForOrg(organizationId, 1))[0] ?? null
@@ -3820,13 +3819,13 @@ export async function processCeoMessage(
         );
       }
       if (nativeResult.status === "completed") {
-        if (trace) trace.toolResultStatuses = ["native_tool_not_selected"];
+        if (trace) trace.toolResultStatuses = ["native_deferred_to_deterministic_gate"];
         console.info("[native-tool-trace]", {
           nativeTool: true,
           toolName: selectedTools.join(",") || "native",
           organizationHash: safeTraceHash(organizationId),
           authorized: false,
-          status: "tool_not_selected",
+          status: "deferred_to_deterministic_mutation_gate",
         });
       }
     } catch {
@@ -3840,10 +3839,7 @@ export async function processCeoMessage(
     }
   }
 
-  // ENGINE 02 — give OpenClaw a fresh business context for operational turns.
-  // Approval/cancellation/edit fast paths remain deterministic below. If the
-  // engine is unavailable or declines to select a normalized tool, the
-  // existing safe router continues to own the turn.
+  // ENGINE 02 legacy mode — retained only when native mode is disabled.
   if (runtime && !runtime.nativeBusinessTools && runtimeCandidate(operationalMessage, session)) {
     try {
       const runtimeTurn = await runRuntimeBusinessTurn({
@@ -4580,7 +4576,9 @@ async function completeRuntimeCeoTurn(
     routing: {
       intent,
       departments: [],
-      rationale: `OpenClaw selected ${toolNames.length} authorized normalized tool${toolNames.length === 1 ? "" : "s"}: ${toolNames.join(", ")}.`,
+      rationale: toolNames.length > 0
+        ? "He consultado la información autorizada y he completado la respuesta."
+        : "He preparado una respuesta basada en el contexto disponible.",
     },
     connectionSuggestion: null,
     pendingToolId: null,
