@@ -247,6 +247,7 @@ describe("native company context gateway", () => {
       payload: { message: "¿qué está haciendo Marketing ahora?" },
     });
     expect(response.statusCode).toBe(200);
+    expect(response.headers["x-departify-correlation-id"]).toBeTruthy();
     expect(response.json().reply).toContain("Contexto de empresa consultado");
     const lastInput = engine.inputs.at(-1);
     expect(lastInput?.nativeBusinessTools).toBe(true);

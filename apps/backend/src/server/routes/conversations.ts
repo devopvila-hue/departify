@@ -423,7 +423,10 @@ export async function registerConversationRoutes(
         finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
       });
       emitCeoTurnTrace(session, trace, result);
-      return reply.code(200).send(result);
+      return reply
+        .header("x-departify-correlation-id", correlationId)
+        .code(200)
+        .send(result);
     },
   );
 

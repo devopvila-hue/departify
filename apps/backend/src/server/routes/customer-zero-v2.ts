@@ -2370,7 +2370,10 @@ export async function registerCustomerZeroV2Routes(
           finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
         });
         emitCeoTurnTrace(session, runtime?.trace ?? trace, result);
-        return reply.code(200).send(result);
+        return reply
+          .header("x-departify-correlation-id", correlationId)
+          .code(200)
+          .send(result);
       } catch (cause) {
         if (cause instanceof MaxActiveConversationsError) {
           return reply.code(409).send({
