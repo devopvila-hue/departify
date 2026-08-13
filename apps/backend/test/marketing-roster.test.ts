@@ -28,6 +28,13 @@ async function buildService(): Promise<MarketingService> {
   });
 }
 
+function buildWorkStore(tasks: DepartmentTask[]) {
+  return {
+    listTasksForOrg: async (org: string) =>
+      tasks.filter((task) => task.organizationId === org),
+  } as never;
+}
+
 const activeTask = {
   id: "task_marketing_1",
   organizationId,
@@ -143,5 +150,33 @@ describe("canonical Marketing roster projections", () => {
     expect(company.activity.some((entry) => entry.message.includes(activeTask.title))).toBe(true);
     expect(company.activity.some((entry) => entry.message.startsWith("Especialista en Contenido:"))).toBe(true);
     expect(company.results.some((item) => item.id === result.id)).toBe(true);
+  });
+
+  it("projects assigned active durable work in the employee endpoint", async () => {
+    const companyDna = new InMemoryCompanyDnaStore();
+    await companyDna.upsert({
+      organizationId,
+      companyName: "Empresa real",
+      description: "Servicio real",
+      objective: "Conseguir clientes",
+      products: ["Servicio"],
+      customers: ["Clientes"],
+      channels: ["Web"],
+      declaredTools: [],
+      uncertainties: [],
+      provenance: {},
+      factsUpdatedAt: "2026-08-12T00:00:00.000Z",
+      departmentProvisionedAt: "2026-08-12T00:00:00.000Z",
+    });
+    const service = new MarketingService({
+      engine: { sendMessage: async () => ({ status: "completed", text: "" }) } as never,
+      companyDna,
+      workStore: buildWorkStore([activeTask]),
+    });
+    const employees = await service.getDigitalEmployees(organizationId);
+    expect(employees.find((employee) => employee.id === activeTask.assignedEmployeeId)).toMatchObject({
+      status: "trabajando",
+    });
+    expect(employees.filter((employee) => employee.status === "trabajando")).toHaveLength(1);
   });
 });

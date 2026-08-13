@@ -51,6 +51,10 @@ export function MarketingRoute() {
 
   useEffect(() => {
     void load();
+    const refresh = window.setInterval(() => {
+      void load();
+    }, 4_000);
+    return () => window.clearInterval(refresh);
   }, [load]);
 
   const statusLabel = useMemo(() => {

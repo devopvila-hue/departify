@@ -11,12 +11,16 @@ class GatewayTestEngine implements EngineAdapter {
   readonly inputs: EngineSendMessageInput[] = [];
   readonly nativePolicies: Array<{ sessionId: string; toolNames: readonly string[] }> = [];
   nativeSelection = true;
+  nativeFailure = false;
   nativeText = "Contexto de empresa consultado.";
   async createSession(input?: { sessionId?: string }): Promise<EngineSession> {
     return { id: input?.sessionId ?? "ceo:test", status: "active" };
   }
   async sendMessage(input: EngineSendMessageInput): Promise<EngineMessageResult> {
     this.inputs.push(input);
+    if (input.nativeBusinessTools && this.nativeFailure) {
+      throw new Error("simulated native engine outage");
+    }
     return {
       sessionId: input.sessionId,
       text: input.nativeBusinessTools
@@ -70,6 +74,7 @@ describe("native company context gateway", () => {
   afterEach(() => {
     delete process.env.DEPARTIFY_RUNTIME_TOKEN;
     engine.nativeSelection = true;
+    engine.nativeFailure = false;
   });
 
   it("returns bounded canonical context and ignores model organization arguments", async () => {
@@ -251,6 +256,34 @@ describe("native company context gateway", () => {
     expect(lastInput?.runtimeContext).toContain("DEPARTIFY_NATIVE_RUNTIME_CONTEXT");
     expect(lastInput?.runtimeContext).not.toContain("DEPARTIFY_BUSINESS_TOOL_DEFINITIONS");
     expect(lastInput?.businessTools).toBeUndefined();
+  });
+
+  it("does not fall through to the legacy router after native generation fails", async () => {
+    engine.nativeFailure = true;
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Native Failure Isolation",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const organizationId = start.json().organizationId as string;
+    const before = engine.inputs.length;
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/command-center/message`,
+      headers: { authorization: "Bearer token-a" },
+      payload: { message: "¿Qué está pasando en mi empresa?" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().reply).toContain("motor de negocio ha fallado");
+    expect(response.json().reply).not.toContain("Entendido");
+    expect(engine.inputs.slice(before)).toHaveLength(1);
   });
 
   it("routes the portal conversation endpoint through the same native path", async () => {

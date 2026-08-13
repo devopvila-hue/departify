@@ -63,7 +63,11 @@ import {
 } from "./department-context-compiler.js";
 import { buildRuntimeCapabilityManifest } from "./capability-manifest.js";
 import type { CustomerZeroSession } from "./customer-zero-session.js";
-import type { DepartmentResult, DepartmentTask } from "./department-work.js";
+import type {
+  DepartmentResult,
+  DepartmentTask,
+  DepartmentWorkStore,
+} from "./department-work.js";
 import { MARKETING_ROSTER } from "./marketing-roster.js";
 
 export interface MarketingOperationalConnection {
@@ -121,6 +125,8 @@ export interface MarketingServiceOptions {
   readonly approvals?: MarketingApprovalRepository;
   /** Durable readiness source for the provisioned Marketing roster. */
   readonly companyDna?: CompanyDnaStore;
+  /** Durable work source used to project real specialist activity. */
+  readonly workStore?: DepartmentWorkStore;
 }
 
 /**
@@ -138,6 +144,7 @@ export class MarketingService {
   private readonly activityRepo: MarketingActivityRepository;
   private readonly approvalsRepo: MarketingApprovalRepository;
   private readonly companyDna: CompanyDnaStore | null;
+  private readonly workStore: DepartmentWorkStore | null;
   /** Engine session id per organization (maps to OpenClaw persistent session). */
   private readonly engineSessionIds = new Map<string, string>();
 
@@ -153,6 +160,7 @@ export class MarketingService {
     this.approvalsRepo =
       options.approvals ?? new InMemoryMarketingApprovalRepository();
     this.companyDna = options.companyDna ?? null;
+    this.workStore = options.workStore ?? null;
   }
 
   /* ------------------------- CEO conversation ------------------------- */
@@ -888,21 +896,26 @@ export class MarketingService {
     // work as tracked in DepartmentTask records. For a fresh org with
     // no in-flight work, this returns the empty set so the UI shows
     // "0 trabajando" — the honest answer.
-    const tasks = await this.activityRepo.listRecent(organizationId, "marketing", 50);
     const workingIds = new Set<string>();
-    for (const task of tasks) {
-      if (
-        task.kind !== "analisis_realizado" &&
-        task.kind !== "herramienta_utilizada" &&
-        task.kind !== "campana_propuesta"
-      ) {
-        continue;
+    if (this.workStore) {
+      const tasks = await this.workStore.listTasksForOrg(organizationId, 50);
+      for (const task of tasks) {
+        if (
+          task.departmentId !== "marketing" ||
+          (task.status !== "queued" &&
+            task.status !== "running" &&
+            task.status !== "waiting_approval")
+        ) {
+          continue;
+        }
+        if (task.assignedEmployeeId) workingIds.add(task.assignedEmployeeId);
       }
-      // Tasks do not carry the actor agent id today; we keep the
-      // empty set until the activity stream carries it. The check
-      // still validates the activity kind is real work.
-      void workingIds;
+      return workingIds;
     }
+
+    // Dev/test fallback when no durable work store is wired. Activity records
+    // intentionally cannot claim an employee is working without actor
+    // provenance, so this remains empty rather than inventing a badge.
     return workingIds;
   }
 

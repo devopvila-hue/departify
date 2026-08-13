@@ -1442,6 +1442,11 @@ export async function registerCustomerZeroV2Routes(
         },
         session.state.locale,
       );
+      // Persist both connecting and blocked outcomes. In particular, Meta
+      // Business and TickTick are intentionally non-connectable until their
+      // provider adapters/credentials exist; that truthful blocked state must
+      // survive the request instead of disappearing from /conexiones.
+      await persistToolState(session, toolStateFromConnection(session, connection));
 
       return reply.code(200).send({ organizationId, connection });
     },
@@ -3268,7 +3273,7 @@ export function emitCeoTurnTrace(
         ? "success"
         : trace.nativeResponseTerminal && trace.timeline.T14_persistence_failed !== undefined
           ? "persistence_failed"
-        : trace.openclawStatus === "failed"
+        : (trace.openclawStatus === "failed" || trace.openclawStatus === "error")
           ? "generation_failed"
           : "completed_without_durable_persistence",
     resultStatus: trace.toolResultStatuses.at(-1) ?? "completed",
@@ -3974,6 +3979,7 @@ export async function processCeoMessage(
     return completeDurableWorkStatusTurn(session, conversation, message, durableWorkReference);
   }
 
+  let nativeEngineFailure = false;
   if (runtime?.nativeBusinessTools && shouldUseNativeAgentPath(operationalMessage)) {
     if (trace) {
       trace.nativeAttempted = true;
@@ -4074,8 +4080,28 @@ export async function processCeoMessage(
           status: "deferred_to_deterministic_mutation_gate",
         });
       }
+      nativeEngineFailure = true;
+      if (trace) trace.openclawStatus = "failed";
+      if (trace) {
+        trace.nativeResponseTerminal = false;
+        trace.finalResponseSource = "error_fallback";
+        trace.toolResultStatuses = ["generation_failed"];
+      }
+      console.info("[native-tool-trace]", {
+        nativeTool: true,
+        toolName: "native",
+        organizationHash: safeTraceHash(organizationId),
+        authorized: false,
+        status: "generation_failed",
+      });
     } catch {
-      if (trace) trace.openclawStatus = "error";
+      if (trace) trace.openclawStatus = "failed";
+      nativeEngineFailure = true;
+      if (trace) {
+        trace.nativeResponseTerminal = false;
+        trace.finalResponseSource = "error_fallback";
+        trace.toolResultStatuses = ["generation_failed"];
+      }
       console.info("[native-tool-trace]", {
         nativeTool: true,
         toolName: "native",
@@ -4084,6 +4110,25 @@ export async function processCeoMessage(
         status: "engine_failed",
       });
     }
+  }
+
+  // In native mode a failed OpenClaw turn must not fall through to the legacy
+  // router. That would create a second reasoning path/session and can return
+  // a plausible-looking response that is not the failed turn's context.
+  if (nativeEngineFailure) {
+    const reply = session.state.locale === "en"
+      ? "I couldn't complete that response because the business engine failed. No alternate action was started; please try again."
+      : "No he podido completar esa respuesta porque el motor de negocio ha fallado. No he iniciado ninguna acción alternativa; vuelve a intentarlo.";
+    return completeRuntimeCeoTurn(
+      session,
+      conversation,
+      message,
+      reply,
+      [],
+      ["generation_failed"],
+      null,
+      trace,
+    );
   }
 
   // ENGINE 02 legacy mode — retained only when native mode is disabled.

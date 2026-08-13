@@ -67,4 +67,26 @@ describe("connection handshake", () => {
     expect(connection.status).toBe("connected");
     expect(connection.connectedAt).toBe("2026-08-07T10:00:00.000Z");
   });
+
+  it.each([
+    ["meta_business", ["META_APP_ID", "META_APP_SECRET"]],
+    ["ticktick", ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"]],
+  ] as const)("never fabricates a connection for %s", (toolId, credentials) => {
+    const tool = TOOL_CATALOG.find((entry) => entry.id === toolId)!;
+    const connection = startConnection(
+      buildConnectionState(tool, "es"),
+      tool,
+      { env: Object.fromEntries(credentials.map((key) => [key, "configured"])), redirectUri: "http://localhost:3000/cb" },
+      "es",
+    );
+    expect(connection.status).toBe("blocked");
+    expect(connection.authorizationUrl).toBeUndefined();
+    expect(connection.missingCredentials).toEqual(credentials);
+  });
+
+  it("keeps YouTube OAuth read-only while exposing preparation as a non-publish capability", () => {
+    const youtube = TOOL_CATALOG.find((tool) => tool.id === "youtube")!;
+    expect(youtube.scopes).toEqual(["https://www.googleapis.com/auth/youtube.readonly"]);
+    expect(youtube.capability).toBe("marketing.video");
+  });
 });
