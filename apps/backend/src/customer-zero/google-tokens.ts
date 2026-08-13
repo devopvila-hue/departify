@@ -42,7 +42,8 @@ export type GoogleTokenProvider =
   | "gmail"
   | "google_workspace"
   | "google_calendar"
-  | "google_drive";
+  | "google_drive"
+  | "youtube";
 
 /** OAuth scopes required by the business capabilities we expose. */
 export const GOOGLE_CAPABILITY_SCOPES = {
@@ -57,6 +58,7 @@ export const GOOGLE_CAPABILITY_SCOPES = {
   // connection. It is listed so write capability resolution cannot silently
   // reuse drive.readonly when a future, explicitly-consented flow is added.
   "drive.create": ["https://www.googleapis.com/auth/drive"],
+  "youtube.read": ["https://www.googleapis.com/auth/youtube.readonly"],
 } as const;
 
 export type GoogleCapability = keyof typeof GOOGLE_CAPABILITY_SCOPES;
@@ -564,6 +566,7 @@ function normalizeGoogleScope(scope: string): string {
     "calendar.readonly": "https://www.googleapis.com/auth/calendar.readonly",
     "calendar.events": "https://www.googleapis.com/auth/calendar.events",
     "drive.readonly": "https://www.googleapis.com/auth/drive.readonly",
+    "youtube.readonly": "https://www.googleapis.com/auth/youtube.readonly",
   };
   return aliases[scope] ?? scope;
 }
@@ -640,9 +643,11 @@ export async function probeGoogleOperational(
   const calendar = focus === "google_calendar" ||
     (focus === "gmail" && (scopes.includes("https://www.googleapis.com/auth/calendar.readonly") ||
       scopes.includes("https://www.googleapis.com/auth/calendar.events")));
-  const url = calendar
-    ? "https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=1&singleEvents=true"
-    : "https://www.googleapis.com/drive/v3/files?pageSize=1&fields=files(id)";
+  const url = focus === "youtube"
+    ? "https://www.googleapis.com/youtube/v3/channels?part=id&mine=true"
+    : calendar
+      ? "https://www.googleapis.com/calendar/v3/calendars/primary/events?maxResults=1&singleEvents=true"
+      : "https://www.googleapis.com/drive/v3/files?pageSize=1&fields=files(id)";
   try {
     const response = await fetchImpl(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
@@ -930,7 +935,9 @@ export async function completeGoogleOAuthCallback(
               ]
             : input.provider === "google_drive" || input.provider === "google_workspace"
               ? ["drive.search" as GoogleCapability, "drive.read" as GoogleCapability]
-              : []),
+              : input.provider === "youtube"
+                ? ["youtube.read" as GoogleCapability]
+                : []),
       ]))
     : inheritedOperationalCapabilities;
   const record: GoogleTokenRecord = {

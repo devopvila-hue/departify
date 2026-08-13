@@ -175,6 +175,15 @@ function mockGoogleFetch(options?: {
         { status: options?.probeStatus ?? 200, headers: { "content-type": "application/json" } },
       );
     }
+    if (url.includes("www.googleapis.com/youtube/v3/channels")) {
+      return new Response(
+        JSON.stringify({ items: [{ id: "channel-1" }] }),
+        {
+          status: options?.probeStatus ?? 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
+    }
     if (url.includes("www.googleapis.com/drive/v3/files")) {
       if (["POST", "PATCH", "DELETE"].includes(init?.method ?? "GET")) {
         driveMutationCalls += 1;
@@ -762,6 +771,49 @@ describe("P0 — post-OAuth HTTP: connect → callback → /conexiones", () => {
       payload: { message: "dane el link del evento , no lo veo en calendario" },
     });
     expect(typoLink.json().reply).toContain("event-created-1");
+  });
+
+  it("YouTube uses incremental Google OAuth and a real channel probe", async () => {
+    const org = await startOrg();
+    const connect = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/youtube/connect`,
+      payload: { returnPath: "/conexiones" },
+    });
+    expect(connect.statusCode).toBe(200);
+    expect(connect.json().connection.authorizationUrl).toContain(
+      "youtube.readonly",
+    );
+    const state = connect.json().connection.oauthState as string;
+    expect((await getGoogleOAuthStateStore().get(state))?.requestedToolId).toBe("youtube");
+
+    mockGoogleFetch({
+      tokenScope: [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/youtube.readonly",
+      ].join(" "),
+    });
+    const callback = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/google/callback`,
+      payload: { code: "youtube-code", state },
+    });
+    expect(callback.statusCode).toBe(200);
+    expect(callback.json().connection.toolId).toBe("youtube");
+    expect(callback.json().connection.status).toBe("connected");
+    expect(callback.json().grantedScopes).toContain(
+      "https://www.googleapis.com/auth/youtube.readonly",
+    );
+
+    const connections = await authedInject({
+      method: "GET",
+      url: `/api/customer-zero/${org}/connections`,
+    });
+    expect(
+      (connections.json().connections as Array<{ toolId: string; state: string }>)
+        .find((entry) => entry.toolId === "youtube")?.state,
+    ).toBe("connected");
   });
 
   it("Calendar read without its granted capability offers authorization instead of delegating", async () => {

@@ -66,6 +66,14 @@ export const GOOGLE_DRIVE_SCOPES: readonly string[] = [
   "https://www.googleapis.com/auth/drive.readonly",
 ];
 
+/** YouTube read-only consent for the Marketing content specialist. */
+export const GOOGLE_YOUTUBE_SCOPES: readonly string[] = [
+  "openid",
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
+  "https://www.googleapis.com/auth/youtube.readonly",
+];
+
 /** Full scope set the unified Google connection will eventually
  *  request. Customers Zero 02 / 03 ships only the Gmail subset. */
 export const GOOGLE_FULL_SCOPES: readonly string[] = [
@@ -250,7 +258,7 @@ export interface GmailOAuthStartInput {
   readonly redirectUri: string;
   readonly clientId: string;
   readonly scopes?: readonly string[];
-  readonly requestedToolId?: "gmail" | "google_workspace" | "google_calendar" | "google_drive";
+  readonly requestedToolId?: "gmail" | "google_workspace" | "google_calendar" | "google_drive" | "youtube";
 }
 
 export interface GmailOAuthStartOutput {

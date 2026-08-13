@@ -34,7 +34,7 @@ export interface OAuthStateRecord {
   readonly userId: string;
   readonly connectionIntent: "marketing" | "admin";
   /** The bounded Google catalog capability that started this handshake. */
-  readonly requestedToolId?: "gmail" | "google_workspace" | "google_calendar" | "google_drive";
+  readonly requestedToolId?: "gmail" | "google_workspace" | "google_calendar" | "google_drive" | "youtube";
   readonly returnPath: string;
   readonly createdAt: string;
   readonly expiresAt: string;

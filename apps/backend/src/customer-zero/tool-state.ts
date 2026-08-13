@@ -97,6 +97,7 @@ export function hasWorkingConnector(toolId: string): boolean {
     toolId === "google_workspace" ||
     toolId === "google_calendar" ||
     toolId === "google_drive" ||
+    toolId === "youtube" ||
     toolId === "hostinger_email"
   );
 }

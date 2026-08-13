@@ -524,7 +524,7 @@ export async function hydrateSessionToolState(
 
 /**
  * For each Google tool (gmail, google_workspace, google_calendar,
- * google_drive) check whether the durable Google token store reports
+ * google_drive, youtube) check whether the durable Google token store reports
  * an operational refresh-token row for this org. If yes, upsert a
  * `connected` row into organization_tool_states and add the matching
  * ConnectionState to the in-memory session. Idempotent: an existing
@@ -541,6 +541,7 @@ async function reconcileGoogleConnectionsFromDurableTokens(
     google_calendar: "calendar.read",
     google_workspace: "drive.read",
     google_drive: "drive.read",
+    youtube: "youtube.read",
   };
   const googleToolIds = Object.keys(capabilityByTool);
   for (const toolId of googleToolIds) {

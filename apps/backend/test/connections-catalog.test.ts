@@ -228,4 +228,27 @@ describe("P-B production fix — connections catalog", () => {
       expect(tool?.action).toBe("prepare");
     }
   });
+
+  it("L. unsupported marketing connectors are visible without a fake action", async () => {
+    const org = await start();
+    const response = await server.inject({
+      method: "GET",
+      url: `/api/customer-zero/${org}/connections`,
+      headers: AUTH_A,
+    });
+    const cards = response.json().cards as Array<{
+      id: string;
+      name: string;
+      actionLabel: string | null;
+    }>;
+    expect(cards.find((card) => card.id === "meta_business")).toMatchObject({
+      name: "Meta Business",
+      actionLabel: null,
+    });
+    expect(cards.find((card) => card.id === "ticktick")).toMatchObject({
+      name: "TickTick",
+      actionLabel: null,
+    });
+    expect(cards.find((card) => card.id === "youtube")?.actionLabel).toBeTruthy();
+  });
 });

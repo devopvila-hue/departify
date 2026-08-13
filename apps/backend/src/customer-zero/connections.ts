@@ -357,8 +357,10 @@ export const TOOL_CATALOG: readonly ToolDescriptor[] = [
     capability: "marketing.video",
     categoryEs: "Marketing",
     categoryEn: "Marketing",
-    connectable: false,
+    connectable: true,
     requiredCredentials: ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"],
+    authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+    scopes: ["https://www.googleapis.com/auth/youtube.readonly"],
   },
   {
     id: "ticktick",
@@ -559,6 +561,7 @@ export function completeConnection(
   now: Date = new Date(),
 ): ConnectionState {
   connection.status = "connected";
+  connection.lifecycle = "connected";
   connection.connectedAt = now.toISOString();
   delete connection.authorizationUrl;
   return connection;

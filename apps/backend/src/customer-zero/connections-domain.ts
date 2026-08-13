@@ -62,6 +62,8 @@ export interface ConnectionDefinition {
   readonly brandColor: string;
   /** Capabilities this connection provides to the CEO's company. */
   readonly capabilities: readonly CapabilityDefinition[];
+  /** Whether the portal can start a real connection handshake today. */
+  readonly connectable?: boolean;
   /** Where configuration originates when present (e.g. "env:mautic"). */
   readonly configSourceLabel?: string;
   /** Short business description surfaced under the card title. */
@@ -203,6 +205,24 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
     ],
   },
   {
+    id: "meta_business",
+    name: "Meta Business",
+    category: "marketing",
+    categoryEs: "Marketing",
+    categoryEn: "Marketing",
+    logoMark: "M",
+    brandColor: "#1877f2",
+    capabilities: [
+      { id: "marketing.social.read", nameEs: "Consultar canales sociales", nameEn: "Read social channels" },
+      { id: "marketing.social.publish", nameEs: "Preparar publicaciones", nameEn: "Prepare social posts" },
+      { id: "ads.manage", nameEs: "Gestionar campañas de pago", nameEn: "Manage paid campaigns" },
+    ],
+    configSourceLabel: "oauth:meta_business",
+    connectable: false,
+    descriptionEs: "Facebook, Instagram y campañas de Meta, con acciones de pago sujetas a aprobación.",
+    descriptionEn: "Facebook, Instagram and Meta campaigns, with paid actions subject to approval.",
+  },
+  {
     id: "linkedin_ads",
     name: "LinkedIn Ads",
     category: "marketing",
@@ -282,6 +302,40 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
       { id: "drive.read", nameEs: "Leer archivos de Drive", nameEn: "Read Drive files" },
       { id: "drive.search", nameEs: "Buscar en Drive", nameEn: "Search Drive" },
     ],
+  },
+  {
+    id: "youtube",
+    name: "YouTube",
+    category: "marketing",
+    categoryEs: "Marketing",
+    categoryEn: "Marketing",
+    logoMark: "▶",
+    brandColor: "#ff0000",
+    capabilities: [
+      { id: "marketing.video.read", nameEs: "Consultar canal y vídeos", nameEn: "Read channel and videos" },
+      { id: "marketing.video.prepare", nameEs: "Preparar contenido de vídeo", nameEn: "Prepare video content" },
+    ],
+    configSourceLabel: "oauth:google",
+    connectable: true,
+    descriptionEs: "Canal y datos de YouTube para preparar y analizar contenido.",
+    descriptionEn: "YouTube channel and data for content preparation and analysis.",
+  },
+  {
+    id: "ticktick",
+    name: "TickTick",
+    category: "team",
+    categoryEs: "Equipo",
+    categoryEn: "Team",
+    logoMark: "✓",
+    brandColor: "#4772fa",
+    capabilities: [
+      { id: "tasks.read", nameEs: "Consultar tareas", nameEn: "Read tasks" },
+      { id: "tasks.write", nameEs: "Crear y actualizar tareas", nameEn: "Create and update tasks" },
+    ],
+    configSourceLabel: "oauth:ticktick",
+    connectable: false,
+    descriptionEs: "Seguimiento transversal de tareas y próximos pasos.",
+    descriptionEn: "Cross-functional task tracking and follow-ups.",
   },
 ];
 
@@ -394,15 +448,18 @@ function unknownConnectionCard(
 export function renderConnectionCard(
   state: OrganizationToolState | null,
   locale: SupportedLocale,
+  definition?: ConnectionDefinition,
 ): ConnectionCardView {
-  const def = getConnectionDefinition(state?.toolId ?? "");
+  const def = definition ?? getConnectionDefinition(state?.toolId ?? "");
   if (!def) {
     return unknownConnectionCard(state, locale);
   }
+  const toolId = state?.toolId ?? def.id;
   const lifecycle: ToolLifecycleStatus = state?.status ?? "needs_connection";
   const cs: ConnectionState = lifecycleToFiveState(lifecycle);
-  const actionLabel =
-    cs === "connected"
+  const actionLabel = def.connectable === false
+    ? null
+    : cs === "connected"
       ? t(locale, "Comprobar conexión", "Check connection")
       : cs === "needs_attention" || cs === "error"
         ? t(locale, "Revisar conexión", "Review connection")
@@ -412,7 +469,7 @@ export function renderConnectionCard(
   const description =
     (locale === "en" ? def.descriptionEn : def.descriptionEs) ?? null;
   return {
-    id: def.id,
+    id: toolId,
     name: def.name,
     category: locale === "en" ? def.categoryEn : def.categoryEs,
     categoryId: def.category,

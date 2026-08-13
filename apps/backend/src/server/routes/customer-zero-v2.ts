@@ -160,6 +160,7 @@ import {
   GMAIL_SCOPES,
   GOOGLE_CALENDAR_SCOPES,
   GOOGLE_DRIVE_SCOPES,
+  GOOGLE_YOUTUBE_SCOPES,
   googleOAuthRedirectUri,
   GmailOAuthError,
 } from "../../customer-zero/gmail-adapter.js";
@@ -728,7 +729,7 @@ export async function registerCustomerZeroV2Routes(
       const toolStates = await listToolStatesForSession(session);
       const cards = CONNECTION_DEFINITIONS.map((def) => {
         const orgState = toolStates.find((s) => s.toolId === def.id) ?? null;
-        return renderConnectionCard(orgState, session.state.locale);
+        return renderConnectionCard(orgState, session.state.locale, def);
       });
       const catalog = await buildCanonicalConnectionViews(session, session.state.locale);
       const hostinger = await probeHostingerEmail();
@@ -1366,6 +1367,7 @@ export async function registerCustomerZeroV2Routes(
         "google_workspace",
         "google_calendar",
         "google_drive",
+        "youtube",
       ]);
       const clientId = process.env["GOOGLE_OAUTH_CLIENT_ID"]?.trim();
       const clientSecret = process.env["GOOGLE_OAUTH_CLIENT_SECRET"]?.trim();
@@ -1399,11 +1401,13 @@ export async function registerCustomerZeroV2Routes(
           ? GOOGLE_CALENDAR_SCOPES
           : tool.id === "google_drive" || tool.id === "google_workspace"
             ? GOOGLE_DRIVE_SCOPES
-            : GMAIL_SCOPES;
+            : tool.id === "youtube"
+              ? GOOGLE_YOUTUBE_SCOPES
+              : GMAIL_SCOPES;
         const out = await startGoogleOAuth({
           organizationId,
           userId: oauthUserId,
-          requestedToolId: tool.id as "gmail" | "google_workspace" | "google_calendar" | "google_drive",
+          requestedToolId: tool.id as "gmail" | "google_workspace" | "google_calendar" | "google_drive" | "youtube",
           returnPath,
           locale: session.state.locale,
           redirectUri: googleOAuthRedirectUri(deps.publicBaseUrl),
@@ -1526,6 +1530,7 @@ export async function registerCustomerZeroV2Routes(
         "google_workspace",
         "google_calendar",
         "google_drive",
+        "youtube",
       ]);
       if (googleTools.has(effectiveToolId)) {
         const clientId = process.env["GOOGLE_OAUTH_CLIENT_ID"]?.trim();
@@ -1568,17 +1573,19 @@ export async function registerCustomerZeroV2Routes(
         //      a new one on a reconnect.
         //   5. Persists to the durable Supabase-backed store (or in
         //      memory when Supabase is not wired).
-        //   6. Runs the Gmail operational probe (gmail.users.getProfile).
+        //   6. Runs the provider-specific operational probe.
         //   7. Marks the connection operational ONLY when the probe
         //      succeeded AND a refresh token is persisted.
         const provider: GoogleTokenProvider =
           effectiveToolId === "gmail"
             ? "gmail"
             : effectiveToolId === "google_workspace"
-              ? "google_workspace"
+                ? "google_workspace"
               : effectiveToolId === "google_calendar"
                 ? "google_calendar"
-                : "google_drive";
+                : effectiveToolId === "google_drive"
+                  ? "google_drive"
+                  : "youtube";
         try {
           const tokenResult = await completeGoogleOAuthCallback({
             code,

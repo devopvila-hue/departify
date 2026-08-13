@@ -145,11 +145,13 @@ describe("native company context gateway", () => {
       expect.objectContaining({ specialistId: "agent_ads_specialist", status: "completed" }),
     ]);
     const specialistInputs = engine.inputs.slice(before);
-    expect(specialistInputs.map((input) => input.agentId)).toEqual([
+    expect(specialistInputs.filter((input) => input.agentId !== "agent_marketing_director").map((input) => input.agentId)).toEqual([
       "agent_content_strategist",
       "agent_ads_specialist",
     ]);
     expect(specialistInputs.every((input) => input.nativeBusinessTools !== true)).toBe(true);
+    expect(specialistInputs.at(-1)?.agentId).toBe("agent_marketing_director");
+    expect(response.json().data.synthesis).toBeTruthy();
   });
 
   it("rejects a token from tenant A when its signed claims are changed to tenant B", async () => {
