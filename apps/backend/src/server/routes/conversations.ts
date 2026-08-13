@@ -34,7 +34,14 @@ import {
   summarizeOldMessages,
   type ConversationMessage,
 } from "../../customer-zero/conversation-store.js";
-import { processCeoMessage, requireSession, MaxActiveConversationsError } from "./customer-zero-v2.js";
+import {
+  buildCeoRuntimeForRequest,
+  createCeoTurnTrace,
+  emitCeoTurnTrace,
+  processCeoMessage,
+  requireSession,
+  MaxActiveConversationsError,
+} from "./customer-zero-v2.js";
 import type { ServerDeps } from "../deps.js";
 
 /** Maximum user-visible active conversations for any organization. */
@@ -318,9 +325,21 @@ export async function registerConversationRoutes(
       if (!conversation) {
         return reply.code(404).send({ error: "Conversation not found." });
       }
+      session.state.currentConversationId = conversation.id;
+      const trace = createCeoTurnTrace(session, request.id);
       let result;
       try {
-        result = await processCeoMessage(session, message, conversationId);
+        const runtime = await buildCeoRuntimeForRequest(session, deps, message, trace);
+        result = await processCeoMessage(
+          session,
+          message,
+          conversationId,
+          deps.marketing,
+          deps.engineRuntimePolicy,
+          runtime,
+          trace,
+        );
+        emitCeoTurnTrace(session, runtime?.trace ?? trace, result);
       } catch (cause) {
         if (cause instanceof MaxActiveConversationsError) {
           return reply.code(409).send({

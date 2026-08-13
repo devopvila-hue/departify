@@ -196,6 +196,90 @@ describe("native company context gateway", () => {
     expect(lastInput?.businessTools).toBeUndefined();
   });
 
+  it("routes the portal conversation endpoint through the same native path", async () => {
+    engine.nativeSelection = false;
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Native Conversation Endpoint",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const organizationId = start.json().organizationId as string;
+    const created = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/conversations`,
+      headers: { authorization: "Bearer token-a" },
+      payload: {},
+    });
+    expect(created.statusCode).toBe(201);
+    const conversationId = created.json().conversation.id as string;
+    const before = engine.inputs.length;
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/conversations/${conversationId}/messages`,
+      headers: { authorization: "Bearer token-a" },
+      payload: { message: "Hazme un mailing de tres correos para vender Departify." },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().reply).toContain("Contexto de empresa consultado");
+    const input = engine.inputs[before];
+    expect(input?.nativeBusinessTools).toBe(true);
+    expect(input?.sessionId).toBeTruthy();
+    expect(response.json().reply).not.toMatch(/Lo paso a Elvira|Marketing|No puedo afirmar/i);
+  });
+
+  it("resolves an explicit durable work reference before capability routing", async () => {
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Durable Status Lookup",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const organizationId = start.json().organizationId as string;
+    const conversation = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/conversations`,
+      headers: { authorization: "Bearer token-a" },
+      payload: {},
+    });
+    const conversationId = conversation.json().conversation.id as string;
+    const task = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/work-items`,
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        capability: "crm.contacts.summary",
+        title: "Análisis de contactos de Mautic",
+        summary: "Estado del análisis",
+        conversationId,
+      },
+    });
+    expect(task.statusCode).toBe(200);
+    const taskId = task.json().task.id as string;
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/conversations/${conversationId}/messages`,
+      headers: { authorization: "Bearer token-a" },
+      payload: { message: `¿En qué punto está el trabajo? (${taskId})` },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().reply).toContain("Análisis de contactos de Mautic");
+    expect(response.json().reply).toContain("estado");
+    expect(response.json().reply).not.toContain("conectado");
+  });
+
   it("keeps a completed native reasoning response instead of falling through to legacy routing", async () => {
     engine.nativeSelection = false;
     const start = await server.inject({

@@ -2305,19 +2305,7 @@ export async function registerCustomerZeroV2Routes(
       const session = await requireSession(organizationId, deps);
       const trace = newCeoTurnTrace(session, request.id);
       try {
-        const normalizedMessage = normalizeOperationalLanguage(body.message);
-        const bypassRuntime = shouldBypassRuntimeForPendingOperation(
-          session,
-          normalizedMessage,
-          deps.nativeBusinessTools === true,
-        );
-        const pendingRead = Boolean(
-          session.state.pendingCalendarWork && isCalendarReadRequest(normalizedMessage),
-        );
-        if (bypassRuntime) trace.routingBypassed = true;
-        const runtime = deps.engine && !bypassRuntime && (deps.nativeBusinessTools === true || !pendingRead)
-          ? await buildRuntimeBridge(session, deps, inboxStore, trace)
-          : null;
+        const runtime = await buildCeoRuntimeForRequest(session, deps, body.message, trace);
         const result = await processCeoMessage(
           session,
           body.message,
@@ -2982,6 +2970,15 @@ interface CeoTurnTraceState {
   providerMutationAttempted: boolean;
   providerMutationResult: string | null;
   routingBypassed: boolean;
+  nativeAttempted: boolean;
+  openclawCalled: boolean;
+  openclawStatus: string | null;
+  nativeResponseTerminal: boolean;
+  legacyRouterCalled: boolean;
+  legacyRoute: string | null;
+  marketingServiceCalled: boolean;
+  productTruthCalled: boolean;
+  finalResponseSource: "openclaw" | "legacy_router" | "marketing" | "product_truth" | "durable_work" | "error_fallback" | null;
 }
 
 type PendingOperationDecision = "APPROVE" | "CANCEL" | "OTHER";
@@ -3054,6 +3051,28 @@ function shouldBypassRuntimeForPendingOperation(
   );
 }
 
+export async function buildCeoRuntimeForRequest(
+  session: CustomerZeroSession,
+  deps: ServerDeps,
+  message: string,
+  trace: CeoTurnTraceState,
+): Promise<RuntimeBridgeInput | null> {
+  const normalizedMessage = normalizeOperationalLanguage(message);
+  const bypassRuntime = shouldBypassRuntimeForPendingOperation(
+    session,
+    normalizedMessage,
+    deps.nativeBusinessTools === true,
+  );
+  const pendingRead = Boolean(
+    session.state.pendingCalendarWork && isCalendarReadRequest(normalizedMessage),
+  );
+  if (bypassRuntime) trace.routingBypassed = true;
+  if (!deps.engine || bypassRuntime || (pendingRead && deps.nativeBusinessTools !== true)) {
+    return null;
+  }
+  return buildRuntimeBridgeForCeoTurn(session, deps, trace);
+}
+
 function newCeoTurnTrace(
   session: CustomerZeroSession,
   requestCorrelationId: string,
@@ -3085,10 +3104,26 @@ function newCeoTurnTrace(
     providerMutationAttempted: false,
     providerMutationResult: null,
     routingBypassed: false,
+    nativeAttempted: false,
+    openclawCalled: false,
+    openclawStatus: null,
+    nativeResponseTerminal: false,
+    legacyRouterCalled: false,
+    legacyRoute: null,
+    marketingServiceCalled: false,
+    productTruthCalled: false,
+    finalResponseSource: null,
   };
 }
 
-function emitCeoTurnTrace(
+export function createCeoTurnTrace(
+  session: CustomerZeroSession,
+  requestCorrelationId: string,
+): CeoTurnTraceState {
+  return newCeoTurnTrace(session, requestCorrelationId);
+}
+
+export function emitCeoTurnTrace(
   session: CustomerZeroSession,
   trace: CeoTurnTraceState,
   result: CeoMessageResult,
@@ -3121,6 +3156,15 @@ function emitCeoTurnTrace(
     providerMutationAttempted: trace.providerMutationAttempted,
     providerMutationResult: trace.providerMutationResult,
     routingBypassed: trace.routingBypassed,
+    nativeAttempted: trace.nativeAttempted,
+    openclawCalled: trace.openclawCalled,
+    openclawStatus: trace.openclawStatus,
+    nativeResponseTerminal: trace.nativeResponseTerminal,
+    legacyRouterCalled: trace.legacyRouterCalled,
+    legacyRoute: trace.legacyRoute,
+    marketingServiceCalled: trace.marketingServiceCalled,
+    productTruthCalled: trace.productTruthCalled,
+    finalResponseSource: trace.finalResponseSource,
     resultStatus: trace.toolResultStatuses.at(-1) ?? "completed",
     durationMs: Date.now() - trace.startedAt,
   });
@@ -3239,6 +3283,19 @@ async function buildRuntimeBridge(
     nativeBusinessTools: deps.nativeBusinessTools === true,
     nativeToolNames,
   };
+}
+
+export async function buildRuntimeBridgeForCeoTurn(
+  session: CustomerZeroSession,
+  deps: ServerDeps,
+  trace: CeoTurnTraceState,
+): Promise<RuntimeBridgeInput | null> {
+  return buildRuntimeBridge(
+    session,
+    deps,
+    deps.inbox ?? new InMemoryInboxStore(),
+    trace,
+  );
 }
 
 function runtimeCandidate(message: string, session: CustomerZeroSession): boolean {
@@ -3768,7 +3825,20 @@ export async function processCeoMessage(
     return completeDeterministicOperationTurn(session, conversation, message, reply, operation, "already_verified");
   }
 
+  const durableWorkReference = await resolveExplicitDurableWorkReference(
+    organizationId,
+    message,
+  );
+  if (durableWorkReference) {
+    if (trace) trace.finalResponseSource = "durable_work";
+    return completeDurableWorkStatusTurn(session, conversation, message, durableWorkReference);
+  }
+
   if (runtime?.nativeBusinessTools && shouldUseNativeAgentPath(operationalMessage)) {
+    if (trace) {
+      trace.nativeAttempted = true;
+      trace.openclawCalled = true;
+    }
     if (trace) {
       trace.exposedToolNames = [...runtime.nativeToolNames];
     }
@@ -3790,6 +3860,7 @@ export async function processCeoMessage(
         runtimeContext: nativeContext,
         nativeBusinessTools: true,
       });
+      if (trace) trace.openclawStatus = nativeResult.status;
       const selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
       if (trace) {
         trace.selectedToolNames = selectedTools;
@@ -3805,6 +3876,14 @@ export async function processCeoMessage(
         nativeResult.status === "completed" &&
         !nativeMutationRequiresDeterministicGate(operationalMessage)
       ) {
+        if (trace && detectUnbackedWorkClaim(nativeResult.text)) {
+          trace.productTruthCalled = true;
+          trace.finalResponseSource = "product_truth";
+        }
+        if (trace) {
+          trace.nativeResponseTerminal = true;
+          trace.finalResponseSource ??= "openclaw";
+        }
         const nativeWorkResult = selectedExposedTools.includes("departify.work.deliverable")
           ? (await workStoreForRoutes().listResultsForOrg(organizationId, 1))[0] ?? null
           : null;
@@ -3829,6 +3908,7 @@ export async function processCeoMessage(
         });
       }
     } catch {
+      if (trace) trace.openclawStatus = "error";
       console.info("[native-tool-trace]", {
         nativeTool: true,
         toolName: "native",
@@ -3924,7 +4004,9 @@ export async function processCeoMessage(
       input = { ...baseInput, connections };
     }
   }
+  if (trace) trace.legacyRouterCalled = true;
   const routed = routeCommandCenter(input);
+  if (trace) trace.legacyRoute = routed.decision.intent;
 
   const isEs = session.state.locale !== "en";
   let assistantReply = routed.reply;
@@ -4041,6 +4123,7 @@ export async function processCeoMessage(
     // message and observability records the failure.
     if (marketing) {
       try {
+        if (trace) trace.marketingServiceCalled = true;
         const outcome = await marketing.talkToElvira({
           organizationId,
           message,
@@ -4386,6 +4469,10 @@ export async function processCeoMessage(
   // transcript is important, but a transient secondary write failure must
   // not turn a valid Gmail/tool answer into a whole-turn 500.
   if (detectUnbackedWorkClaim(assistantReply)) {
+    if (trace) {
+      trace.productTruthCalled = true;
+      trace.finalResponseSource = "product_truth";
+    }
     const durableWork = (await workStoreForRoutes().listTasksForOrg(organizationId, 50))
       .filter((task) => new Date(task.createdAt).getTime() >= turnStartedAt - 1000)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
@@ -4398,6 +4485,12 @@ export async function processCeoMessage(
         ? "No puedo afirmar que ese trabajo esté ejecutándose: todavía no existe una tarea o resultado durable. No he inventado progreso ni una entrega."
         : "I cannot claim that work is running: there is no durable task or result yet. I have not invented progress or a deliverable.";
     marketingTurn = { role: "assistant", content: assistantReply };
+  }
+
+  if (trace && !trace.finalResponseSource) {
+    trace.finalResponseSource = marketingTurn && routed.decision.intent === "delegate_marketing"
+      ? "marketing"
+      : "legacy_router";
   }
 
   try {
@@ -4579,6 +4672,76 @@ async function completeRuntimeCeoTurn(
       rationale: toolNames.length > 0
         ? "He consultado la información autorizada y he completado la respuesta."
         : "He preparado una respuesta basada en el contexto disponible.",
+    },
+    connectionSuggestion: null,
+    pendingToolId: null,
+    conversationId: conversation.id,
+  };
+}
+
+type DurableWorkReference =
+  | { kind: "task"; task: DepartmentTask }
+  | { kind: "result"; result: DepartmentResult; task: DepartmentTask | null }
+  | { kind: "not_found"; reference: string };
+
+function explicitDurableWorkReference(message: string): string | null {
+  return message.match(
+    /\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|(?:task|result|res)[_-][a-z0-9]+)\b/i,
+  )?.[0] ?? null;
+}
+
+async function resolveExplicitDurableWorkReference(
+  organizationId: string,
+  message: string,
+): Promise<DurableWorkReference | null> {
+  const reference = explicitDurableWorkReference(message);
+  if (!reference) return null;
+  const workStore = workStoreForRoutes();
+  const result = await workStore.getResult(reference);
+  if (result) {
+    if (result.organizationId !== organizationId) return { kind: "not_found", reference };
+    const task = result.relatedWorkItemId
+      ? await workStore.getTask(result.relatedWorkItemId)
+      : null;
+    return { kind: "result", result, task };
+  }
+  const task = await workStore.getTask(reference);
+  if (task?.organizationId === organizationId) return { kind: "task", task };
+  return { kind: "not_found", reference };
+}
+
+async function completeDurableWorkStatusTurn(
+  session: CustomerZeroSession,
+  conversation: ConversationRecord,
+  message: string,
+  reference: DurableWorkReference,
+): Promise<CeoMessageResult> {
+  const isEs = session.state.locale !== "en";
+  const reply = reference.kind === "result"
+    ? isEs
+      ? `El trabajo «${reference.result.title}» está completado. Puedes consultar el resultado en Resultados.`
+      : `The work “${reference.result.title}” is completed. You can review the result in Results.`
+    : reference.kind === "task"
+      ? isEs
+        ? `El trabajo «${reference.task.title}» está en estado «${reference.task.status}».`
+        : `The work “${reference.task.title}” is currently “${reference.task.status}”.`
+      : isEs
+        ? `No he encontrado ningún trabajo durable con esa referencia.`
+        : `I could not find durable work with that reference.`;
+  await session.conversations.addMessage(conversation.id, "assistant", reply);
+  session.state.conversation = [
+    ...session.state.conversation,
+    { role: "user", content: message },
+    { role: "assistant", content: reply },
+  ];
+  return {
+    organizationId: session.organizationId,
+    reply,
+    events: [{ kind: "transcript", role: "assistant", content: reply, speaker: "departify" }],
+    routing: {
+      intent: reference.kind === "result" ? "explain_existing_result" : "explain_work",
+      departments: [],
+      rationale: "Explicit durable work reference resolved by the control plane.",
     },
     connectionSuggestion: null,
     pendingToolId: null,
