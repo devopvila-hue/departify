@@ -35,8 +35,12 @@ import {
   requiredCapabilityForNativeTool,
   type NativeReadToolName,
 } from "../../customer-zero/native-business-tools.js";
+import { MARKETING_ROSTER } from "../../customer-zero/marketing-roster.js";
 
 const NATIVE_TOOL_NAME = "departify.company.context";
+const MARKETING_DELEGATION_TOOL = "departify.marketing.delegate";
+const MARKETING_SPECIALIST_IDS = new Set(MARKETING_ROSTER.map((employee) => employee.id));
+const MARKETING_SPECIALIST_LABELS = new Map(MARKETING_ROSTER.map((employee) => [employee.id, employee.label]));
 
 function nativeRuntimeConnections(
   connections: ReadonlyArray<Awaited<ReturnType<typeof buildCanonicalConnectionViews>>[number]>,
@@ -458,6 +462,120 @@ export async function registerInternalEngineRoutes(
       } else if (toolName === "departify.tasks.list") {
         const tasks = await workStoreForRoutes().listTasksForOrg(identity.organizationId, Number(args.limit ?? 20));
         result = { status: "success", operation: toolName, data: { tasks: tasks.map((task) => ({ id: task.id, title: task.title, status: task.status, departmentId: task.departmentId })) } };
+      } else if (toolName === MARKETING_DELEGATION_TOOL) {
+        const objective = nativeText(args, "objective");
+        const requestedSpecialists = Array.isArray(args.specialists)
+          ? args.specialists.filter((value): value is string => typeof value === "string")
+          : [];
+        const specialistIds = [...new Set(requestedSpecialists)].filter((id) => MARKETING_SPECIALIST_IDS.has(id));
+        const context = nativeText(args, "context").slice(0, 6000);
+        if (!objective || specialistIds.length === 0 || specialistIds.length > 3 || specialistIds.length !== requestedSpecialists.length) {
+          result = {
+            status: "blocked",
+            operation: toolName,
+            summary: "La delegación necesita un objetivo y uno o más especialistas de Marketing válidos.",
+          };
+        } else {
+          const delegated: Array<{
+            specialistId: string;
+            label: string;
+            status: "completed" | "failed";
+            taskId: string;
+            resultId?: string;
+            output?: string;
+          }> = [];
+          const workStore = workStoreForRoutes();
+          for (const specialistId of specialistIds) {
+            const label = MARKETING_SPECIALIST_LABELS.get(specialistId) ?? specialistId;
+            const task = await workStore.createTask({
+              organizationId: identity.organizationId,
+              departmentId: "marketing",
+              objectiveId: null,
+              requestedBy: "elvira",
+              assignedEmployeeId: specialistId,
+              title: `${label}: ${objective.slice(0, 120)}`,
+              summary: objective,
+              capability: "results.publish",
+              toolId: "openclaw.agent",
+              status: "running",
+              statusMessage: `Elvira ha delegado el trabajo a ${label}.`,
+              progress: 0.1,
+              requiredCapabilities: ["results.publish"],
+              startedAt: new Date().toISOString(),
+              completedAt: null,
+              resultId: null,
+              errorCode: null,
+              errorMessage: null,
+              timeoutMs: 60_000,
+            });
+            const specialistSessionId = `employee:${identity.organizationId}:${identity.userId}:${specialistId}`;
+            try {
+              const existing = await deps.engine!.getSession(specialistSessionId, specialistId);
+              const specialistSession = existing ?? await deps.engine!.createSession({
+                sessionId: specialistSessionId,
+                agentId: specialistId,
+              });
+              const specialistPrompt = [
+                `Elvira te delega este objetivo de Marketing: ${objective}`,
+                context ? `Contexto verificado de la empresa: ${context}` : "",
+                "Entrega trabajo accionable para que Elvira lo sintetice. Distingue recomendaciones de acciones externas. No inventes conexiones, publicaciones, gasto ni resultados de proveedores.",
+              ].filter(Boolean).join("\n\n");
+              const specialistResult = await deps.engine!.sendMessage({
+                sessionId: specialistSession.id,
+                agentId: specialistId,
+                message: specialistPrompt,
+              });
+              if (specialistResult.status !== "completed" || !specialistResult.text.trim()) {
+                throw new Error("specialist_generation_failed");
+              }
+              const output = specialistResult.text.trim().slice(0, 16000);
+              const storedResult = await workStore.createResult({
+                organizationId: identity.organizationId,
+                departmentId: "marketing",
+                relatedWorkItemId: task.id,
+                title: `${label}: resultado de trabajo`,
+                summary: output.slice(0, 400),
+                content: output,
+                data: { specialistId, objective: objective.slice(0, 500) },
+                source: "OpenClaw native Marketing workforce",
+                producedByCapability: "results.publish",
+              });
+              const completedTask = await workStore.updateTask(task.id, {
+                status: "completed",
+                statusMessage: `${label} ha terminado el trabajo delegado por Elvira.`,
+                progress: 1,
+                completedAt: new Date().toISOString(),
+                resultId: storedResult.id,
+              });
+              delegated.push({ specialistId, label, status: "completed", taskId: completedTask.id, resultId: storedResult.id, output });
+            } catch (cause) {
+              const errorCode = cause instanceof Error && cause.message === "specialist_generation_failed"
+                ? "generation_failed"
+                : "specialist_unavailable";
+              const failedTask = await workStore.updateTask(task.id, {
+                status: "failed",
+                statusMessage: `${label} no ha podido completar el trabajo delegado.`,
+                progress: 0,
+                completedAt: new Date().toISOString(),
+                errorCode,
+                errorMessage: errorCode,
+              });
+              delegated.push({ specialistId, label, status: "failed", taskId: failedTask.id });
+            }
+          }
+          const completed = delegated.filter((item) => item.status === "completed");
+          result = {
+            status: completed.length > 0 ? "success" : "blocked",
+            operation: toolName,
+            summary: completed.length > 0
+              ? `Elvira ha recibido resultados de ${completed.map((item) => item.label).join(", ")}. Sintetízalos para el CEO.`
+              : "Ningún especialista pudo completar el trabajo delegado.",
+            data: {
+              objective: objective.slice(0, 500),
+              delegated: delegated.map(({ output, ...item }) => ({ ...item, ...(output ? { output } : {}) })),
+            },
+          };
+        }
       } else if (toolName === "departify.work.deliverable") {
         const capability = nativeText(args, "capability");
         const transformation = nativeText(args, "transformation");

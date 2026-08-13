@@ -100,11 +100,14 @@ export class OpenClawEngineAdapter implements EngineAdapter {
 
   /* ------------------------- EngineAdapter contract ------------------------- */
 
-  async createSession(input: { sessionId?: string; model?: string } = {}): Promise<EngineSession> {
+  async createSession(
+    input: { sessionId?: string; model?: string; agentId?: string } = {},
+  ): Promise<EngineSession> {
     const id = input.sessionId ?? randomUUID();
+    const agentId = input.agentId ?? AGENT_ID;
     await this.client.request("sessions.create", {
-      key: sessionKey(id),
-      agentId: AGENT_ID,
+      key: sessionKey(id, agentId),
+      agentId,
       ...(this.resolveModel(input.model) ? { model: this.resolveModel(input.model) } : {}),
     });
     const now = new Date().toISOString();
@@ -117,7 +120,7 @@ export class OpenClawEngineAdapter implements EngineAdapter {
     try {
       const { runStatus, lastAssistant } = await this.client.runAndReadResult(
         {
-          key: sessionKey(input.sessionId),
+          key: sessionKey(input.sessionId, input.agentId),
           message: renderOpenClawTurn(input),
         },
         this.client.config.requestTimeoutMs,
@@ -187,16 +190,17 @@ export class OpenClawEngineAdapter implements EngineAdapter {
   }
 
   async setNativeToolPolicy(input: EngineNativeToolPolicyInput): Promise<void> {
+    const agentId = input.agentId ?? AGENT_ID;
     await this.client.request("departify.native-tools.set-session-tools", {
-      sessionKey: sessionKey(input.sessionId),
-      agentId: AGENT_ID,
+      sessionKey: sessionKey(input.sessionId, agentId),
+      agentId,
       toolNames: [...new Set(input.toolNames)],
     });
   }
 
-  async getSession(sessionId: string): Promise<EngineSession | null> {
+  async getSession(sessionId: string, agentId = AGENT_ID): Promise<EngineSession | null> {
     try {
-      const result = await this.client.describeSession(sessionKey(sessionId));
+      const result = await this.client.describeSession(sessionKey(sessionId, agentId));
       const session = result?.session;
       if (!session) return null;
       const s = session as {
@@ -407,7 +411,12 @@ export function renderOpenClawTurn(input: EngineSendMessageInput): string {
         "business outcome that asks for a dashboard, report, chart, analysis, or other durable " +
         "result, inspect the currently exposed capabilities and select departify.work.deliverable " +
         "when an authorized source capability and transformation can satisfy it. Use its business " +
-        "arguments; never ask the CEO to mention or create an internal procedure.",
+        "arguments; never ask the CEO to mention or create an internal procedure. For a genuine " +
+        "Marketing objective, act as Elvira: choose one or more authorized Marketing specialists " +
+        "and call departify.marketing.delegate with their internal ids. That capability runs " +
+        "specialist work sessions and returns their work for your synthesis. A question " +
+        "to the CEO about whether to hand work to a person is conversation only; never delegate " +
+        "merely because a response mentions a person.",
     );
   }
   if (input.runtimeContext) {
@@ -432,8 +441,10 @@ export function renderOpenClawTurn(input: EngineSendMessageInput): string {
   return sections.join("\n\n");
 }
 
-export function sessionKey(departifyId: string): string {
-  return `${SESSION_KEY_PREFIX}${departifyId}`;
+export function sessionKey(departifyId: string, agentId = AGENT_ID): string {
+  return agentId === AGENT_ID
+    ? `${SESSION_KEY_PREFIX}${departifyId}`
+    : `agent:${agentId}:${SESSION_KEY_PREFIX}${departifyId}`;
 }
 
 function normalizeRole(

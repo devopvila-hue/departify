@@ -279,6 +279,22 @@ const config = {
         default: true,
         workspace: join(workspaceDir, "agents", "main"),
       },
+      {
+        id: "agent_marketing_director",
+        workspace: join(workspaceDir, "agents", "agent_marketing_director"),
+      },
+      {
+        id: "agent_content_strategist",
+        workspace: join(workspaceDir, "agents", "agent_content_strategist"),
+      },
+      {
+        id: "agent_social_media_manager",
+        workspace: join(workspaceDir, "agents", "agent_social_media_manager"),
+      },
+      {
+        id: "agent_ads_specialist",
+        workspace: join(workspaceDir, "agents", "agent_ads_specialist"),
+      },
     ],
   },
   models: { providers },
@@ -301,6 +317,7 @@ const config = {
                 "departify.approvals.list",
                 "departify.results.list",
                 "departify.work.deliverable",
+                "departify.marketing.delegate",
               ],
             }
           : {}),
@@ -325,7 +342,8 @@ const config = {
                 "departify.tasks.list",
                 "departify.approvals.list",
                 "departify.results.list",
-                "departify.work.deliverable",
+              "departify.work.deliverable",
+              "departify.marketing.delegate",
               ]
             : []),
           ...(execMode === "test" ? ["exec", "process", "read"] : []),
@@ -498,6 +516,24 @@ await writeSafely(join(agentWorkspace, "MEMORY.md"), "", 0o644);
   await writeSafely(join(agentWorkspace, "IDENTITY.md"), "# Agent Identity\n\nInternal. Not exposed to the Departify customer.\n", 0o644);
 } else {
   await mkdir(agentWorkspace, { recursive: true });
+}
+
+// The CEO-facing agent and the three Marketing specialists are native
+// OpenClaw agents. Their workspaces contain role instructions only; tenant
+// business data and credentials are supplied by Departify at runtime.
+const workforceInstructions = {
+  main: "# Agent: main\n\nYou are the internal CEO-facing Departify agent. When the request is a Marketing business objective, coordinate with Elvira through Departify's native marketing delegation capability. Never expose internal agent ids or runtime details.\n",
+  agent_marketing_director: "# Agent: agent_marketing_director\n\nYou are Elvira, Jefa de Marketing. Diagnose the CEO's objective, choose the right specialists, and synthesize their results. Use Departify's native delegation capability when a specialist is needed. Never expose internal runtime details.\n",
+  agent_content_strategist: "# Agent: agent_content_strategist\n\nYou are the Marketing Content Specialist. Produce practical content strategy, copy, scripts, editorial calendars, and YouTube preparation. Return concise, actionable work to Elvira. Do not claim external publishing without an authorized connection.\n",
+  agent_social_media_manager: "# Agent: agent_social_media_manager\n\nYou are the Marketing Social Media Specialist. Produce organic social strategy, channel adaptations, publishing plans, and Meta Business preparation. Separate recommendations from actions and never claim a post was published without authorization.\n",
+  agent_ads_specialist: "# Agent: agent_ads_specialist\n\nYou are the Marketing Advertising Specialist. Produce paid acquisition strategy, campaign structure, audience hypotheses, creative requirements, and measurement plans. Treat spend and campaign mutations as approval-sensitive.\n",
+};
+for (const [agentId, instructions] of Object.entries(workforceInstructions)) {
+  const workspace = join(workspaceDir, "agents", agentId);
+  await mkdir(workspace, { recursive: true });
+  await writeSafely(join(workspace, "AGENTS.md"), instructions, 0o644);
+  await writeSafely(join(workspace, "MEMORY.md"), "", 0o644);
+  await writeSafely(join(workspace, "IDENTITY.md"), `# ${agentId}\n\nInternal Departify workforce identity. Not customer-facing.\n`, 0o644);
 }
 
 const finalStat = await stat(CONFIG_PATH);

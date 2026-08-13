@@ -14,7 +14,8 @@
       "departify.tasks.list",
       "departify.approvals.list",
       "departify.results.list",
-      "departify.work.deliverable"
+      "departify.work.deliverable",
+      "departify.marketing.delegate"
     ]
   },
   "configSchema": {

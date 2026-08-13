@@ -9,6 +9,7 @@ const TOOL_NAMES = [
   "departify.approvals.list",
   "departify.results.list",
   "departify.work.deliverable",
+  "departify.marketing.delegate",
 ];
 const DEFAULT_AUDIENCE = "departify-tool-gateway";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -101,6 +102,29 @@ function toolParameters(name) {
         },
         additionalProperties: false,
       };
+    case "departify.marketing.delegate":
+      return {
+        type: "object",
+        required: ["objective", "specialists"],
+        properties: {
+          objective: string("Business objective Elvira must execute with her Marketing team"),
+          specialists: {
+            type: "array",
+            minItems: 1,
+            maxItems: 3,
+            items: {
+              type: "string",
+              enum: [
+                "agent_content_strategist",
+                "agent_social_media_manager",
+                "agent_ads_specialist",
+              ],
+            },
+          },
+          context: string("Optional concise context for the specialists"),
+        },
+        additionalProperties: false,
+      };
     default:
       return { type: "object", additionalProperties: false };
   }
@@ -131,6 +155,7 @@ function toolDescription(name) {
     "departify.approvals.list": "List durable pending company approvals.",
     "departify.results.list": "List durable company results.",
     "departify.work.deliverable": "Prepare a durable business result from an authorized capability. Use this for a CEO request to create a dashboard, report, chart, or analysis. Select the authorized source capability and transformation; never mention internal implementation details to the CEO.",
+    "departify.marketing.delegate": "Delegate a Marketing business objective to one or more of Elvira's authorized specialists. Choose specialists based on the work, then use their returned work to synthesize a CEO-facing answer. Never claim external publication or ad spend without an authorized connection and approval.",
   };
   return descriptions[name];
 }
@@ -146,6 +171,11 @@ export default {
     // and user credential are checked again. A per-session allowlist here
     // caused Founder parity sessions to discover zero tools.
     api.registerTool((ctx) => {
+      // Marketing specialists are native OpenClaw agents, but they do not
+      // receive the CEO's tenant gateway tools. Their work is scoped by the
+      // backend delegation call; this keeps business credentials and CEO
+      // operations out of internal specialist sessions.
+      if (ctx?.agentId !== "main") return [];
       sessionKeyFromContext(ctx);
       return TOOL_NAMES.map((name) => makeTool(ctx, name));
     }, { names: TOOL_NAMES });

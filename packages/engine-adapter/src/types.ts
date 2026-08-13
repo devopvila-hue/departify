@@ -18,6 +18,8 @@ export interface EngineSession {
 
 export interface EngineSendMessageInput {
   sessionId: string;
+  /** Optional native agent identity for internal workforce sessions. */
+  agentId?: string;
   message: string;
   /** Optional server-side timing sink. Stage metadata must remain
    * non-sensitive (no prompt, response, credentials or token values). */
@@ -37,6 +39,8 @@ export interface EngineSendMessageInput {
 export interface EngineNativeToolPolicyInput {
   sessionId: string;
   toolNames: readonly string[];
+  /** Defaults to the CEO/main agent. */
+  agentId?: string;
 }
 
 /** Provider-neutral business tool metadata. Never contains credentials. */

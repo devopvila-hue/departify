@@ -33,6 +33,7 @@ describe("native business read surface", () => {
       "departify.tasks.list",
       "departify.approvals.list",
       "departify.results.list",
+      "departify.marketing.delegate",
     ]);
     expect(nativeToolsForManifest(manifest).some((name) => /send|reply|create|write/.test(name))).toBe(false);
   });

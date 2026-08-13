@@ -14,6 +14,11 @@ describe("session mapping", () => {
     // The engine key is internal; the Departify id is what callers see.
     expect(sessionKey("abc-123")).not.toBe("abc-123");
   });
+
+  it("maps internal workforce sessions to their native OpenClaw agent", () => {
+    expect(sessionKey("employee:org:user:agent_content_strategist", "agent_content_strategist"))
+      .toBe("agent:agent_content_strategist:departify:employee:org:user:agent_content_strategist");
+  });
 });
 
 describe("isLoopbackUrl", () => {

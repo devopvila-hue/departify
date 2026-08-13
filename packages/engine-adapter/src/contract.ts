@@ -24,6 +24,8 @@ export interface EngineAdapter {
   createSession(input?: {
     sessionId?: string;
     model?: string;
+    /** Native OpenClaw agent identity for internal workforce sessions. */
+    agentId?: string;
   }): Promise<EngineSession>;
 
   /**
@@ -38,7 +40,7 @@ export interface EngineAdapter {
    * Read a session's normalized state. Returns null when the session does not
    * exist.
    */
-  getSession(sessionId: string): Promise<EngineSession | null>;
+  getSession(sessionId: string, agentId?: string): Promise<EngineSession | null>;
 
   /**
    * Read the normalized conversation history of a session.

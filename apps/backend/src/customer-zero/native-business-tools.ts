@@ -16,6 +16,7 @@ export const NATIVE_READ_TOOL_NAMES = [
   "departify.approvals.list",
   "departify.results.list",
   "departify.work.deliverable",
+  "departify.marketing.delegate",
 ] as const;
 
 export const NATIVE_DRIVE_READ_INPUT = {

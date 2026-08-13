@@ -105,6 +105,53 @@ describe("native company context gateway", () => {
     expect(JSON.stringify(response.json())).not.toMatch(/Google|Gmail|Hostinger|Mautic|provider/i);
   });
 
+  it("delegates to native Marketing specialist sessions and persists assigned work", async () => {
+    process.env.DEPARTIFY_RUNTIME_TOKEN = secret;
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Native Marketing Workforce",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const organizationId = start.json().organizationId as string;
+    const token = issueScopedRuntimeToken({
+      secret,
+      organizationId,
+      sessionKey: `departify:ceo:${organizationId}`,
+    }).token;
+    const before = engine.inputs.length;
+    const response = await server.inject({
+      method: "POST",
+      url: "/internal/native-tools/tool",
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        toolName: "departify.marketing.delegate",
+        params: {
+          objective: "Preparar una campaña de captación para septiembre",
+          specialists: ["agent_content_strategist", "agent_ads_specialist"],
+        },
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ status: "success", operation: "departify.marketing.delegate" });
+    expect(response.json().data.delegated).toEqual([
+      expect.objectContaining({ specialistId: "agent_content_strategist", status: "completed" }),
+      expect.objectContaining({ specialistId: "agent_ads_specialist", status: "completed" }),
+    ]);
+    const specialistInputs = engine.inputs.slice(before);
+    expect(specialistInputs.map((input) => input.agentId)).toEqual([
+      "agent_content_strategist",
+      "agent_ads_specialist",
+    ]);
+    expect(specialistInputs.every((input) => input.nativeBusinessTools !== true)).toBe(true);
+  });
+
   it("rejects a token from tenant A when its signed claims are changed to tenant B", async () => {
     process.env.DEPARTIFY_RUNTIME_TOKEN = secret;
     const issued = issueScopedRuntimeToken({

@@ -28,9 +28,10 @@ test("registers the native tool surface", async () => {
     "departify.approvals.list",
     "departify.results.list",
     "departify.work.deliverable",
+    "departify.marketing.delegate",
   ]);
   const tools = factory({ sessionKey: `departify:ceo:${ORG_A}`, agentId: "main" });
-  assert.equal(tools.length, 10);
+  assert.equal(tools.length, 11);
   const company = tools.find((tool) => tool.name === "departify.company.context");
   assert.deepEqual(company.parameters.properties.section.enum, ["summary", "objective", "marketing", "all"]);
   assert.equal(company.parameters.additionalProperties, false);
@@ -40,6 +41,9 @@ test("registers the native tool surface", async () => {
   assert.deepEqual(deliverable.parameters.required, ["objective", "capability", "transformation"]);
   assert.deepEqual(deliverable.parameters.properties.capability.enum, ["crm.contacts.list"]);
   assert.deepEqual(deliverable.parameters.properties.transformation.enum, ["score"]);
+  const delegation = tools.find((tool) => tool.name === "departify.marketing.delegate");
+  assert.deepEqual(delegation.parameters.required, ["objective", "specialists"]);
+  assert.equal(delegation.parameters.properties.specialists.maxItems, 3);
   assert.equal(tools.some((tool) => tool.name.includes("send")), false);
 });
 
@@ -75,9 +79,9 @@ test("uses trusted session identity and returns the structured gateway result", 
 
 test("rejects another agent while exposing only the read-only native catalog", async () => {
   const { factory } = registeredPlugin();
-  assert.throws(
-    () => factory({ sessionKey: `agent:other:departify:ceo:${ORG_A}`, agentId: "other" }),
-    /scoped CEO session/,
+  assert.deepEqual(
+    factory({ sessionKey: `agent:other:departify:employee:${ORG_A}`, agentId: "other" }),
+    [],
   );
   assert.deepEqual(factory({ sessionKey: `departify:ceo:${ORG_A}`, agentId: "main" }).map((tool) => tool.name), TOOL_NAMES);
 });

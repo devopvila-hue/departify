@@ -217,4 +217,15 @@ describe("P-B production fix — connections catalog", () => {
     expect(mauticEntries[0]?.domains).toContain("crm");
     expect(mauticEntries[0]?.domains).toContain("marketing");
   });
+
+  it("K. Marketing tools are visible with honest prepared states", async () => {
+    const org = await start();
+    const views = await connections(org);
+    for (const toolId of ["meta_business", "youtube", "ticktick"]) {
+      const tool = views.find((view) => view.toolId === toolId);
+      expect(tool).toBeDefined();
+      expect(tool?.state).not.toBe("connected");
+      expect(tool?.action).toBe("prepare");
+    }
+  });
 });

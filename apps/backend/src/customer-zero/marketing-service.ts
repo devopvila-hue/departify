@@ -84,6 +84,7 @@ export interface MarketingOperationalSnapshot {
 const MARKETING_TOOLS: readonly Omit<ConnectedTool, "status" | "note">[] = [
   { toolId: "google_ads", label: "Google Ads", capability: "Publicidad" },
   { toolId: "meta_ads", label: "Meta Ads", capability: "Publicidad" },
+  { toolId: "meta_business", label: "Meta Business", capability: "Publicación y social" },
   { toolId: "linkedin_ads", label: "LinkedIn Ads", capability: "Publicidad" },
   { toolId: "google_analytics", label: "Google Analytics", capability: "Analítica" },
   { toolId: "hubspot", label: "HubSpot", capability: "CRM" },
