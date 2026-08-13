@@ -1748,8 +1748,25 @@ export async function registerCustomerZeroV2Routes(
         }
       }
 
-      completeConnection(connection);
-      return reply.code(200).send({ organizationId, connection });
+      // Every provider except Google must have its own token exchange and
+      // operational probe before it can become CONNECTED. The old generic
+      // fallback flipped the state optimistically, which created a false
+      // "connected" record for any non-Google connector that reached this
+      // callback without a real provider implementation.
+      connection.status = "blocked";
+      connection.lifecycle = "unavailable";
+      connection.blockedReason =
+        "Este proveedor todavía no tiene un intercambio OAuth y verificación operativa implementados.";
+      delete connection.authorizationUrl;
+      await persistToolState(session, toolStateFromConnection(session, connection));
+      return reply.code(409).send({
+        organizationId,
+        connection,
+        error: {
+          code: "OAUTH_PROVIDER_NOT_IMPLEMENTED",
+          message: "The provider OAuth exchange is not implemented yet.",
+        },
+      });
     },
   );
 

@@ -38,6 +38,8 @@ describe("CZ03 — Google OAuth unified handshake (routes)", () => {
     gmailTokenStore.remove("org-a", "user-a");
     delete process.env.GOOGLE_OAUTH_CLIENT_ID;
     delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+    delete process.env.MICROSOFT_OAUTH_CLIENT_ID;
+    delete process.env.MICROSOFT_OAUTH_CLIENT_SECRET;
     delete process.env.PUBLIC_BASE_URL;
   });
 
@@ -95,6 +97,29 @@ describe("CZ03 — Google OAuth unified handshake (routes)", () => {
     expect(body.connection.oauthState).toBeTruthy();
     // The state nonce is registered in the server-side OAuth state store.
     expect(await gmailOAuthStateStore.get(body.connection.oauthState)).not.toBeNull();
+  });
+
+  it("never marks a non-Google connector connected without a real exchange and probe", async () => {
+    process.env.MICROSOFT_OAUTH_CLIENT_ID = "microsoft-client-test";
+    process.env.MICROSOFT_OAUTH_CLIENT_SECRET = "microsoft-secret-test";
+    process.env.PUBLIC_BASE_URL = "https://app.departify.app";
+    const org = await startOrg();
+    const connect = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/outlook/connect`,
+    });
+    expect(connect.statusCode).toBe(200);
+    expect(connect.json().connection.status).toBe("connecting");
+
+    const callback = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/outlook/callback`,
+      payload: { code: "provider-code" },
+    });
+    expect(callback.statusCode).toBe(409);
+    expect(callback.json().error.code).toBe("OAUTH_PROVIDER_NOT_IMPLEMENTED");
+    expect(callback.json().connection.status).toBe("blocked");
+    expect(callback.json().connection.lifecycle).toBe("unavailable");
   });
 
   it("P0 redirect_uri: with PUBLIC_BASE_URL=https://app.departify.app the authorization URL contains exactly https://app.departify.app/connections/google/callback", async () => {
