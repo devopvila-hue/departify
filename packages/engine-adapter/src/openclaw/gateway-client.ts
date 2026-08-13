@@ -495,7 +495,23 @@ export class OpenClawGatewayClient {
     agentId = AGENT_DEFAULT,
   ): Promise<{ sessions?: Array<Record<string, unknown>> }> {
     await this.ensureConnected();
-    const result = await this.request("sessions.usage", { agentId });
+    let result: unknown;
+    try {
+      result = await this.request("sessions.usage", { agentId });
+    } catch (err) {
+      // OpenClaw 2026.5 accepts the usage query without an agent selector,
+      // while newer gateways may still accept the older agentId shape. Keep
+      // the adapter compatible with both protocol variants and only fall back
+      // for this specific schema mismatch; unrelated provider errors must
+      // remain visible to the caller.
+      if (
+        !(err instanceof EngineInvalidRequestError) ||
+        !/unexpected property ['"]?agentId/i.test(err.message)
+      ) {
+        throw err;
+      }
+      result = await this.request("sessions.usage", {});
+    }
     return result as { sessions?: Array<Record<string, unknown>> };
   }
 

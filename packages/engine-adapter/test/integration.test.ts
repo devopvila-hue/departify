@@ -5,17 +5,17 @@
  *   - the departify-engine container running (ws://127.0.0.1:18889)
  *   - OPENCLAW_GATEWAY_TOKEN matching the engine
  *   - an approved gateway device key (OPENCLAW_DEVICE_KEY_PATH)
- *   - Vertex provider reachable (google-vertex/gemini-2.5-flash)
+ *   - the configured provider reachable (defaults to google-vertex/gemini-2.5-flash)
  *
  * These are REAL end-to-end tests: backend boundary → EngineAdapter →
- * OpenClaw Gateway → Vertex AI. No mocks. Unit-only fixtures live in the
+ * OpenClaw Gateway → configured provider. No mocks. Unit-only fixtures live in the
  * other test files.
  */
 
 import { readFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-// Real engine + Vertex calls routinely exceed the 5s vitest default.
+// Real engine/provider calls routinely exceed the 5s vitest default.
 const INTEGRATION_TIMEOUT = 180_000;
 import { createEngineAdapter } from "../src/factory.js";
 import type { EngineAdapter } from "../src/contract.js";
@@ -30,6 +30,8 @@ import { mapGatewayError } from "../src/openclaw/gateway-client.js";
 const RUN = process.env.ENGINE_INTEGRATION === "1";
 const TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
 const URL = process.env.OPENCLAW_GATEWAY_URL ?? "ws://127.0.0.1:18889";
+const MODEL =
+  process.env.OPENCLAW_MODEL ?? "google-vertex/gemini-2.5-flash";
 const DEVICE_KEY =
   process.env.OPENCLAW_DEVICE_KEY_PATH ??
   (process.env.DEPARTIFY_ROOT
@@ -47,7 +49,7 @@ function buildAdapter(): EngineAdapter {
     retryLimit: 2,
     maxRetryDelayMs: 4_000,
     ...(deviceKeyPem ? { deviceKeyPem } : {}),
-    model: "google-vertex/gemini-2.5-flash",
+    model: MODEL,
   });
 }
 
@@ -151,8 +153,11 @@ describeIf("EngineAdapter integration (real ENGINE 01 gateway)", { timeout: 180_
     const s = await engine.createSession({ sessionId: "engine02-usage" });
     await engine.sendMessage({ sessionId: s.id, message: "Di HOLA" });
     const u = await engine.getUsage(s.id);
-    expect(u.provider).toBe("google-vertex");
-    expect(u.model).toContain("gemini");
+    const [expectedProvider, ...expectedModelParts] = MODEL.split("/");
+    expect(u.provider).toBe(expectedProvider);
+    if (expectedModelParts.length > 0) {
+      expect(u.model).toBe(expectedModelParts.join("/"));
+    }
     expect(u.totalTokens ?? 0).toBeGreaterThan(0);
   });
 
