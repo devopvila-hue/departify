@@ -19,6 +19,7 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "test:engine-adapter": "pnpm --filter @departify/engine-adapter test:integration",
+    "chat:latency-ab": "node tools/chat-latency-ab.mjs",
     "format": "prettier --check ."
   },
   "devDependencies": {

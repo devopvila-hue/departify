@@ -3231,6 +3231,15 @@ export function emitCeoTurnTrace(
   trace: CeoTurnTraceState,
   result: CeoMessageResult,
 ): void {
+  const completionGate = trace.openclawStatus === "failed" || trace.openclawStatus === "error"
+    ? "generation_failed"
+    : trace.timeline.T14_persistence_failed !== undefined &&
+        (trace.nativeResponseTerminal || trace.assistantTextBytes !== null)
+      ? "persistence_failed"
+      : trace.timeline.T14_persistence_completed !== undefined &&
+          (trace.nativeResponseTerminal || trace.assistantTextBytes !== null)
+        ? "success"
+        : "completed_without_durable_persistence";
   const delegatedDepartment = result.routing.departments[0] ?? null;
   console.info("[ceo-turn-trace]", {
     requestCorrelationId: trace.requestCorrelationId,
@@ -3271,14 +3280,7 @@ export function emitCeoTurnTrace(
     finalResponseSource: trace.finalResponseSource,
     assistantTextBytes: trace.assistantTextBytes,
     timeline: trace.timeline,
-    completionGate:
-      trace.nativeResponseTerminal && trace.timeline.T14_persistence_completed !== undefined
-        ? "success"
-        : trace.nativeResponseTerminal && trace.timeline.T14_persistence_failed !== undefined
-          ? "persistence_failed"
-        : (trace.openclawStatus === "failed" || trace.openclawStatus === "error")
-          ? "generation_failed"
-          : "completed_without_durable_persistence",
+    completionGate,
     resultStatus: trace.toolResultStatuses.at(-1) ?? "completed",
     durationMs: Date.now() - trace.startedAt,
   });
@@ -4706,6 +4708,12 @@ export async function processCeoMessage(
     trace.finalResponseSource = marketingTurn && routed.decision.intent === "delegate_marketing"
       ? "marketing"
       : "legacy_router";
+  }
+  if (trace) {
+    trace.assistantTextBytes = Buffer.byteLength(
+      marketingTurn?.content ?? assistantReply,
+      "utf8",
+    );
   }
 
   if (trace) traceStage(trace, "T13_persistence_started");
