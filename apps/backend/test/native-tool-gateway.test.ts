@@ -5,6 +5,7 @@ import { loadBackendConfig } from "@departify/config";
 import type { FastifyInstance } from "fastify";
 import { makeFakeTenant } from "./helpers/fake-tenant.js";
 import { issueScopedRuntimeToken } from "../src/customer-zero/runtime-identity.js";
+import { MarketingService } from "../src/customer-zero/marketing-service.js";
 
 class GatewayTestEngine implements EngineAdapter {
   readonly inputs: EngineSendMessageInput[] = [];
@@ -55,12 +56,14 @@ describe("native company context gateway", () => {
       auth: tenant,
       organizations: tenant,
       engine,
+      marketing: new MarketingService({ engine }),
       nativeBusinessTools: true,
     });
     offServer = await buildServer(loadBackendConfig(), {
       auth: tenant,
       organizations: tenant,
       engine: offEngine,
+      marketing: new MarketingService({ engine: offEngine }),
     });
   });
 
@@ -286,6 +289,46 @@ describe("native company context gateway", () => {
     expect(input?.nativeBusinessTools).toBe(true);
     expect(input?.sessionId).toBeTruthy();
     expect(response.json().reply).not.toMatch(/Lo paso a Elvira|Marketing|No puedo afirmar/i);
+  });
+
+  it("keeps the legacy Marketing message ingress on the canonical conversation", async () => {
+    engine.nativeSelection = false;
+    engine.nativeText = "Respuesta canónica de Marketing.";
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Canonical Marketing Ingress",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Conseguir clientes",
+      },
+    });
+    const organizationId = start.json().organizationId as string;
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/departments/marketing/${organizationId}/message`,
+      headers: { authorization: "Bearer token-a" },
+      payload: { message: "Prepara una propuesta para septiembre." },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().reply).toBe(engine.nativeText);
+
+    const conversations = await server.inject({
+      method: "GET",
+      url: `/api/customer-zero/${organizationId}/conversations`,
+      headers: { authorization: "Bearer token-a" },
+    });
+    expect(conversations.statusCode).toBe(200);
+    expect(conversations.json().conversations).toHaveLength(1);
+    const conversationId = conversations.json().conversations[0].id as string;
+    const history = await server.inject({
+      method: "GET",
+      url: `/api/customer-zero/${organizationId}/conversations/${conversationId}`,
+      headers: { authorization: "Bearer token-a" },
+    });
+    expect(history.json().messages.at(-1)).toMatchObject({ role: "assistant", content: engine.nativeText });
   });
 
   it("persists and returns the exact native response across a durable conversation", async () => {

@@ -159,7 +159,7 @@ describe("Sprint 59 — Conversational Operating System", () => {
     expect(chatLink.getAttribute("href")).toBe("/chat");
   });
 
-  it("3. The Marketing route is a department workspace with an integrated Elvira chat", async () => {
+  it("3. The Marketing route is a department workspace linked to the canonical chat", async () => {
     mockFetch((url) => {
       if (url.includes("/api/departments/marketing/org_moon")) {
         return {
@@ -219,10 +219,9 @@ describe("Sprint 59 — Conversational Operating System", () => {
     );
 
     await waitFor(() => expect(screen.getByText("Elvira")).toBeInTheDocument());
-    // ENGINE 04: the department detail integrates the Elvira chat naturally.
-    expect(
-      screen.getByRole("heading", { name: /hablar con elvira/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /conversación de la empresa/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /ir a dirección/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/mensaje para elvira/i)).not.toBeInTheDocument();
     expect(screen.getByText(/especialista en adquisición/i)).toBeInTheDocument();
   });
 

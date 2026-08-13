@@ -183,7 +183,7 @@ describe("portal shell", () => {
     expect(screen.queryByText(/approve tool execution|permission/i)).not.toBeInTheDocument();
   });
 
-  it("shows Marketing as a department workspace with an integrated Elvira chat", async () => {
+  it("shows Marketing as a department workspace linked to the canonical chat", async () => {
     mockFetch((url) => {
       if (url.includes("/api/departments/marketing/org_moon")) {
         return {
@@ -215,11 +215,9 @@ describe("portal shell", () => {
     await waitFor(() => expect(screen.getByText("Elvira")).toBeInTheDocument());
     expect(screen.getAllByText(/marketing/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/especialista en adquisición/i)).toBeInTheDocument();
-    // ENGINE 04: the department detail integrates the Elvira chat naturally,
-    // still in business language (no technical agent/skill terms).
-    expect(
-      screen.getByRole("heading", { name: /hablar con elvira/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /conversación de la empresa/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /ir a dirección/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/mensaje para elvira/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/openclaw|skill|agente|token/i)).not.toBeInTheDocument();
   });
 });

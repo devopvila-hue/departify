@@ -1,9 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import type { ServerDeps } from "../deps.js";
 import {
+  buildCeoRuntimeForRequest,
   buildCanonicalConnectionViews,
   buildMarketingOperationalActivity,
-  isEmailQuestion,
+  createCeoTurnTrace,
+  emitCeoTurnTrace,
   processCeoMessage,
   requireSession,
   workStoreForRoutes,
@@ -15,8 +17,8 @@ import { resolveLocale, t, type SupportedLocale } from "../../customer-zero/loca
  *
  * Business-language surface for the CEO to see and steer the Marketing
  * department (Elvira). No OpenClaw, agent, session-key or tool terminology is
- * exposed. All conversation is routed through the MarketingService →
- * EngineAdapter → OpenClaw → Vertex.
+ * exposed. Conversation messages use the canonical CEO conversation pipeline;
+ * the department service remains the durable business-state projection.
  *
  * These endpoints are additive to the existing Customer Zero routes; they do
  * not replace the Command Center chat (which remains the CEO's single chat).
@@ -94,8 +96,9 @@ export async function registerMarketingRoutes(
     return { objective };
   });
 
-  // Talk to Elvira (Golden Path). The CEO sends a message; Elvira responds
-  // with business context + objective + plan + any approval request.
+  // Compatibility ingress only. The CEO has one canonical conversation; this
+  // legacy URL must use the same durable turn pipeline as /chat and may not
+  // create a separate MarketingService/OpenClaw conversation.
   server.post<{
     Params: { organizationId: string };
     Body: { message: string; locale?: string };
@@ -111,26 +114,29 @@ export async function registerMarketingRoutes(
         },
       });
     }
-    // All Gmail reads use the canonical durable capability pipeline, even
-    // when the request arrives from the legacy Marketing surface. This keeps
-    // that surface from disagreeing with central chat after a new session or
-    // backend restart.
-    if (isEmailQuestion(body.message)) {
-      const session = await requireSession(organizationId, deps);
-      const result = await processCeoMessage(session, body.message);
-      return { reply: result.reply, activity: [], approvals: [] };
-    }
-    const outcome = await marketing.talkToElvira({
-      organizationId,
-      message: body.message,
-      locale,
-    });
-    return {
-      reply: outcome.reply,
-      activity: outcome.activity ?? [],
-      approvals: outcome.approvals ?? [],
-      objective: outcome.objective,
-    };
+    const session = await requireSession(organizationId, deps);
+    const correlationId = String(
+      request.headers["x-departify-correlation-id"] ?? request.id,
+    );
+    const trace = createCeoTurnTrace(session, correlationId);
+    const runtime = await buildCeoRuntimeForRequest(
+      session,
+      deps,
+      body.message,
+      trace,
+      request.authUser?.id,
+    );
+    const result = await processCeoMessage(
+      session,
+      body.message,
+      undefined,
+      marketing,
+      deps.engineRuntimePolicy,
+      runtime,
+      trace,
+    );
+    emitCeoTurnTrace(session, runtime?.trace ?? trace, result);
+    return result;
   });
 
   // Activity

@@ -27,22 +27,16 @@ import {
  *
  * Behaviour:
  *   - The chat IS the application.
- *   - Maximum 5 ACTIVE conversations. The 6th request opens a confirm
- *     dialog: archive one to continue, or cancel. No silent deletes.
- *   - Each conversation is durable server-side (Supabase) so a reload,
+ *   - The organization has one canonical CEO conversation. It is durable
+ *     server-side (Supabase) so a reload,
  *     a backend restart, or a deploy preserves everything.
- *   - Switching conversations reloads the recent transcript and scrolls
- *     to the latest turn. Composer stays ready.
- *   - New conversation: opens at first user input, not embedded in a
- *     dashboard. Empty start shows a single grounded opening prompt.
+ *   - Navigation and reloads resolve the same canonical conversation.
+ *     OpenClaw session details remain internal.
  *   - Long transcripts compact internally (deterministic summary). The
  *     CEO sees ONE continuous conversation. The portal surfaces a
  *     subtle hint when a compaction has run.
- *   - Conversation titles default to "Nueva conversación" until enough
- *     context exists; the backend derives a useful title without making
- *     the user wait.
- *   - Archived conversations remain visible from history and never
- *     count toward the 5-active cap. History does not delete memory.
+ *   - Historical messages remain durable and are loaded progressively;
+ *     compaction does not delete the transcript.
  */
 export function ChatRoute() {
   const { organizationId } = useOrg();

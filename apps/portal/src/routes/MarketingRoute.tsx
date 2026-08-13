@@ -28,9 +28,6 @@ export function MarketingRoute() {
   const [department, setDepartment] = useState<MarketingDepartmentStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
-  const [chat, setChat] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
-  const [chatBusy, setChatBusy] = useState(false);
   const [showObjectiveForm, setShowObjectiveForm] = useState(false);
   const [objectiveForm, setObjectiveForm] = useState({
     title: "",
@@ -132,23 +129,6 @@ export function MarketingRoute() {
     }
     setShowObjectiveForm(false);
     setObjectiveForm({ title: "", description: "", desiredOutcome: "", constraints: "" });
-    await load();
-  }
-
-  async function sendToElvira() {
-    const value = message.trim();
-    if (!organizationId || !value || chatBusy) return;
-    setChatBusy(true);
-    setError(null);
-    setMessage("");
-    setChat((prev) => [...prev, { role: "user", content: value }]);
-    const result = await api.marketingMessage(organizationId, value);
-    setChatBusy(false);
-    if (!result) {
-      setError("Elvira no ha podido responderte ahora mismo. Inténtalo de nuevo.");
-      return;
-    }
-    setChat((prev) => [...prev, { role: "assistant", content: result.reply }]);
     await load();
   }
 
@@ -443,50 +423,16 @@ export function MarketingRoute() {
         )}
       </Card>
 
-      {/* Chat with Elvira */}
-      <Card title="Hablar con Elvira">
+      {/* The CEO has one canonical conversation, shared across every route. */}
+      <Card title="Conversación de la empresa">
         <p className="dfy-muted dfy-muted--small">
-          Cuéntale lo que necesitas. La conversación llega a Elvira a través de
-          Departify y se queda en la empresa.
+          La conversación continua con tu empresa está en Dirección. Desde allí
+          puedes hablar con Elvira y consultar todo el historial, también después
+          de volver a esta página.
         </p>
-        <div className="dfy-chat">
-          {chat.length === 0 && (
-            <p className="dfy-muted">
-              Sin mensajes todavía. Pregúntale por el objetivo, los canales o el
-              plan de Marketing.
-            </p>
-          )}
-          {chat.map((turn, index) => (
-            <div
-              key={`mkt_${index}`}
-              className={`dfy-bubble${turn.role === "user" ? " dfy-bubble--user" : ""}`}
-            >
-              <span className="dfy-bubble__who">{turn.role === "user" ? "Tú" : "Elvira"}</span>
-              <p>{readable(turn.content)}</p>
-            </div>
-          ))}
-        </div>
-        <div className="dfy-composer">
-          <input
-            type="text"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void sendToElvira();
-            }}
-            placeholder="Quiero 20 leads este mes con 500 € y una landing."
-            aria-label="Mensaje para Elvira"
-            disabled={chatBusy}
-          />
-          <button
-            type="button"
-            className="dfy-button"
-            onClick={() => void sendToElvira()}
-            disabled={chatBusy || message.trim().length === 0}
-          >
-            {chatBusy ? "Elvira piensa…" : "Enviar"}
-          </button>
-        </div>
+        <button type="button" className="dfy-button" onClick={() => navigate("/chat")}>
+          Ir a Dirección
+        </button>
       </Card>
     </div>
   );

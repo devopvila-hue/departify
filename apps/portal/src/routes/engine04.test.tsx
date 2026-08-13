@@ -262,21 +262,12 @@ describe("ENGINE 04 — Control Plane", () => {
     expect(screen.getAllByText(/trabajando ahora/i).length).toBeGreaterThan(0);
   });
 
-  it("14 chat with Elvira works (Marketing route)", async () => {
-    let replied = false;
-    mockFetch((url, init) => {
-      if (String(url).includes("/message") && init?.method === "POST") {
-        replied = true;
-        return { reply: "He preparado el plan para tu objetivo.", activity: [], approvals: [] };
-      }
-      return departmentStatus;
-    });
+  it("14 Marketing route keeps the CEO conversation canonical", async () => {
+    mockFetch(() => departmentStatus);
     mount(<MarketingRoute />, "/marketing");
-    const input = await screen.findByLabelText(/mensaje para elvira/i);
-    fireEvent.change(input, { target: { value: "Prepara el plan." } });
-    fireEvent.keyDown(input, { key: "Enter", code: "Enter" });
-    await waitFor(() => expect(replied).toBe(true));
-    expect(await screen.findByText(/he preparado el plan para tu objetivo/i)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /conversación de la empresa/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/mensaje para elvira/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /ir a dirección/i })).toBeInTheDocument();
   });
 
   it("15 no OpenClaw terminology visible", async () => {
@@ -304,13 +295,12 @@ describe("ENGINE 04 — Control Plane", () => {
     expect(screen.getByRole("button", { name: /abrir navegación/i })).toBeInTheDocument();
   });
 
-  it("18 keyboard accessibility smoke — composer input focusable", async () => {
+  it("18 keyboard accessibility smoke — canonical chat link is focusable", async () => {
     mockFetch(() => departmentStatus);
     mount(<MarketingRoute />, "/marketing");
-    const input = await screen.findByLabelText(/mensaje para elvira/i);
-    expect(input).toHaveAttribute("aria-label");
-    input.focus();
-    expect(document.activeElement).toBe(input);
+    const button = await screen.findByRole("button", { name: /ir a dirección/i });
+    button.focus();
+    expect(document.activeElement).toBe(button);
   });
 
   it("19 backend error state", async () => {

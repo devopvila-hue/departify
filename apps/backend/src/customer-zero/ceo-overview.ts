@@ -22,6 +22,7 @@ import {
   getMarketingHead,
   type DepartmentHeadView,
 } from "./department-identity.js";
+import { MARKETING_ROSTER } from "./marketing-roster.js";
 import { t, type SupportedLocale } from "./locale.js";
 
 export interface DecisionView {
@@ -154,6 +155,7 @@ export function buildCompanyOperatingState(input: {
   readonly marketing: DepartmentStatusView | null;
   readonly marketingApprovals: readonly ApprovalRequest[];
 }): CompanyOperatingState {
+  const employeeLabels = new Map(MARKETING_ROSTER.map((employee) => [employee.id, employee.label]));
   const activeTasks = input.tasks.filter((task) =>
     task.status === "queued" || task.status === "running" || task.status === "waiting_approval",
   );
@@ -209,21 +211,30 @@ export function buildCompanyOperatingState(input: {
       tone: "done" as const,
       createdAt: item.receivedAt,
     })),
-    ...input.tasks.map((task) => ({
-      id: `task_${task.id}`,
-      head: input.head,
-      message: task.source?.type === "inbox_email"
-        ? `Correo convertido en tarea: ${task.title}`
-        : `Tarea creada: ${task.title}`,
-      tone: task.status === "failed"
-        ? "blocked" as const
-        : task.status === "waiting_approval"
-          ? "waiting" as const
-          : task.status === "completed"
-            ? "done" as const
-            : "working" as const,
-      createdAt: task.createdAt,
-    })),
+    ...input.tasks.map((task) => {
+      const actor = task.assignedEmployeeId
+        ? employeeLabels.get(task.assignedEmployeeId) ?? "Especialista de Marketing"
+        : input.head.name;
+      return {
+        id: `task_${task.id}`,
+        head: input.head,
+        message: task.source?.type === "inbox_email"
+          ? task.assignedEmployeeId
+            ? `${actor}: correo convertido en tarea: ${task.title}`
+            : `Correo convertido en tarea: ${task.title}`
+          : task.assignedEmployeeId
+            ? `${actor}: tarea creada: ${task.title}`
+            : `Tarea creada: ${task.title}`,
+        tone: task.status === "failed"
+          ? "blocked" as const
+          : task.status === "waiting_approval"
+            ? "waiting" as const
+            : task.status === "completed"
+              ? "done" as const
+              : "working" as const,
+        createdAt: task.createdAt,
+      };
+    }),
     ...input.results.map((result) => ({
       id: `result_${result.id}`,
       head: input.head,

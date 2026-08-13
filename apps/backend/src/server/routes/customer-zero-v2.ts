@@ -148,6 +148,7 @@ import {
   type DepartmentWorkStore,
 } from "../../customer-zero/department-work.js";
 import { DepartmentWorkExecutor } from "../../customer-zero/department-work-executor.js";
+import { MARKETING_ROSTER } from "../../customer-zero/marketing-roster.js";
 import type { MarketingActivityRepository } from "../../customer-zero/marketing-repositories.js";
 import {
   InMemoryInboxStore,
@@ -6904,19 +6905,29 @@ export function buildMarketingOperationalActivity(
   tasks: readonly DepartmentTask[],
   results: readonly DepartmentResult[],
 ) {
+  const employeeLabels = new Map(MARKETING_ROSTER.map((employee) => [employee.id, employee.label]));
   return [
     ...tasks
       .filter((task) => task.departmentId === "marketing")
-      .map((task) => ({
-        id: `task_${task.id}`,
-        departmentId: "marketing" as const,
-        actor: "Elvira",
-        kind: "analisis_realizado" as const,
-        message: task.source?.type === "inbox_email"
-          ? `Correo convertido en tarea: ${task.title}`
-          : `Tarea creada: ${task.title}`,
-        createdAt: task.createdAt,
-      })),
+      .map((task) => {
+        const actor = task.assignedEmployeeId
+          ? employeeLabels.get(task.assignedEmployeeId) ?? "Especialista de Marketing"
+          : "Elvira";
+        return {
+          id: `task_${task.id}`,
+          departmentId: "marketing" as const,
+          actor,
+          kind: "analisis_realizado" as const,
+          message: task.source?.type === "inbox_email"
+            ? task.assignedEmployeeId
+              ? `${actor}: correo convertido en tarea: ${task.title}`
+              : `Correo convertido en tarea: ${task.title}`
+            : task.assignedEmployeeId
+              ? `${actor}: tarea creada: ${task.title}`
+              : `Tarea creada: ${task.title}`,
+          createdAt: task.createdAt,
+        };
+      }),
     ...results
       .filter((result) => result.departmentId === "marketing")
       .map((result) => ({

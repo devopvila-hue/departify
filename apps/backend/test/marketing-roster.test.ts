@@ -34,6 +34,7 @@ const activeTask = {
   departmentId: "marketing",
   objectiveId: null,
   requestedBy: "ceo",
+  assignedEmployeeId: "agent_content_strategist",
   title: "Preparar informe de campaña",
   summary: "Informe de campaña",
   capability: "results.publish",
@@ -99,6 +100,10 @@ describe("canonical Marketing roster projections", () => {
 
     expect(status.status).toBe("trabajando");
     expect(status.employees).toHaveLength(3);
+    expect(status.employeesWorkingNow).toBe(1);
+    expect(status.employees.find((employee) => employee.id === "agent_content_strategist")).toMatchObject({
+      status: "trabajando",
+    });
     expect(status.activeWork.map((task) => task.id)).toEqual([activeTask.id]);
     expect(status.results.map((item) => item.id)).toContain(result.id);
     expect(status.tools).toEqual([
@@ -136,6 +141,7 @@ describe("canonical Marketing roster projections", () => {
     expect(company.departments[0]?.employees).toHaveLength(status.employees.length);
     expect(company.summary.workingNow).toBe(1);
     expect(company.activity.some((entry) => entry.message.includes(activeTask.title))).toBe(true);
+    expect(company.activity.some((entry) => entry.message.startsWith("Especialista en Contenido:"))).toBe(true);
     expect(company.results.some((item) => item.id === result.id)).toBe(true);
   });
 });
