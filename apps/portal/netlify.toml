@@ -11,7 +11,9 @@ targetPort = 5173
 [functions."*"]
 
 [build]
-publish = "apps/portal/dist"
+# Netlify resolves this path relative to the portal package base directory.
+# Using apps/portal/dist here duplicates the base during Netlify builds.
+publish = "dist"
 publishOrigin = "config"
 commandOrigin = "config"
 command = "pnpm --filter @departify/portal build"
