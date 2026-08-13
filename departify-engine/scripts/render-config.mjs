@@ -11,14 +11,11 @@
  *   2  - invalid configuration value
  */
 import { mkdir, writeFile, stat } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 
 const STATE_DIR = process.env.OPENCLAW_STATE_DIR || "/home/node/.openclaw";
 const CONFIG_PATH =
   process.env.OPENCLAW_CONFIG_PATH || join(STATE_DIR, "openclaw.json");
-const BOOTSTRAP_DIR =
-  process.env.OPENCLAW_BOOTSTRAP_DIR ||
-  resolve(dirname(new URL(import.meta.url).pathname), "..", "bootstrap");
 
 const required = (name) => {
   const v = process.env[name];
@@ -103,6 +100,10 @@ const logLevel = optional("OPENCLAW_LOG_LEVEL", "info");
 // Never leave enabled; remove the env var after use.
 const enableAdminHttpRpc = bool("OPENCLAW_ENABLE_ADMIN_HTTP_RPC", false);
 const enableNativeBusinessTools = bool("OPENCLAW_NATIVE_BUSINESS_TOOLS", false);
+// Founder parity is an explicit environment boundary. Other modes retain the
+// existing restricted policy until the separate production hardening sprint.
+const runtimeMode = optional("DEPARTIFY_OPENCLAW_MODE", "production");
+const founderParity = runtimeMode === "founder-development";
 const departifyApiUrl = optional("DEPARTIFY_API_URL", "");
 const departifyRuntimeToken = optional("DEPARTIFY_RUNTIME_TOKEN", "");
 if (enableNativeBusinessTools && (!departifyApiUrl || !departifyRuntimeToken)) {
@@ -267,7 +268,7 @@ const config = {
       },
       contextTokens,
       thinkingDefault: "off",
-      skipBootstrap: true,
+      ...(founderParity ? {} : { skipBootstrap: true }),
       sandbox: enableSandbox
         ? { mode: "non-main", scope: "agent" }
         : { mode: "off" },
@@ -281,112 +282,148 @@ const config = {
     ],
   },
   models: { providers },
-  tools: {
-    // The CEO agent needs OpenClaw's agentic surfaces (web, memory, sessions,
-    // and skill workshop) to discover/compose safe procedures. Keep the
-    // host-facing and mutating surfaces explicitly denied below.
-    profile: "coding",
-    alsoAllow: [
-      ...(enableNativeBusinessTools
-        ? [
-            "departify.company.context",
-            "departify.email.list",
-            "departify.email.search",
-            "departify.calendar.list",
-            "departify.drive.search",
-            "departify.drive.read",
-            "departify.tasks.list",
-            "departify.approvals.list",
-            "departify.results.list",
-            "departify.work.deliverable",
-          ]
-        : []),
-      ...(execMode === "test" ? ["exec", "process", "read"] : []),
-    ],
-    // In "test" mode expose exec (bounded to safe bins) so the tool loop is a
-    // real agent→tool→result cycle. In "locked" mode exec is denied entirely.
-    ...(execMode === "test"
-      ? {
-          exec: {
-            host: "gateway",
-            security: "full",
-            ask: "off",
-            // Bounded to safe, read-only / non-mutating commands. Profiles
-            // make the allowlist deterministic (avoids "unprofiled safeBins"
-            // warnings) while keeping the surface read-only.
-            safeBinProfiles: {
-              date: {},
-              echo: {},
-              pwd: {},
-              env: {},
-              ls: {},
-              cat: {},
-              uname: {},
-            },
-            applyPatch: { enabled: false, workspaceOnly: true },
-            timeoutSec: 30,
-          },
-        }
-      : { exec: { security: "deny" } }),
-    // `coding` is intentionally narrowed: no host shell, arbitrary code
-    // execution, writes/patches, browser, cron, nodes, or media side effects.
-    // Native business operations remain the only provider-facing surface.
-    deny: [
-      "gateway",
-      "cron",
-      "browser",
-      "nodes",
-      "write",
-      "edit",
-      "apply_patch",
-      "exec",
-      "process",
-      "code_execution",
-      "image",
-      "image_generate",
-      "music_generate",
-      "video_generate",
-      "tts",
-    ],
-    fs: { workspaceOnly: true },
-    elevated: { enabled: false },
-    ...(smallFallbackNeedsWebIsolation
-      ? {
-          byProvider: {
-            [`${fallbackProvider}/${fallbackModel}`]: {
-              deny: ["group:web", "browser"],
-            },
-          },
-        }
-      : {}),
-  },
+  tools: founderParity
+    ? {
+        // Founder development follows OpenClaw's native capability surface.
+        // Departify only adds its business tools; it does not rebuild or
+        // narrow OpenClaw's own agentic runtime.
+        profile: "full",
+        ...(enableNativeBusinessTools
+          ? {
+              alsoAllow: [
+                "departify.company.context",
+                "departify.email.list",
+                "departify.email.search",
+                "departify.calendar.list",
+                "departify.drive.search",
+                "departify.drive.read",
+                "departify.tasks.list",
+                "departify.approvals.list",
+                "departify.results.list",
+                "departify.work.deliverable",
+              ],
+            }
+          : {}),
+        exec: {
+          host: "gateway",
+          security: "full",
+          ask: "off",
+          timeoutSec: requestTimeoutSec,
+        },
+      }
+    : {
+        profile: "coding",
+        alsoAllow: [
+          ...(enableNativeBusinessTools
+            ? [
+                "departify.company.context",
+                "departify.email.list",
+                "departify.email.search",
+                "departify.calendar.list",
+                "departify.drive.search",
+                "departify.drive.read",
+                "departify.tasks.list",
+                "departify.approvals.list",
+                "departify.results.list",
+                "departify.work.deliverable",
+              ]
+            : []),
+          ...(execMode === "test" ? ["exec", "process", "read"] : []),
+        ],
+        ...(execMode === "test"
+          ? {
+              exec: {
+                host: "gateway",
+                security: "full",
+                ask: "off",
+                safeBinProfiles: {
+                  date: {},
+                  echo: {},
+                  pwd: {},
+                  env: {},
+                  ls: {},
+                  cat: {},
+                  uname: {},
+                },
+                applyPatch: { enabled: false, workspaceOnly: true },
+                timeoutSec: 30,
+              },
+            }
+          : { exec: { security: "deny" } }),
+        deny: [
+          "gateway",
+          "cron",
+          "browser",
+          "nodes",
+          "write",
+          "edit",
+          "apply_patch",
+          "exec",
+          "process",
+          "code_execution",
+          "image",
+          "image_generate",
+          "music_generate",
+          "video_generate",
+          "tts",
+        ],
+        fs: { workspaceOnly: true },
+        elevated: { enabled: false },
+        ...(smallFallbackNeedsWebIsolation
+          ? {
+              byProvider: {
+                [`${fallbackProvider}/${fallbackModel}`]: {
+                  deny: ["group:web", "browser"],
+                },
+              },
+            }
+          : {}),
+      },
   channels: {},
-  hooks: { enabled: false },
+  ...(founderParity ? {} : { hooks: { enabled: false } }),
   discovery: {
     mdns: { mode: "off" },
   },
-  plugins: {
-    allow: [
-      "codex",
-      "diagnostics-otel",
-      ...(enableNativeBusinessTools ? ["departify-native-tools"] : []),
-      ...(enableAdminHttpRpc ? ["admin-http-rpc"] : []),
-    ],
-    load: {
-      paths: enableNativeBusinessTools ? ["/app/native-plugin"] : [],
-    },
-    ...(enableAdminHttpRpc
-      ? { entries: { "admin-http-rpc": { enabled: true } } }
-      : {}),
-    ...(enableNativeBusinessTools
-      ? {
-          entries: {
-            ...(enableAdminHttpRpc ? { "admin-http-rpc": { enabled: true } } : {}),
-            "departify-native-tools": { enabled: true },
-          },
-        }
-      : {}),
-  },
+  plugins: founderParity
+    ? {
+        // Without an allowlist OpenClaw discovers its native plugin ecosystem.
+        // The two explicit entries are Departify's integration surfaces.
+        load: {
+          paths: enableNativeBusinessTools ? ["/app/native-plugin"] : [],
+        },
+        ...(enableAdminHttpRpc || enableNativeBusinessTools
+          ? {
+              entries: {
+                ...(enableAdminHttpRpc ? { "admin-http-rpc": { enabled: true } } : {}),
+                ...(enableNativeBusinessTools
+                  ? { "departify-native-tools": { enabled: true } }
+                  : {}),
+              },
+            }
+          : {}),
+      }
+    : {
+        allow: [
+          "codex",
+          "diagnostics-otel",
+          ...(enableNativeBusinessTools ? ["departify-native-tools"] : []),
+          ...(enableAdminHttpRpc ? ["admin-http-rpc"] : []),
+        ],
+        load: {
+          paths: enableNativeBusinessTools ? ["/app/native-plugin"] : [],
+        },
+        ...(enableAdminHttpRpc
+          ? { entries: { "admin-http-rpc": { enabled: true } } }
+          : {}),
+        ...(enableNativeBusinessTools
+          ? {
+              entries: {
+                ...(enableAdminHttpRpc ? { "admin-http-rpc": { enabled: true } } : {}),
+                "departify-native-tools": { enabled: true },
+              },
+            }
+          : {}),
+      },
   logging: { level: logLevel },
 };
 
@@ -408,9 +445,6 @@ const cleaned = dropUndefined(config);
 /* ------------------------- workspace bootstrap ------------------------- */
 
 const agentWorkspace = join(workspaceDir, "agents", "main");
-const bootstrapAgents = {
-  ...(await import(join(BOOTSTRAP_DIR, "agents.json")).then((m) => m.default || m).catch(() => ({}))),
-};
 const writeSafely = async (path, body, mode) => {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, body, { encoding: "utf8", mode });
@@ -442,6 +476,7 @@ await writeSafely(
       engineVersion,
       openclawVersion,
       openclawImage,
+      runtimeMode,
       renderedAt: new Date().toISOString(),
     },
     null,
@@ -450,7 +485,8 @@ await writeSafely(
   0o644,
 );
 
-await writeSafely(join(workspaceDir, "AGENTS.md"), "# Departify Engine Workspace\n\nInternal workspace for the Departify engine. Not visible to the customer.\n", 0o644);
+if (!founderParity) {
+  await writeSafely(join(workspaceDir, "AGENTS.md"), "# Departify Engine Workspace\n\nInternal workspace for the Departify engine. Not visible to the customer.\n", 0o644);
 await writeSafely(join(workspaceDir, "MEMORY.md"), "", 0o644);
 await writeSafely(join(workspaceDir, "IDENTITY.md"), "# Engine Identity\n\nEngine: Departify internal runtime (OpenClaw Gateway).\nNot customer-facing.\n", 0o644);
 await writeSafely(
@@ -459,7 +495,10 @@ await writeSafely(
   0o644,
 );
 await writeSafely(join(agentWorkspace, "MEMORY.md"), "", 0o644);
-await writeSafely(join(agentWorkspace, "IDENTITY.md"), "# Agent Identity\n\nInternal. Not exposed to the Departify customer.\n", 0o644);
+  await writeSafely(join(agentWorkspace, "IDENTITY.md"), "# Agent Identity\n\nInternal. Not exposed to the Departify customer.\n", 0o644);
+} else {
+  await mkdir(agentWorkspace, { recursive: true });
+}
 
 const finalStat = await stat(CONFIG_PATH);
 console.log(

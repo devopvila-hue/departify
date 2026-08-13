@@ -3849,13 +3849,19 @@ export async function processCeoMessage(
       trace.exposedToolNames = [...runtime.nativeToolNames];
     }
     try {
-      if (!runtime.engine.setNativeToolPolicy) {
-        throw new Error("native_tool_policy_unsupported");
+      // Founder parity deliberately leaves native OpenClaw tool selection to
+      // OpenClaw. The old per-session setter reconstructed a narrow
+      // Departify allowlist and made ordinary reasoning less capable. The
+      // business tool names remain context/telemetry only in this mode.
+      if (process.env.DEPARTIFY_OPENCLAW_MODE !== "founder-development") {
+        if (!runtime.engine.setNativeToolPolicy) {
+          throw new Error("native_tool_policy_unsupported");
+        }
+        await runtime.engine.setNativeToolPolicy({
+          sessionId: runtime.sessionId,
+          toolNames: runtime.nativeToolNames,
+        });
       }
-      await runtime.engine.setNativeToolPolicy({
-        sessionId: runtime.sessionId,
-        toolNames: runtime.nativeToolNames,
-      });
       const nativeContext = renderRuntimeBusinessContextForNativeEngine(runtime.context);
       const nativeResult = await runtime.engine.sendMessage({
         sessionId: runtime.sessionId,

@@ -321,10 +321,11 @@ export class OpenClawEngineAdapter implements EngineAdapter {
 
   async getToolState(_sessionId: string): Promise<EngineToolState> {
     void _sessionId;
-    // The tool policy is global per agent in this runtime; read from the
-    // adapter's known policy (driven by OPENCLAW_EXEC_MODE at the engine).
-    // `available` reflects what a test-mode engine exposes; `denied` reflects
-    // the always-denied surface.
+    if (process.env.DEPARTIFY_OPENCLAW_MODE === "founder-development") {
+      return { available: ["native_openclaw"], denied: [] };
+    }
+    // The restricted branch remains available for the future production
+    // hardening sprint; Founder parity must not report its old allowlist.
     return {
       available: ["exec", "message", "session_status"],
       denied: [
