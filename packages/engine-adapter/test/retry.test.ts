@@ -152,6 +152,41 @@ describe("request() retry loop", () => {
     expect(device!.nonce).toBe("nonce-2");
     expect(device!.signedAt).toBe(2222);
   });
+
+  it("does not treat an empty aborted assistant as the native response", async () => {
+    const client = buildClient();
+    const anyClient = client as unknown as {
+      chatHistory: (key: string) => Promise<{ messages: Array<Record<string, unknown>> }>;
+      runAgent: (params: Record<string, unknown>, timeoutMs: number) => Promise<{ result: unknown }>;
+    };
+    const previousAssistant = { role: "assistant", content: [{ type: "text", text: "previous" }] };
+    const nativeAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "native answer" }],
+      stopReason: "stop",
+    };
+    const emptyAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "" }],
+      stopReason: "aborted",
+    };
+    let historyCalls = 0;
+    vi.spyOn(anyClient, "chatHistory").mockImplementation(async () => {
+      historyCalls += 1;
+      return historyCalls === 1
+        ? { messages: [previousAssistant] }
+        : { messages: [previousAssistant, { role: "user", content: "turn" }, nativeAssistant, emptyAssistant] };
+    });
+    vi.spyOn(anyClient, "runAgent").mockResolvedValue({ result: { status: "ok" } });
+
+    const result = await client.runAndReadResult(
+      { key: "departify:test", message: "turn" },
+      1000,
+    );
+
+    expect(result.runStatus).toBe("ok");
+    expect(result.lastAssistant.text).toBe("native answer");
+  });
 });
 
 describe("error metadata", () => {

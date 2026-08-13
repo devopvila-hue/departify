@@ -381,13 +381,23 @@ export class OpenClawGatewayClient {
   }> {
     const key = String(params.key);
     const historyBefore = await this.chatHistory(key);
-    const { result } = await this.runAgent(params, waitTimeoutMs, false);
+    const { result, events } = await this.runAgent(params, waitTimeoutMs, true);
     const runStatus = String((result as { status?: unknown })?.status ?? "");
     const history = await this.chatHistory(key);
     const messages = history?.messages ?? [];
-    const lastAssistant = [...messages]
+    // A session can contain an aborted/empty assistant record after a timed
+    // out run. Prefer the latest non-empty assistant produced by THIS run;
+    // otherwise the empty terminal record masks valid text from the same
+    // response and the caller falls through to a generic reply.
+    const currentMessages = messages.length >= historyBefore.messages.length
+      ? messages.slice(historyBefore.messages.length)
+      : messages;
+    const lastAssistant = [...currentMessages]
       .reverse()
-      .find((m) => (m as { role?: string }).role === "assistant");
+      .find((m) =>
+        (m as { role?: string }).role === "assistant" &&
+        Boolean(extractText((m as { content?: unknown }).content)?.trim()),
+      );
     const la = (lastAssistant ?? {}) as {
       content?: unknown;
       usage?: {
@@ -406,9 +416,6 @@ export class OpenClawGatewayClient {
     // Scanning the whole session history re-reports tools from earlier CEO
     // turns as if they belonged to this turn, breaking follow-up continuity.
     const toolNamesSet = new Set<string>();
-    const currentMessages = messages.length >= historyBefore.messages.length
-      ? messages.slice(historyBefore.messages.length)
-      : messages;
     for (const m of currentMessages) {
       const mm = m as {
         toolName?: string;
@@ -434,7 +441,7 @@ export class OpenClawGatewayClient {
       name,
       status: "completed",
     }));
-    const text = extractText(la.content);
+    const text = extractText(la.content) ?? (events?.assistantChunks?.join("") || undefined);
     return {
       runStatus,
       lastAssistant: {

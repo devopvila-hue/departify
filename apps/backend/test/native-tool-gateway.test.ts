@@ -10,6 +10,7 @@ class GatewayTestEngine implements EngineAdapter {
   readonly inputs: EngineSendMessageInput[] = [];
   readonly nativePolicies: Array<{ sessionId: string; toolNames: readonly string[] }> = [];
   nativeSelection = true;
+  nativeText = "Contexto de empresa consultado.";
   async createSession(input?: { sessionId?: string }): Promise<EngineSession> {
     return { id: input?.sessionId ?? "ceo:test", status: "active" };
   }
@@ -17,7 +18,11 @@ class GatewayTestEngine implements EngineAdapter {
     this.inputs.push(input);
     return {
       sessionId: input.sessionId,
-      text: input.nativeBusinessTools ? "Contexto de empresa consultado." : "ok",
+      text: input.nativeBusinessTools
+        ? /\bsegundo\b/i.test(input.message)
+          ? "Segundo email revisado: más corto y directo."
+          : this.nativeText
+        : "ok",
       status: "completed",
       ...(input.nativeBusinessTools && this.nativeSelection
         ? { toolCalls: [{ name: "departify.company.context", status: "completed" as const }] }
@@ -232,6 +237,84 @@ describe("native company context gateway", () => {
     expect(input?.nativeBusinessTools).toBe(true);
     expect(input?.sessionId).toBeTruthy();
     expect(response.json().reply).not.toMatch(/Lo paso a Elvira|Marketing|No puedo afirmar/i);
+  });
+
+  it("persists and returns the exact native response across a durable conversation", async () => {
+    engine.nativeSelection = false;
+    engine.nativeText = "Mailing preparado:\n1. Presentación\n2. Caso de uso\n3. Cierre";
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Native Response Preservation",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Conseguir clientes",
+      },
+    });
+    const organizationId = start.json().organizationId as string;
+    const created = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/conversations`,
+      headers: { authorization: "Bearer token-a" },
+      payload: {},
+    });
+    const conversationId = created.json().conversation.id as string;
+    const first = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/conversations/${conversationId}/messages`,
+      headers: { authorization: "Bearer token-a" },
+      payload: { message: "Hazme un mailing de tres correos para vender Departify." },
+    });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().reply).toBe(engine.nativeText);
+    expect(first.json().reply).not.toContain("La operación ha terminado");
+
+    const history = await server.inject({
+      method: "GET",
+      url: `/api/customer-zero/${organizationId}/conversations/${conversationId}`,
+      headers: { authorization: "Bearer token-a" },
+    });
+    const messages = history.json().messages as Array<{ role: string; content: string }>;
+    expect(messages.at(-1)).toMatchObject({ role: "assistant", content: engine.nativeText });
+
+    engine.nativeText = "Mailing revisado: el segundo correo queda más corto y directo.";
+    const second = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/conversations/${conversationId}/messages`,
+      headers: { authorization: "Bearer token-a" },
+      payload: { message: "Ahora haz el segundo más corto y directo." },
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().reply).toContain("Segundo email revisado");
+  });
+
+  it("does not turn an empty native response into a false completed-operation message", async () => {
+    engine.nativeSelection = false;
+    engine.nativeText = "";
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Native Empty Response",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Conseguir clientes",
+      },
+    });
+    const organizationId = start.json().organizationId as string;
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/command-center/message`,
+      headers: { authorization: "Bearer token-a" },
+      payload: { message: "Hazme un mailing de tres correos para vender Departify." },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().reply).toContain("sin devolver una respuesta");
+    expect(response.json().reply).not.toContain("La operación ha terminado");
+    engine.nativeText = "Contexto de empresa consultado.";
   });
 
   it("resolves an explicit durable work reference before capability routing", async () => {

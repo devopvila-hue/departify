@@ -2973,12 +2973,14 @@ interface CeoTurnTraceState {
   nativeAttempted: boolean;
   openclawCalled: boolean;
   openclawStatus: string | null;
+  openclawTextBytes: number | null;
   nativeResponseTerminal: boolean;
   legacyRouterCalled: boolean;
   legacyRoute: string | null;
   marketingServiceCalled: boolean;
   productTruthCalled: boolean;
   finalResponseSource: "openclaw" | "legacy_router" | "marketing" | "product_truth" | "durable_work" | "error_fallback" | null;
+  assistantTextBytes: number | null;
 }
 
 type PendingOperationDecision = "APPROVE" | "CANCEL" | "OTHER";
@@ -3107,12 +3109,14 @@ function newCeoTurnTrace(
     nativeAttempted: false,
     openclawCalled: false,
     openclawStatus: null,
+    openclawTextBytes: null,
     nativeResponseTerminal: false,
     legacyRouterCalled: false,
     legacyRoute: null,
     marketingServiceCalled: false,
     productTruthCalled: false,
     finalResponseSource: null,
+    assistantTextBytes: null,
   };
 }
 
@@ -3159,12 +3163,14 @@ export function emitCeoTurnTrace(
     nativeAttempted: trace.nativeAttempted,
     openclawCalled: trace.openclawCalled,
     openclawStatus: trace.openclawStatus,
+    openclawTextBytes: trace.openclawTextBytes,
     nativeResponseTerminal: trace.nativeResponseTerminal,
     legacyRouterCalled: trace.legacyRouterCalled,
     legacyRoute: trace.legacyRoute,
     marketingServiceCalled: trace.marketingServiceCalled,
     productTruthCalled: trace.productTruthCalled,
     finalResponseSource: trace.finalResponseSource,
+    assistantTextBytes: trace.assistantTextBytes,
     resultStatus: trace.toolResultStatuses.at(-1) ?? "completed",
     durationMs: Date.now() - trace.startedAt,
   });
@@ -3861,6 +3867,7 @@ export async function processCeoMessage(
         nativeBusinessTools: true,
       });
       if (trace) trace.openclawStatus = nativeResult.status;
+      if (trace) trace.openclawTextBytes = Buffer.byteLength(nativeResult.text ?? "", "utf8");
       const selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
       if (trace) {
         trace.selectedToolNames = selectedTools;
@@ -3872,6 +3879,27 @@ export async function processCeoMessage(
         trace.toolResultStatuses = nativeResult.status === "completed" ? ["success"] : ["failed"];
       }
       const selectedExposedTools = selectedTools.filter((name) => runtime.nativeToolNames.includes(name));
+      if (
+        nativeResult.status === "completed" &&
+        !nativeResult.text.trim() &&
+        !nativeMutationRequiresDeterministicGate(operationalMessage)
+      ) {
+        if (trace) {
+          trace.finalResponseSource = "error_fallback";
+          trace.nativeResponseTerminal = false;
+          trace.toolResultStatuses = ["empty_assistant_response"];
+        }
+        return completeRuntimeCeoTurn(
+          session,
+          conversation,
+          message,
+          "",
+          selectedTools,
+          ["empty_assistant_response"],
+          null,
+          trace,
+        );
+      }
       if (
         nativeResult.status === "completed" &&
         !nativeMutationRequiresDeterministicGate(operationalMessage)
@@ -3895,6 +3923,7 @@ export async function processCeoMessage(
           selectedTools,
           ["success"],
           nativeWorkResult,
+          trace,
         );
       }
       if (nativeResult.status === "completed") {
@@ -4606,6 +4635,7 @@ async function completeRuntimeCeoTurn(
   toolNames: readonly string[],
   toolStatuses: readonly string[],
   workResult: DepartmentResult | null = null,
+  trace?: CeoTurnTraceState,
 ): Promise<CeoMessageResult> {
   const safeReply = reply
     .replace(/<departify_tool_call>[\s\S]*?<\/departify_tool_call>/gi, "")
@@ -4614,7 +4644,10 @@ async function completeRuntimeCeoTurn(
     ? session.state.locale === "en"
       ? "I cannot claim that work is running: no durable task or result proves it. I have not invented progress or a deliverable."
       : "No puedo afirmar que ese trabajo esté ejecutándose: ninguna tarea o resultado durable lo demuestra. No he inventado progreso ni una entrega."
-    : safeReply || "La operación ha terminado con un estado verificable.";
+    : safeReply || (session.state.locale === "en"
+      ? "The engine completed without returning an assistant response. Please try again."
+      : "El motor terminó sin devolver una respuesta del asistente. Vuelve a intentarlo.");
+  if (trace) trace.assistantTextBytes = Buffer.byteLength(finalReply, "utf8");
   try {
     await session.conversations.addMessage(conversation.id, "assistant", finalReply);
   } catch (cause) {
