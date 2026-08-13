@@ -318,9 +318,14 @@ export async function registerConversationRoutes(
       const correlationId = String(
         request.headers["x-departify-correlation-id"] ?? request.id,
       );
-      traceRequestReceived(correlationId, organizationId, startedMonotonicAt);
+      const requestReceivedElapsedMs = traceRequestReceived(
+        correlationId,
+        organizationId,
+        startedMonotonicAt,
+      );
       const session = await requireSession(organizationId, deps);
       const trace = createCeoTurnTrace(session, correlationId, startedMonotonicAt);
+      trace.timeline.T1_backend_request_received = requestReceivedElapsedMs;
       traceStage(trace, "T2_auth_tenant_resolution_complete");
       const conversation = await session.conversations.get(
         organizationId,
@@ -349,7 +354,6 @@ export async function registerConversationRoutes(
           runtime,
           trace,
         );
-        emitCeoTurnTrace(session, runtime?.trace ?? trace, result);
       } catch (cause) {
         if (cause instanceof MaxActiveConversationsError) {
           return reply.code(409).send({
@@ -369,6 +373,7 @@ export async function registerConversationRoutes(
       // character threshold. Raw history is preserved; only the model
       // context is rewritten to `[summary, ...recent]`.
       try {
+        traceStage(trace, "T14_secondary_compaction_started");
         const persistedConversationId = result.conversationId || conversationId;
         const allMessages = await session.conversations.listMessages(
           organizationId,
@@ -405,7 +410,9 @@ export async function registerConversationRoutes(
             );
           }
         }
+        traceStage(trace, "T14_secondary_compaction_completed");
       } catch {
+        traceStage(trace, "T14_secondary_compaction_failed", { errorClass: "secondary_write" });
         // Compaction is best-effort: a failure must NEVER break a CEO
         // turn. The bounded window continues to operate without a
         // summary until the next attempt.
@@ -415,6 +422,7 @@ export async function registerConversationRoutes(
         responseStatus: 200,
         finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
       });
+      emitCeoTurnTrace(session, trace, result);
       return reply.code(200).send(result);
     },
   );

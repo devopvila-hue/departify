@@ -2317,9 +2317,14 @@ export async function registerCustomerZeroV2Routes(
       const correlationId = String(
         request.headers["x-departify-correlation-id"] ?? request.id,
       );
-      traceRequestReceived(correlationId, organizationId, startedMonotonicAt);
+      const requestReceivedElapsedMs = traceRequestReceived(
+        correlationId,
+        organizationId,
+        startedMonotonicAt,
+      );
       const session = await requireSession(organizationId, deps);
       const trace = newCeoTurnTrace(session, correlationId, startedMonotonicAt);
+      trace.timeline.T1_backend_request_received = requestReceivedElapsedMs;
       traceStage(trace, "T2_auth_tenant_resolution_complete");
       try {
         const runtime = await buildCeoRuntimeForRequest(
@@ -2338,11 +2343,11 @@ export async function registerCustomerZeroV2Routes(
           runtime,
           trace,
         );
-        emitCeoTurnTrace(session, runtime?.trace ?? trace, result);
         traceStage(trace, "T15_backend_response_finalization", {
           responseStatus: 200,
           finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
         });
+        emitCeoTurnTrace(session, runtime?.trace ?? trace, result);
         return reply.code(200).send(result);
       } catch (cause) {
         if (cause instanceof MaxActiveConversationsError) {
@@ -3042,13 +3047,15 @@ export function traceRequestReceived(
   correlationId: string,
   organizationId: string,
   startedMonotonicAt: number,
-): void {
+): number {
+  const elapsedMs = Math.round((performance.now() - startedMonotonicAt) * 100) / 100;
   console.info("[chat-timeline]", {
     correlationId,
     organizationHash: safeTraceHash(organizationId),
     stage: "T1_backend_request_received",
-    elapsedMs: Math.round((performance.now() - startedMonotonicAt) * 100) / 100,
+    elapsedMs,
   });
+  return elapsedMs;
 }
 
 function pendingOperationType(session: CustomerZeroSession): string | null {

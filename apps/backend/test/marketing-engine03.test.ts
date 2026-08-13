@@ -23,6 +23,7 @@ import { InMemoryDiscoveryReportRepository } from "@departify/business-discovery
 const RUN = process.env.ENGINE_INTEGRATION === "1";
 const TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
 const URL = process.env.OPENCLAW_GATEWAY_URL ?? "ws://127.0.0.1:18889";
+const INTEGRATION_MODEL = process.env.OPENCLAW_INTEGRATION_MODEL ?? "google-vertex/gemini-2.5-flash";
 const DEVICE_KEY_PATH =
   process.env.OPENCLAW_DEVICE_KEY_PATH ??
   (process.env.DEPARTIFY_ROOT
@@ -101,7 +102,7 @@ function buildEngine(): EngineAdapter {
       retryLimit: 3,
       maxRetryDelayMs: 6_000,
       ...(deviceKeyPem ? { deviceKeyPem } : {}),
-      model: "google-vertex/gemini-2.5-flash",
+      model: INTEGRATION_MODEL,
     });
   }
   return new FakeEngine();
