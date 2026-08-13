@@ -15,6 +15,8 @@
  * canonical Company DNA mutation path.
  */
 import { MemoryRecord } from "@departify/memory-engine";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { AuthConfig } from "@departify/config";
 import type { CustomerZeroSession } from "./customer-zero-session.js";
 
 export type DepartmentMemoryKind =
@@ -59,6 +61,52 @@ export interface DepartmentMemoryUpsert {
   importance?: number;
   tags?: readonly string[];
   source?: string;
+}
+
+export interface DepartmentMemoryStore {
+  upsert(entry: DepartmentMemoryEntry): Promise<void>;
+  list(organizationId: string, departmentId: string, limit?: number): Promise<DepartmentMemoryEntry[]>;
+}
+
+/** Durable adapter; the in-memory MemoryRecord store remains the hot cache. */
+export class SupabaseDepartmentMemoryStore implements DepartmentMemoryStore {
+  private readonly admin: SupabaseClient;
+  constructor(config: AuthConfig) {
+    this.admin = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      auth: { autoRefreshToken: false, persistSession: false, detectSessionInUrl: false },
+    });
+  }
+  async upsert(entry: DepartmentMemoryEntry): Promise<void> {
+    const { error } = await this.admin.from("department_memory").upsert({
+      id: entry.id,
+      organization_id: entry.organizationId,
+      department_id: entry.departmentId,
+      kind: entry.kind,
+      title: entry.title,
+      content: entry.content,
+      provenance: entry.provenance,
+      source: entry.source ?? null,
+      importance: entry.importance,
+      tags: entry.tags,
+      created_at: entry.createdAt.toISOString(),
+      updated_at: entry.updatedAt.toISOString(),
+    });
+    if (error) throw error;
+  }
+  async list(organizationId: string, departmentId: string, limit = 100): Promise<DepartmentMemoryEntry[]> {
+    const { data, error } = await this.admin.from("department_memory").select("*")
+      .eq("organization_id", organizationId).eq("department_id", departmentId)
+      .order("created_at", { ascending: false }).limit(Math.min(limit, 200));
+    if (error) throw error;
+    return (data ?? []).map((row) => ({
+      id: String(row.id), organizationId: String(row.organization_id), departmentId: String(row.department_id),
+      kind: row.kind as DepartmentMemoryKind, title: String(row.title), content: String(row.content),
+      provenance: row.provenance as DepartmentMemoryProvenance,
+      ...(row.source ? { source: String(row.source) } : {}), importance: Number(row.importance),
+      tags: Array.isArray(row.tags) ? row.tags.map(String) : [],
+      createdAt: new Date(String(row.created_at)), updatedAt: new Date(String(row.updated_at)),
+    }));
+  }
 }
 
 export interface DnaSuggestion {
@@ -107,7 +155,7 @@ export function rememberDepartment(
 
   const snapshot = record.toSnapshot();
   const now = new Date();
-  return {
+  const entry = {
     id: snapshot.id,
     organizationId: snapshot.organizationId,
     departmentId: snapshot.departmentId ?? departmentId,
@@ -121,6 +169,29 @@ export function rememberDepartment(
     createdAt: snapshot.createdAt,
     updatedAt: now,
   };
+  if (session.departmentMemory) void session.departmentMemory.upsert(entry);
+  return entry;
+}
+
+export async function hydrateDepartmentMemory(
+  session: CustomerZeroSession,
+  departmentId = "marketing",
+): Promise<void> {
+  if (!session.departmentMemory) return;
+  const entries = await session.departmentMemory.list(session.organizationId, departmentId, 100);
+  for (const entry of entries) {
+    const record = MemoryRecord.create({
+      id: entry.id,
+      organizationId: entry.organizationId,
+      departmentId: entry.departmentId,
+      kind: "department",
+      scope: "department",
+      content: entry.title ? `[${entry.title}] ${entry.content}` : entry.content,
+      priority: toPriority(entry.importance),
+      tags: buildCanonicalTags(entry.kind, entry.provenance, entry.tags),
+    });
+    await session.memoryStore.create(record.toSnapshot());
+  }
 }
 
 export function listDepartmentMemory(

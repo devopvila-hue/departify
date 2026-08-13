@@ -8,6 +8,7 @@ import type { CompanyDnaStore } from "../customer-zero/company-dna.js";
 import type { InboxStore } from "../customer-zero/inbox-domain.js";
 import type { MarketingService } from "../customer-zero/marketing-service.js";
 import type { DepartmentWorkStore } from "../customer-zero/department-work.js";
+import type { DepartmentMemoryStore } from "../customer-zero/department-memory.js";
 
 /**
  * Server dependencies — Phase P0-A / P-B.
@@ -34,6 +35,8 @@ export interface ServerDeps {
   inbox?: InboxStore;
   /** Durable DepartmentTask/DepartmentResult store. */
   workStore?: DepartmentWorkStore;
+  /** Durable department knowledge; the session keeps only a bounded hot cache. */
+  departmentMemory?: DepartmentMemoryStore;
   /** Public base URL of the portal, used to build OAuth redirect URIs. */
   publicBaseUrl?: string;
   /** Provider-independent engine adapter (Sprint ENGINE 02). */

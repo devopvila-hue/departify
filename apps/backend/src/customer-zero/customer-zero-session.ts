@@ -89,6 +89,7 @@ import {
   InMemoryConversationStore,
   type ConversationStore,
 } from "./conversation-store.js";
+import type { DepartmentMemoryStore } from "./department-memory.js";
 import {
   getGoogleTokenStore,
   hasOperationalGoogleCapability,
@@ -238,6 +239,7 @@ export interface CustomerZeroSession {
   readonly businessEvents: BusinessEventService;
   /** Canonical department memory store (Sprint 60). */
   readonly memoryStore: InMemoryMemoryRecordStore;
+  readonly departmentMemory?: DepartmentMemoryStore;
   /** The session's Tool Runtime (Sprint 62 capability engine source). */
   readonly runtime: ToolRuntime;
   /** Canonical department capability registry (Sprint 62). */
@@ -259,6 +261,7 @@ export interface CustomerZeroSessionOptions {
   readonly toolState?: ToolStateStore;
   /** Durable conversation store (Supabase in production). */
   readonly conversations?: ConversationStore;
+  readonly departmentMemory?: DepartmentMemoryStore;
 }
 
 /**
@@ -427,6 +430,7 @@ export function getOrCreateCustomerZeroSession(
     provisioning,
     businessEvents: new BusinessEventService({ catalog }),
     memoryStore: createInMemoryMemoryRecordStore(),
+    ...(options.departmentMemory ? { departmentMemory: options.departmentMemory } : {}),
     runtime,
     capabilities,
     toolState: options.toolState ?? new InMemoryToolStateStore(),

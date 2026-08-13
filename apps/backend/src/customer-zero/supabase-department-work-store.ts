@@ -21,6 +21,7 @@ interface TaskRow {
   department_id: string;
   objective_id: string | null;
   requested_by: string;
+  assigned_employee_id: string | null;
   title: string;
   summary: string;
   capability: DepartmentTask["capability"];
@@ -61,6 +62,7 @@ function mapTask(row: TaskRow): DepartmentTask {
     departmentId: row.department_id,
     objectiveId: row.objective_id,
     requestedBy: row.requested_by,
+    ...(row.assigned_employee_id ? { assignedEmployeeId: row.assigned_employee_id } : {}),
     title: row.title,
     summary: row.summary,
     capability: row.capability,
@@ -112,6 +114,7 @@ export class SupabaseDepartmentWorkStore implements DepartmentWorkStore {
       department_id: input.departmentId,
       objective_id: input.objectiveId,
       requested_by: input.requestedBy,
+      assigned_employee_id: input.assignedEmployeeId ?? null,
       title: input.title,
       summary: input.summary,
       capability: input.capability,
@@ -135,7 +138,7 @@ export class SupabaseDepartmentWorkStore implements DepartmentWorkStore {
   async updateTask(id: string, patch: Partial<DepartmentTask>): Promise<DepartmentTask> {
     const update: Record<string, unknown> = {};
     const fields: Array<[keyof DepartmentTask, string]> = [
-      ["departmentId", "department_id"], ["objectiveId", "objective_id"], ["requestedBy", "requested_by"],
+      ["departmentId", "department_id"], ["objectiveId", "objective_id"], ["requestedBy", "requested_by"], ["assignedEmployeeId", "assigned_employee_id"],
       ["title", "title"], ["summary", "summary"], ["capability", "capability"], ["toolId", "tool_id"],
       ["status", "status"], ["statusMessage", "status_message"], ["progress", "progress"],
       ["requiredCapabilities", "required_capabilities"], ["source", "source"], ["startedAt", "started_at"],

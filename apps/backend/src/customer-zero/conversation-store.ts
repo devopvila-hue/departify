@@ -42,11 +42,23 @@ export interface ConversationMessage {
   readonly createdAt: string;
 }
 
+export interface ConversationMessagePage {
+  readonly messages: ConversationMessage[];
+  readonly hasMore: boolean;
+  /** Cursor for the next older page; opaque to callers. */
+  readonly nextCursor?: string;
+}
+
 /** Framework-independent persistence port (Supabase in production). */
 export interface ConversationStore {
   create(
     organizationId: string,
     title: string,
+  ): Promise<ConversationRecord>;
+  /** Return the single active CEO thread, creating it atomically when absent. */
+  ensureCanonical(
+    organizationId: string,
+    title?: string,
   ): Promise<ConversationRecord>;
   listForOrg(organizationId: string): Promise<ConversationRecord[]>;
   /** List conversations of any status (default: only `active`).
@@ -67,6 +79,18 @@ export interface ConversationStore {
   listMessages(
     organizationId: string,
     conversationId: string,
+    limit?: number,
+  ): Promise<ConversationMessage[]>;
+  listMessagesPage(
+    organizationId: string,
+    conversationId: string,
+    options?: { limit?: number; before?: string },
+  ): Promise<ConversationMessagePage>;
+  /** Bounded retrieval over raw history; never returns another org's data. */
+  searchMessages(
+    organizationId: string,
+    conversationId: string,
+    query: string,
     limit?: number,
   ): Promise<ConversationMessage[]>;
   /** Persist the deterministic compaction summary. Raw messages are kept
@@ -224,6 +248,15 @@ export class InMemoryConversationStore implements ConversationStore {
     return record;
   }
 
+  async ensureCanonical(
+    organizationId: string,
+    title = DEFAULT_CONVERSATION_TITLE,
+  ): Promise<ConversationRecord> {
+    const active = await this.listForOrg(organizationId);
+    if (active[0]) return active[0];
+    return this.create(organizationId, title);
+  }
+
   async listForOrg(organizationId: string): Promise<ConversationRecord[]> {
     return [...this.conversations.values()]
       .filter(
@@ -334,6 +367,41 @@ export class InMemoryConversationStore implements ConversationStore {
     return limit ? all.slice(-limit) : all;
   }
 
+  async listMessagesPage(
+    organizationId: string,
+    conversationId: string,
+    options: { limit?: number; before?: string } = {},
+  ): Promise<ConversationMessagePage> {
+    const record = await this.get(organizationId, conversationId);
+    if (!record) return { messages: [], hasMore: false };
+    const limit = Math.max(1, Math.min(options.limit ?? 40, 1000));
+    const all = (this.messages.get(conversationId) ?? []).filter((message) =>
+      options.before ? message.createdAt < options.before : true,
+    );
+    const page = all.slice(-limit);
+    const hasMore = all.length > page.length;
+    return {
+      messages: page,
+      hasMore,
+      ...(hasMore && page[0] ? { nextCursor: page[0].createdAt } : {}),
+    };
+  }
+
+  async searchMessages(
+    organizationId: string,
+    conversationId: string,
+    query: string,
+    limit = 8,
+  ): Promise<ConversationMessage[]> {
+    const record = await this.get(organizationId, conversationId);
+    if (!record) return [];
+    const terms = query.toLowerCase().split(/\s+/).filter((term) => term.length >= 4).slice(0, 4);
+    if (terms.length === 0) return [];
+    return (this.messages.get(conversationId) ?? [])
+      .filter((message) => terms.some((term) => message.content.toLowerCase().includes(term)))
+      .slice(-Math.max(1, Math.min(limit, 20)));
+  }
+
   async saveCompaction(
     organizationId: string,
     conversationId: string,
@@ -354,4 +422,3 @@ export class InMemoryConversationStore implements ConversationStore {
     return true;
   }
 }
-

@@ -87,15 +87,13 @@ export async function registerConversationRoutes(
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
       const session = await requireSession(organizationId, deps);
-      const conversations = await session.conversations.listForOrg(organizationId);
-      const activeCount = await session.conversations.countActiveForOrg(
-        organizationId,
-      );
+      const canonical = await session.conversations.ensureCanonical(organizationId);
+      const conversations = [canonical];
       return reply.code(200).send({
         organizationId,
         conversations,
-        activeCount,
-        maxActive: MAX_ACTIVE_CONVERSATIONS,
+        activeCount: 1,
+        maxActive: 1,
       });
     },
   );
@@ -106,7 +104,7 @@ export async function registerConversationRoutes(
       schema: {
         tags: ["command-center"],
         summary:
-          "List all conversations (including archived). Archived conversations stay recoverable and never count toward the 5-active cap.",
+          "List archived legacy conversations for recovery; the portal uses one canonical thread.",
         params: {
           type: "object",
           required: ["organizationId"],
@@ -138,7 +136,7 @@ export async function registerConversationRoutes(
     {
       schema: {
         tags: ["command-center"],
-        summary: "Create a new conversation for the organization",
+        summary: "Resolve the canonical conversation for the organization",
         params: {
           type: "object",
           required: ["organizationId"],
@@ -179,25 +177,10 @@ export async function registerConversationRoutes(
       const body = (request.body as { title?: string } | null | undefined) ?? {};
       const session = await requireSession(organizationId, deps);
 
-      // P-B part 26 — 5-active-cap with archive-first UX. The 6th
-      // conversation is REFUSED, not silently deleted. The portal asks
-      // the CEO to archive one first.
-      const activeCount = await session.conversations.countActiveForOrg(
-        organizationId,
-      );
-      if (activeCount >= MAX_ACTIVE_CONVERSATIONS) {
-        return reply.code(409).send({
-          error: {
-            code: "MAX_ACTIVE_CONVERSATIONS",
-            message:
-              "Ya tienes 5 conversaciones activas. Archiva una para empezar otra.",
-            activeCount,
-            maxActive: MAX_ACTIVE_CONVERSATIONS,
-          },
-        });
-      }
-
-      const conversation = await session.conversations.create(
+      // Backward-compatible idempotent endpoint. The portal no longer offers
+      // "Nueva conversación"; this route can only return the canonical CEO
+      // thread and therefore cannot fork business context.
+      const conversation = await session.conversations.ensureCanonical(
         organizationId,
         body.title?.trim() || DEFAULT_CONVERSATION_TITLE,
       );
@@ -230,6 +213,7 @@ export async function registerConversationRoutes(
             },
           },
           404: { type: "object", properties: { error: { type: "string" } } },
+          409: { type: "object", properties: { error: { type: "string" } } },
         },
       },
     },
@@ -246,12 +230,22 @@ export async function registerConversationRoutes(
       if (!conversation) {
         return reply.code(404).send({ error: "Conversation not found." });
       }
-      const messages = await session.conversations.listMessages(
+      const query = (request.query as { limit?: string; before?: string } | undefined) ?? {};
+      const page = await session.conversations.listMessagesPage(
         organizationId,
         conversationId,
+        {
+          limit: query.limit ? Number(query.limit) : 40,
+          ...(query.before ? { before: query.before } : {}),
+        },
       );
       session.state.currentConversationId = conversation.id;
-      return reply.code(200).send({ conversation, messages });
+      return reply.code(200).send({
+        conversation,
+        messages: page.messages,
+        hasMore: page.hasMore,
+        ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+      });
     },
   );
 
@@ -375,9 +369,10 @@ export async function registerConversationRoutes(
       // character threshold. Raw history is preserved; only the model
       // context is rewritten to `[summary, ...recent]`.
       try {
+        const persistedConversationId = result.conversationId || conversationId;
         const allMessages = await session.conversations.listMessages(
           organizationId,
-          conversationId,
+          persistedConversationId,
         );
         const totalChars = allMessages.reduce(
           (sum, m) => sum + m.content.length,
@@ -385,17 +380,28 @@ export async function registerConversationRoutes(
         );
         if (shouldCompact(totalChars)) {
           const { older } = splitForCompaction(allMessages);
-          if (older.length > 0) {
-            const lastFolded = older[older.length - 1] as ConversationMessage;
-            const summary = summarizeOldMessages(
-              older.map((m) => ({ role: m.role, content: m.content })),
+          const persisted = await session.conversations.get(
+            organizationId,
+            persistedConversationId,
+          );
+          const priorIndex = persisted?.compactedUpToMessageId
+            ? allMessages.findIndex((message) => message.id === persisted.compactedUpToMessageId)
+            : -1;
+          const newOlder = older.filter((message) =>
+            allMessages.findIndex((candidate) => candidate.id === message.id) > priorIndex,
+          );
+          if (newOlder.length > 0) {
+            const lastFolded = newOlder[newOlder.length - 1] as ConversationMessage;
+            const delta = summarizeOldMessages(
+              newOlder.map((m) => ({ role: m.role, content: m.content })),
             );
+            const summary = [persisted?.summary, delta].filter(Boolean).join("\n\n");
             await session.conversations.saveCompaction(
               organizationId,
-              conversationId,
+              persistedConversationId,
               summary,
               lastFolded.id,
-              older.length,
+              (persisted?.compactionMessageCount ?? 0) + newOlder.length,
             );
           }
         }
@@ -434,6 +440,7 @@ export async function registerConversationRoutes(
             properties: { ok: { type: "boolean" } },
           },
           404: { type: "object", properties: { error: { type: "string" } } },
+          409: { type: "object", properties: { error: { type: "string" } } },
         },
       },
     },
@@ -443,6 +450,12 @@ export async function registerConversationRoutes(
         conversationId: string;
       };
       const session = await requireSession(organizationId, deps);
+      const canonical = await session.conversations.ensureCanonical(organizationId);
+      if (canonical.id === conversationId) {
+        return reply.code(409).send({
+          error: "The canonical CEO conversation cannot be archived.",
+        });
+      }
       const ok = await session.conversations.archive(
         organizationId,
         conversationId,

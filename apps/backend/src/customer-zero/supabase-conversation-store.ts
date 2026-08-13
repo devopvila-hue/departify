@@ -14,6 +14,7 @@ import type {
   ConversationRecord,
   ConversationRole,
   ConversationStore,
+  ConversationMessagePage,
 } from "./conversation-store.js";
 
 interface ConversationRow {
@@ -62,6 +63,23 @@ export class SupabaseConversationStore implements ConversationStore {
       .single();
     if (error) throw error;
     return mapConversation(data as ConversationRow);
+  }
+
+  async ensureCanonical(
+    organizationId: string,
+    title = "Nueva conversación",
+  ): Promise<ConversationRecord> {
+    const existing = await this.listForOrg(organizationId);
+    if (existing[0]) return existing[0];
+    const { data, error } = await this.admin
+      .from("conversations")
+      .insert({ organization_id: organizationId, title, status: "active" })
+      .select()
+      .single();
+    if (!error && data) return mapConversation(data as ConversationRow);
+    const winner = await this.listForOrg(organizationId);
+    if (winner[0]) return winner[0];
+    throw error ?? new Error("Unable to create canonical conversation");
   }
 
   async listForOrg(organizationId: string): Promise<ConversationRecord[]> {
@@ -174,13 +192,62 @@ export class SupabaseConversationStore implements ConversationStore {
       .from("conversation_messages")
       .select("*")
       .eq("conversation_id", conversationId)
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: false });
     if (limit) {
       query = query.limit(limit);
     }
     const { data, error } = await query;
     if (error) throw error;
-    return (data ?? []).map((row) => mapMessage(row as MessageRow));
+    return (data ?? []).map((row) => mapMessage(row as MessageRow)).reverse();
+  }
+
+  async listMessagesPage(
+    organizationId: string,
+    conversationId: string,
+    options: { limit?: number; before?: string } = {},
+  ): Promise<ConversationMessagePage> {
+    const record = await this.get(organizationId, conversationId);
+    if (!record) return { messages: [], hasMore: false };
+    const limit = Math.max(1, Math.min(options.limit ?? 40, 1000));
+    let query = this.admin
+      .from("conversation_messages")
+      .select("*")
+      .eq("conversation_id", conversationId)
+      .order("created_at", { ascending: false })
+      .limit(limit + 1);
+    if (options.before) query = query.lt("created_at", options.before);
+    const { data, error } = await query;
+    if (error) throw error;
+    const rows = (data ?? []).map((row) => mapMessage(row as MessageRow));
+    const hasMore = rows.length > limit;
+    const messages = rows.slice(0, limit).reverse();
+    return {
+      messages,
+      hasMore,
+      ...(hasMore && messages[0] ? { nextCursor: messages[0].createdAt } : {}),
+    };
+  }
+
+  async searchMessages(
+    organizationId: string,
+    conversationId: string,
+    query: string,
+    limit = 8,
+  ): Promise<ConversationMessage[]> {
+    const record = await this.get(organizationId, conversationId);
+    if (!record) return [];
+    const term = query.toLowerCase().match(/[a-záéíóúñ0-9]{4,}/i)?.[0];
+    if (!term) return [];
+    const bounded = Math.max(1, Math.min(limit, 20));
+    const { data, error } = await this.admin
+      .from("conversation_messages")
+      .select("*")
+      .eq("conversation_id", conversationId)
+      .ilike("content", `%${term}%`)
+      .order("created_at", { ascending: false })
+      .limit(bounded);
+    if (error) throw error;
+    return (data ?? []).map((row) => mapMessage(row as MessageRow)).reverse();
   }
 
   async saveCompaction(

@@ -111,7 +111,7 @@ describe("Sprint 60 — Central Chat Sessions V1", () => {
     expect(body.conversation.title).toBe(DEFAULT_CONVERSATION_TITLE);
   });
 
-  it("K: switching conversations loads each message history", async () => {
+  it("K: repeated create requests resolve to the same canonical history", async () => {
     const org = await startOrg("OrgK");
     const a = await authedInject({
       method: "POST",
@@ -126,9 +126,9 @@ describe("Sprint 60 — Central Chat Sessions V1", () => {
       payload: {},
     });
     const idB = b.json().conversation.id;
-    expect(idA).not.toBe(idB);
+    expect(idA).toBe(idB);
 
-    // Send a CEO message in each.
+    // A legacy id hint cannot fork the canonical thread.
     await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/conversations/${idA}/messages`,
@@ -151,12 +151,11 @@ describe("Sprint 60 — Central Chat Sessions V1", () => {
     const msgsA = getA.json().messages;
     const msgsB = getB.json().messages;
     expect(msgsA.some((m: { content: string }) => m.content.includes("Mensaje para A"))).toBe(true);
-    expect(!msgsA.some((m: { content: string }) => m.content.includes("Mensaje para B"))).toBe(true);
-    expect(msgsB.some((m: { content: string }) => m.content.includes("Mensaje para B"))).toBe(true);
-    expect(!msgsB.some((m: { content: string }) => m.content.includes("Mensaje para A"))).toBe(true);
+    expect(msgsA.some((m: { content: string }) => m.content.includes("Mensaje para B"))).toBe(true);
+    expect(msgsB.some((m: { content: string }) => m.content.includes("Mensaje para A"))).toBe(true);
   });
 
-  it("L: maximum 5 active conversations — the 6th returns 409 (no silent delete)", async () => {
+  it("L: repeated canonical creation never creates a second active thread", async () => {
     const org = await startOrg("OrgL");
     const ids: string[] = [];
     for (let i = 0; i < MAX_ACTIVE_CONVERSATIONS; i++) {
@@ -171,21 +170,19 @@ describe("Sprint 60 — Central Chat Sessions V1", () => {
       expect(id).toBeTruthy();
       ids.push(id);
     }
-    // 6th request is refused with structured 409 — no silent creation.
+    // Any number of compatibility calls returns the same row.
     const sixth = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/conversations`,
       payload: {},
     });
-    expect(sixth.statusCode).toBe(409);
-    const body = sixth.json();
-    expect(body.error.code).toBe("MAX_ACTIVE_CONVERSATIONS");
-    expect(body.error.activeCount).toBe(MAX_ACTIVE_CONVERSATIONS);
-    expect(body.error.maxActive).toBe(MAX_ACTIVE_CONVERSATIONS);
-    expect(body.error.message.length).toBeGreaterThan(10);
+    expect(sixth.statusCode).toBe(201);
+    expect(sixth.json().conversation.id).toBe(ids[0]);
+    const list = await authedInject({ method: "GET", url: `/api/customer-zero/${org}/conversations` });
+    expect(list.json().conversations).toHaveLength(1);
   });
 
-  it("M: sixth conversation cannot silently appear — the 5 original are still active", async () => {
+  it("M: the active list contains exactly the canonical thread", async () => {
     const org = await startOrg("OrgM");
     const ids: string[] = [];
     for (let i = 0; i < MAX_ACTIVE_CONVERSATIONS; i++) {
@@ -201,21 +198,19 @@ describe("Sprint 60 — Central Chat Sessions V1", () => {
       url: `/api/customer-zero/${org}/conversations`,
       payload: {},
     });
-    expect(sixth.statusCode).toBe(409);
+    expect(sixth.statusCode).toBe(201);
 
-    // Listing still returns exactly 5, all from the original set.
+    // Listing still returns exactly one canonical conversation.
     const list = await authedInject({
       method: "GET",
       url: `/api/customer-zero/${org}/conversations`,
     });
     const conversations = list.json().conversations;
-    expect(conversations.length).toBe(MAX_ACTIVE_CONVERSATIONS);
-    expect(conversations.map((c: { id: string }) => c.id).sort()).toEqual(
-      [...ids].sort(),
-    );
+    expect(conversations.length).toBe(1);
+    expect(conversations[0].id).toBe(ids[0]);
   });
 
-  it("N: archive frees one active slot", async () => {
+  it("N: the canonical thread cannot be archived through the legacy endpoint", async () => {
     const org = await startOrg("OrgN");
     const ids: string[] = [];
     for (let i = 0; i < MAX_ACTIVE_CONVERSATIONS; i++) {
@@ -226,32 +221,23 @@ describe("Sprint 60 — Central Chat Sessions V1", () => {
       });
       ids.push(r.json().conversation.id);
     }
-    // 6th is refused.
+    // Archiving the canonical thread would break continuity, so it is refused.
     const sixthBefore = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/conversations`,
       payload: {},
     });
-    expect(sixthBefore.statusCode).toBe(409);
+    expect(sixthBefore.statusCode).toBe(201);
 
     // Archive one.
     const archive = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/conversations/${ids[0]}/archive`,
     });
-    expect(archive.statusCode).toBe(200);
-    expect(archive.json().ok).toBe(true);
-
-    // Now a new conversation can be created.
-    const sixthAfter = await authedInject({
-      method: "POST",
-      url: `/api/customer-zero/${org}/conversations`,
-      payload: {},
-    });
-    expect(sixthAfter.statusCode).toBe(201);
+    expect(archive.statusCode).toBe(409);
   });
 
-  it("O: archived conversation remains recoverable from /conversations/history", async () => {
+  it("O: legacy archive requests cannot break the canonical thread", async () => {
     const org = await startOrg("OrgO");
     const created = await authedInject({
       method: "POST",
@@ -262,34 +248,12 @@ describe("Sprint 60 — Central Chat Sessions V1", () => {
       method: "POST",
       url: `/api/customer-zero/${org}/conversations/${id}/archive`,
     });
-    expect(archive.statusCode).toBe(200);
-
-    // Active list excludes it.
+    expect(archive.statusCode).toBe(409);
     const active = await authedInject({
       method: "GET",
       url: `/api/customer-zero/${org}/conversations`,
     });
-    expect(
-      active.json().conversations.some((c: { id: string }) => c.id === id),
-    ).toBe(false);
-
-    // History includes it.
-    const history = await authedInject({
-      method: "GET",
-      url: `/api/customer-zero/${org}/conversations/history`,
-    });
-    const archived = history
-      .json()
-      .conversations.find((c: { id: string }) => c.id === id);
-    expect(archived).toBeTruthy();
-    expect(archived.status).toBe("archived");
-
-    // And `GET /conversations/:id` still returns it.
-    const direct = await authedInject({
-      method: "GET",
-      url: `/api/customer-zero/${org}/conversations/${id}`,
-    });
-    expect(direct.statusCode).toBe(200);
+    expect(active.json().conversations.map((c: { id: string }) => c.id)).toContain(id);
   });
 
   it("P: messages survive reload (the store is durable across calls)", async () => {
@@ -309,7 +273,7 @@ describe("Sprint 60 — Central Chat Sessions V1", () => {
     // Reload: re-fetch the conversation as if the portal reopened.
     const reloaded = await authedInject({
       method: "GET",
-      url: `/api/customer-zero/${org}/conversations/${id}`,
+      url: `/api/customer-zero/${org}/conversations/${id}?limit=200`,
     });
     const messages = reloaded.json().messages;
     const userMessages = messages.filter(
@@ -395,7 +359,7 @@ describe("Sprint 60 — Central Chat Sessions V1", () => {
 
     const reloaded = await authedInject({
       method: "GET",
-      url: `/api/customer-zero/${org}/conversations/${id}`,
+      url: `/api/customer-zero/${org}/conversations/${id}?limit=200`,
     });
     const body = reloaded.json();
     expect(body.messages.length).toBeGreaterThanOrEqual(60);
@@ -438,7 +402,7 @@ describe("Sprint 60 — Central Chat Sessions V1", () => {
     }
     const reloaded = await authedInject({
       method: "GET",
-      url: `/api/customer-zero/${org}/conversations/${id}`,
+      url: `/api/customer-zero/${org}/conversations/${id}?limit=200`,
     });
     const body = reloaded.json();
     // The raw durable message is still present.
@@ -482,7 +446,7 @@ describe("Sprint 60 — Central Chat Sessions V1", () => {
 
     const reloaded = await authedInject({
       method: "GET",
-      url: `/api/customer-zero/${org}/conversations/${id}`,
+      url: `/api/customer-zero/${org}/conversations/${id}?limit=200`,
     });
     const body = reloaded.json();
     // The conversation has its own summary field — independent from
@@ -532,7 +496,7 @@ describe("Sprint 60 — Central Chat Sessions V1", () => {
 
     const reloaded = await authedInject({
       method: "GET",
-      url: `/api/customer-zero/${org}/conversations/${id}`,
+      url: `/api/customer-zero/${org}/conversations/${id}?limit=200`,
     });
     const body = reloaded.json();
     // The summary is deterministic and contains CEO content only —
@@ -575,7 +539,7 @@ describe("Sprint 60 — Central Chat Sessions V1", () => {
     );
   });
 
-  it("AD: archived sessions do not count toward 5 active", async () => {
+  it("AD: legacy archived rows remain outside the canonical active list", async () => {
     const org = await startOrg("OrgAd");
     const ids: string[] = [];
     for (let i = 0; i < MAX_ACTIVE_CONVERSATIONS; i++) {
@@ -586,29 +550,19 @@ describe("Sprint 60 — Central Chat Sessions V1", () => {
       });
       ids.push(r.json().conversation.id);
     }
-    // Six is refused.
+    // Compatibility calls remain idempotent.
     const sixth = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/conversations`,
       payload: {},
     });
-    expect(sixth.statusCode).toBe(409);
-
-    // Archive 3 of them — does not refill the active count visually,
-    // but it must allow new ones without ever growing past the cap.
-    for (const id of ids.slice(0, 3)) {
-      const r = await authedInject({
-        method: "POST",
-        url: `/api/customer-zero/${org}/conversations/${id}/archive`,
-      });
-      expect(r.statusCode).toBe(200);
-    }
+    expect(sixth.statusCode).toBe(201);
     const list = await authedInject({
       method: "GET",
       url: `/api/customer-zero/${org}/conversations`,
     });
-    expect(list.json().conversations.length).toBe(2);
-    expect(list.json().activeCount).toBe(2);
+    expect(list.json().conversations.length).toBe(1);
+    expect(list.json().activeCount).toBe(1);
   });
 });
 

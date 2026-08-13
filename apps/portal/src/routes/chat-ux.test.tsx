@@ -355,7 +355,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
     await waitFor(() => expect(el.scrollTop).toBe(el.scrollHeight));
   });
 
-  it("S6. switching conversations clears events from the previous thread", async () => {
+  it("S6. the CEO thread is continuous and does not expose session switching", async () => {
     renderChat();
     await screen.findByText(/elvira toma la iniciativa/i);
 
@@ -364,10 +364,8 @@ describe("Central Chat UX P0 — chat interaction", () => {
     fireEvent.click(screen.getByRole("button", { name: /enviar/i }));
     await screen.findByText(/he encontrado 2 correos/i);
 
-    fireEvent.click(screen.getByRole("button", { name: /conversaciones/i }));
-    fireEvent.click(screen.getByRole("button", { name: "Otra conversación" }));
-
-    await screen.findByText(/mensaje de la otra conversación/i);
-    expect(screen.queryByText(/he encontrado 2 correos/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /conversaciones/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /nueva conversación/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Conversación única")).toHaveTextContent("Conversación continua");
   });
 });

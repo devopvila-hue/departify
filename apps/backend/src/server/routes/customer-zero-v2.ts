@@ -111,6 +111,7 @@ import {
   buildDnaRawDataFromSuggestion,
   listDepartmentMemory,
   rememberDepartment,
+  hydrateDepartmentMemory,
   type DepartmentMemoryKind,
   type DepartmentMemoryProvenance,
 } from "../../customer-zero/department-memory.js";
@@ -437,6 +438,7 @@ export async function registerCustomerZeroV2Routes(
         locale,
         ...(deps.toolState ? { toolState: deps.toolState } : {}),
         ...(deps.conversations ? { conversations: deps.conversations } : {}),
+        ...(deps.departmentMemory ? { departmentMemory: deps.departmentMemory } : {}),
       });
       await hydrateSessionToolState(session);
       session.state.locale = locale;
@@ -2856,6 +2858,7 @@ export async function requireSession(
   const session = getOrCreateCustomerZeroSession(organizationId, {
     ...(deps.toolState ? { toolState: deps.toolState } : {}),
     ...(deps.conversations ? { conversations: deps.conversations } : {}),
+    ...(deps.departmentMemory ? { departmentMemory: deps.departmentMemory } : {}),
   });
   await hydrateSessionToolState(session);
   // Customer Zero P0 — rebuild the company understanding from DURABLE
@@ -2863,6 +2866,7 @@ export async function requireSession(
   // this the department context compiler would rebuild an empty company
   // and Elvira would greet a CEO she no longer recognises.
   await hydrateSessionFromCompanyDna(session, resolveCompanyDnaStore(deps));
+  await hydrateDepartmentMemory(session);
   // STATE-MACHINE INVARIANT: "connecting" is only valid while the OAuth
   // state nonce is alive (10 minutes). If a Google connection is still
   // "connecting" with a missing/expired/consumed nonce (the callback
@@ -3123,7 +3127,7 @@ export async function buildCeoRuntimeForRequest(
   if (!deps.engine || bypassRuntime || (pendingRead && deps.nativeBusinessTools !== true)) {
     return null;
   }
-  return buildRuntimeBridgeForCeoTurn(session, deps, trace, userId);
+  return buildRuntimeBridgeForCeoTurn(session, deps, trace, userId, message);
 }
 
 function newCeoTurnTrace(
@@ -3255,10 +3259,11 @@ async function buildRuntimeBridge(
   inboxStore: InboxStore,
   trace: CeoTurnTraceState,
   userId?: string,
+  message?: string,
 ): Promise<RuntimeBridgeInput | null> {
   if (!deps.engine) return null;
   const workStore = workStoreForRoutes();
-  const [connections, tasks, results, companyDna, approvals, activeObjective, recentMessages, googleSummaries] = await Promise.all([
+  const [connections, tasks, results, companyDna, approvals, activeObjective, recentMessages, retrievedMessages, googleSummaries] = await Promise.all([
     buildCanonicalConnectionViews(session, session.state.locale),
     workStore.listTasksForOrg(session.organizationId, 50),
     workStore.listResultsForOrg(session.organizationId, 20),
@@ -3272,8 +3277,19 @@ async function buildRuntimeBridge(
     session.state.currentConversationId
       ? session.conversations.listMessages(session.organizationId, session.state.currentConversationId, 12)
       : Promise.resolve([]),
+    session.state.currentConversationId && message
+      ? session.conversations.searchMessages(
+          session.organizationId,
+          session.state.currentConversationId,
+          message,
+          8,
+        )
+      : Promise.resolve([]),
     getGoogleTokenStore().listForOrg(session.organizationId),
   ]);
+  const recentConversation = [...recentMessages, ...retrievedMessages]
+    .filter((item, index, all) => all.findIndex((candidate) => candidate.id === item.id) === index)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const userGoogleSummaries = userId
     ? googleSummaries.filter((summary) => summary.userId === userId)
     : googleSummaries;
@@ -3336,7 +3352,7 @@ async function buildRuntimeBridge(
     approvals,
     activeObjective,
     recentActivity: buildMarketingOperationalActivity(tasks, results),
-    recentConversation: recentMessages.map((message) => ({
+    recentConversation: recentConversation.map((message) => ({
       role: message.role,
       content: message.content,
     })),
@@ -3351,6 +3367,12 @@ async function buildRuntimeBridge(
   const existingEngineSession = await deps.engine.getSession(sessionId);
   const engineSession = existingEngineSession
     ?? await deps.engine.createSession({ sessionId });
+  if (deps.nativeBusinessTools && deps.engine.setNativeToolPolicy) {
+    await deps.engine.setNativeToolPolicy({
+      sessionId: engineSession.id,
+      toolNames: nativeToolNames,
+    });
+  }
   trace.engineSessionId = safeTraceHash(engineSession.id);
   trace.sessionFound = existingEngineSession !== null;
   return {
@@ -3371,6 +3393,7 @@ export async function buildRuntimeBridgeForCeoTurn(
   deps: ServerDeps,
   trace: CeoTurnTraceState,
   userId?: string,
+  message?: string,
 ): Promise<RuntimeBridgeInput | null> {
   return buildRuntimeBridge(
     session,
@@ -3378,6 +3401,7 @@ export async function buildRuntimeBridgeForCeoTurn(
     deps.inbox ?? new InMemoryInboxStore(),
     trace,
     userId,
+    message,
   );
 }
 
@@ -4940,53 +4964,17 @@ export async function ensureConversation(
   conversationId?: string,
 ): Promise<ConversationRecord> {
   const organizationId = session.organizationId;
-
-  if (conversationId) {
-    const existing = await session.conversations.get(organizationId, conversationId);
-    if (existing) {
-      session.state.currentConversationId = existing.id;
-      await renameIfUntitled(session, existing, message);
-      return existing;
-    }
-  }
-
-  if (session.state.currentConversationId) {
-    const current = await session.conversations.get(
-      organizationId,
-      session.state.currentConversationId,
-    );
-    if (current) {
-      await renameIfUntitled(session, current, message);
-      return current;
-    }
-  }
-
-  const recent = await session.conversations.listForOrg(organizationId);
-  if (recent[0]) {
-    session.state.currentConversationId = recent[0].id;
-    await renameIfUntitled(session, recent[0], message);
-    return recent[0];
-  }
-
-  // P-B part 26 — refuse to auto-create a 6th active conversation.
-  // Portal surfaces the cap dialog; the underlying create is never
-  // silent. The limit is enforced here so EVERY ingress path (POST
-  // /conversations, POST /command-center/message, POST .../messages)
-  // honours the same contract.
-  const activeCount = await session.conversations.countActiveForOrg(
-    organizationId,
-  );
-  if (activeCount >= MAX_ACTIVE_CONVERSATIONS_VALUE) {
-    throw new MaxActiveConversationsError(activeCount);
-  }
-
-  const created = await session.conversations.create(
+  // A CEO message always belongs to the organization's canonical thread.
+  // The client-supplied id is accepted only as a legacy hint; it can never
+  // select or create a second user-visible session.
+  void conversationId;
+  const canonical = await session.conversations.ensureCanonical(
     organizationId,
     DEFAULT_CONVERSATION_TITLE,
   );
-  session.state.currentConversationId = created.id;
-  await renameIfUntitled(session, created, message);
-  return created;
+  session.state.currentConversationId = canonical.id;
+  await renameIfUntitled(session, canonical, message);
+  return (await session.conversations.get(organizationId, canonical.id)) ?? canonical;
 }
 
 async function renameIfUntitled(

@@ -5,9 +5,7 @@ import {
   api,
   type CommandCenterEvent,
   type CommandCenterMessageResult,
-  type ConversationView,
   type DepartmentResult,
-  type MaxActiveConversationsError,
   type MessageView,
 } from "@/app/api";
 import { useOrg } from "@/app/org-context";
@@ -16,7 +14,6 @@ import {
   CheckIcon,
   CompanyIcon,
   DepartmentsIcon,
-  MenuIcon,
   PlugIcon,
   PlusIcon,
   ResultsIcon,
@@ -55,26 +52,18 @@ export function ChatRoute() {
     { role: "user" | "assistant"; content: string; speaker?: "departify" | "elvira" }[]
   >([]);
   const [events, setEvents] = useState<readonly CommandCenterEvent[]>([]);
-  const [conversations, setConversations] = useState<ConversationView[]>([]);
-  const [archivedConversations, setArchivedConversations] = useState<
-    ConversationView[]
-  >([]);
   const [currentConversationId, setCurrentConversationId] = useState<
     string | null
   >(null);
   const [currentSummary, setCurrentSummary] = useState<string | null>(null);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [olderCursor, setOlderCursor] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [opening, setOpening] = useState(true);
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [processStatus, setProcessStatus] = useState<string | null>(null);
-  const [maxActive, setMaxActive] = useState(5);
-  const [capDialog, setCapDialog] = useState<{
-    open: boolean;
-    activeCount: number;
-    maxActive: number;
-  }>({ open: false, activeCount: 0, maxActive: 5 });
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const [followRequested, setFollowRequested] = useState(false);
   const [followingLatest, setFollowingLatest] = useState(true);
@@ -83,21 +72,6 @@ export function ChatRoute() {
     const params = new URLSearchParams(location.search);
     return params.get("focus");
   }, [location.search]);
-
-  const refreshConversations = useCallback(async () => {
-    if (!organizationId) return;
-    const data = await api.conversations(organizationId);
-    if (data) {
-      setConversations(data.conversations ?? []);
-      setMaxActive(data.maxActive ?? 5);
-    }
-    const history = await api.conversationHistory(organizationId);
-    if (history) {
-      setArchivedConversations(
-        (history.conversations ?? []).filter((c) => c.status === "archived"),
-      );
-    }
-  }, [organizationId]);
 
   const loadConversation = useCallback(
     async (conversationId: string, options?: { preserveEvents?: boolean }) => {
@@ -112,7 +86,8 @@ export function ChatRoute() {
       );
       setCurrentConversationId(conversationId);
       setCurrentSummary(data.conversation.summary ?? null);
-      setHistoryOpen(false);
+      setHasOlderMessages(Boolean(data.hasMore));
+      setOlderCursor(data.nextCursor ?? null);
       // History is rendered asynchronously. Request a single follow-to-last
       // pass after the transcript has been committed; the effect below then
       // moves the existing scroller to the bottom without fighting streaming
@@ -124,7 +99,6 @@ export function ChatRoute() {
 
   const load = useCallback(async () => {
     if (!organizationId) return;
-    await refreshConversations();
     const openingData = await api.commandCenterOpening(organizationId);
     if (openingData) setEvents(filterContextualEvents(openingData.events));
 
@@ -138,7 +112,34 @@ export function ChatRoute() {
       setCurrentSummary(null);
     }
     setOpening(false);
-  }, [organizationId, refreshConversations, loadConversation]);
+  }, [organizationId, loadConversation]);
+
+  const loadOlderMessages = useCallback(async () => {
+    if (!organizationId || !currentConversationId || !olderCursor || loadingOlder) return;
+    const node = scrollerRef.current;
+    const previousHeight = node?.scrollHeight ?? 0;
+    setLoadingOlder(true);
+    try {
+      const page = await api.conversation(
+        organizationId,
+        currentConversationId,
+        olderCursor,
+      );
+      if (!page) return;
+      const older = page.messages.map((message: MessageView) => ({
+        role: message.role,
+        content: message.content,
+      }));
+      setTranscript((previous) => [...older, ...previous]);
+      setHasOlderMessages(Boolean(page.hasMore));
+      setOlderCursor(page.nextCursor ?? null);
+      window.requestAnimationFrame(() => {
+        if (node) node.scrollTop += node.scrollHeight - previousHeight;
+      });
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [organizationId, currentConversationId, olderCursor, loadingOlder]);
 
   useEffect(() => {
     void load();
@@ -168,11 +169,14 @@ export function ChatRoute() {
       setFollowingLatest((current) =>
         current === nearLatest ? current : nearLatest,
       );
+      if (el.scrollTop < 80 && hasOlderMessages && !loadingOlder) {
+        void loadOlderMessages();
+      }
     }
     node.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
     return () => node.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [hasOlderMessages, loadingOlder, loadOlderMessages]);
 
   // Force scroll on send OR when the user clicks "Ir al último mensaje".
   useEffect(() => {
@@ -254,50 +258,6 @@ export function ChatRoute() {
     };
   }, [organizationId]);
 
-  async function newConversation() {
-    if (!organizationId) return;
-    setError(null);
-    const result = await api.createConversation(organizationId);
-    if (!result || !result.conversation) {
-      setError(
-        "Departify no ha podido abrir una nueva conversación. Inténtalo de nuevo.",
-      );
-      return;
-    }
-    if (result.error && result.error.code === "MAX_ACTIVE_CONVERSATIONS") {
-      setCapDialog({
-        open: true,
-        activeCount: result.error.activeCount,
-        maxActive: result.error.maxActive,
-      });
-      return;
-    }
-    setCurrentConversationId(result.conversation.id);
-    setCurrentSummary(null);
-    setTranscript([]);
-    setEvents([]);
-    await refreshConversations();
-  }
-
-  async function archiveConversation(conversationId: string) {
-    if (!organizationId) return;
-    await api.archiveConversation(organizationId, conversationId);
-    await refreshConversations();
-    if (currentConversationId === conversationId) {
-      setCurrentConversationId(null);
-      setTranscript([]);
-      setCurrentSummary(null);
-    }
-  }
-
-  async function resumeArchived(conversationId: string) {
-    await loadConversation(conversationId);
-    // The previously-archived conversation becomes active again because
-    // a new CEO message re-opens it. We rely on the backend list
-    // refresh to update the sidebar.
-    await refreshConversations();
-  }
-
   async function recoverCompletedTurn(
     organizationId: string,
     expectedConversationId: string | null,
@@ -306,9 +266,9 @@ export function ChatRoute() {
   ): Promise<boolean> {
     const candidates = expectedConversationId
       ? [expectedConversationId]
-      : ((await api.conversations(organizationId))?.conversations ?? [])
-          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-          .map((conversation) => conversation.id);
+      : [((await api.conversations(organizationId))?.conversations ?? [])[0]?.id].filter(
+          (id): id is string => Boolean(id),
+        );
     for (const conversationId of candidates) {
       const data = await api.conversation(organizationId, conversationId);
       const messages = data?.messages ?? [];
@@ -371,7 +331,6 @@ export function ChatRoute() {
     // is already selected, send the message to that conversation.
     const result: (CommandCenterMessageResult & {
       conversationId?: string;
-      error?: MaxActiveConversationsError;
     }) | null = currentConversationId
       ? await api.sendConversationMessage(
           organizationId,
@@ -382,14 +341,6 @@ export function ChatRoute() {
       : await api.commandCenterMessage(organizationId, value, undefined, correlationId);
     setBusy(false);
     setProcessStatus(null);
-    if (result?.error && result.error.code === "MAX_ACTIVE_CONVERSATIONS") {
-      setCapDialog({
-        open: true,
-        activeCount: result.error.activeCount,
-        maxActive: result.error.maxActive,
-      });
-      return;
-    }
     // If the transport failed after the backend persisted a valid pair, the
     // durable transcript is the completion gate. Recover it before showing a
     // generic error; an old assistant message is not sufficient evidence.
@@ -408,7 +359,6 @@ export function ChatRoute() {
         elapsedMs: Math.round((performance.now() - clientStartedAt) * 100) / 100,
       });
       if (recovered) {
-        await refreshConversations();
         return;
       }
       setError(
@@ -446,7 +396,6 @@ export function ChatRoute() {
     ]);
     setEvents(cleanEvents);
     if (result.conversationId) setCurrentConversationId(result.conversationId);
-    await refreshConversations();
   }
 
   const focusedRef = useRef(false);
@@ -461,80 +410,10 @@ export function ChatRoute() {
   return (
     <div className="dfy-chat-page">
       <div className="dfy-chat-topbar">
-        <button
-          type="button"
-          className="dfy-chat-history-toggle"
-          aria-expanded={historyOpen}
-          onClick={() => setHistoryOpen((value) => !value)}
-        >
-          <MenuIcon /> Conversaciones
-        </button>
-        <button
-          type="button"
-          className="dfy-chat-new"
-          data-testid="chat-new"
-          onClick={() => void newConversation()}
-          disabled={opening}
-        >
-          <PlusIcon /> Nueva conversación
-        </button>
-      </div>
-
-      {historyOpen && (
-        <div className="dfy-chat-history" aria-label="Conversaciones recientes">
-          <p className="dfy-chat-history__count">
-            {conversations.length} activas de un máximo de {maxActive}
-          </p>
-          {conversations.length === 0 ? (
-            <p className="dfy-muted">Todavía no tienes conversaciones.</p>
-          ) : (
-            conversations.map((conversation) => (
-              <div
-                key={conversation.id}
-                className={`dfy-chat-history__row${
-                  conversation.id === currentConversationId
-                    ? " dfy-chat-history__row--active"
-                    : ""
-                }`}
-              >
-                <button
-                  type="button"
-                  className="dfy-chat-history__open"
-                  onClick={() => void loadConversation(conversation.id)}
-                >
-                  {conversation.title}
-                </button>
-                <button
-                  type="button"
-                  className="dfy-chat-history__archive"
-                  aria-label={`Archivar ${conversation.title}`}
-                  onClick={() => void archiveConversation(conversation.id)}
-                >
-                  Archivar
-                </button>
-              </div>
-            ))
-          )}
-          {archivedConversations.length > 0 && (
-            <div className="dfy-chat-history__archived">
-              <p className="dfy-chat-history__archived-title">Archivadas</p>
-              {archivedConversations.map((conversation) => (
-                <button
-                  key={conversation.id}
-                  type="button"
-                  className="dfy-chat-history__archived-row"
-                  onClick={() => void resumeArchived(conversation.id)}
-                >
-                  {conversation.title}{" "}
-                  <span className="dfy-muted dfy-muted--small">
-                    (recuperable)
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
+        <div className="dfy-chat-continuity" aria-label="Conversación única">
+          <SparkIcon /> Conversación continua de tu empresa
         </div>
-      )}
+      </div>
 
       {currentSummary && (
         <div
@@ -552,6 +431,11 @@ export function ChatRoute() {
         ref={scrollerRef}
         data-testid="chat-scroller"
       >
+        {hasOlderMessages && (
+          <div className="dfy-chat-history-more" role="status">
+            {loadingOlder ? "Cargando historial anterior…" : "Desplázate arriba para ver historial anterior"}
+          </div>
+        )}
         <ConversationList
           transcript={transcript}
           events={events}
@@ -589,66 +473,6 @@ export function ChatRoute() {
         error={error}
       />
 
-      {capDialog.open && (
-        <ArchiveCapDialog
-          activeCount={capDialog.activeCount}
-          maxActive={capDialog.maxActive}
-          conversations={conversations}
-          onArchive={async (conversationId) => {
-            await archiveConversation(conversationId);
-            setCapDialog({ open: false, activeCount: 0, maxActive: 5 });
-            // After archiving, retry the new-conversation creation
-            // automatically. This keeps the CEO's click → result path
-            // simple.
-            await newConversation();
-          }}
-          onCancel={() =>
-            setCapDialog({ open: false, activeCount: 0, maxActive: 5 })
-          }
-        />
-      )}
-    </div>
-  );
-}
-
-function ArchiveCapDialog(props: {
-  activeCount: number;
-  maxActive: number;
-  conversations: ConversationView[];
-  onArchive: (conversationId: string) => Promise<void> | void;
-  onCancel: () => void;
-}) {
-  return (
-    <div className="dfy-cap-dialog__backdrop" role="dialog" aria-modal="true">
-      <div className="dfy-cap-dialog">
-        <h2>Ya tienes {props.activeCount} conversaciones activas</h2>
-        <p>
-          Para abrir una nueva, archiva una de las existentes. Tu historial
-          nunca se pierde.
-        </p>
-        <ul className="dfy-cap-dialog__list">
-          {props.conversations.map((conversation) => (
-            <li key={conversation.id}>
-              <button
-                type="button"
-                onClick={() => void props.onArchive(conversation.id)}
-                className="dfy-button dfy-button--small"
-              >
-                Archivar «{conversation.title}»
-              </button>
-            </li>
-          ))}
-        </ul>
-        <div className="dfy-cap-dialog__actions">
-          <button
-            type="button"
-            className="dfy-button dfy-button--ghost"
-            onClick={props.onCancel}
-          >
-            Cancelar
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

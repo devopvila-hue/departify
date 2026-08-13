@@ -69,6 +69,9 @@ export const TOOL_DOMAINS: Readonly<Record<string, readonly ToolDomain[]>> = {
   brevo: ["marketing", "email"],
   hostinger_email: ["email"],
   microsoft_teams: ["team"],
+  meta_business: ["marketing"],
+  youtube: ["marketing"],
+  ticktick: ["team"],
 };
 
 export function domainsFor(toolId: string): readonly ToolDomain[] {
@@ -339,6 +342,33 @@ export const TOOL_CATALOG: readonly ToolDescriptor[] = [
     connectable: false,
     requiredCredentials: ["MICROSOFT_OAUTH_CLIENT_ID", "MICROSOFT_OAUTH_CLIENT_SECRET"],
   },
+  {
+    id: "meta_business",
+    label: "Meta Business",
+    capability: "marketing.publishing",
+    categoryEs: "Marketing",
+    categoryEn: "Marketing",
+    connectable: false,
+    requiredCredentials: ["META_APP_ID", "META_APP_SECRET"],
+  },
+  {
+    id: "youtube",
+    label: "YouTube",
+    capability: "marketing.video",
+    categoryEs: "Marketing",
+    categoryEn: "Marketing",
+    connectable: false,
+    requiredCredentials: ["GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET"],
+  },
+  {
+    id: "ticktick",
+    label: "TickTick",
+    capability: "tasks.manage",
+    categoryEs: "Equipo",
+    categoryEn: "Team",
+    connectable: false,
+    requiredCredentials: ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"],
+  },
 ];
 
 /** Free-text / synonym resolution: the CEO's words → the internal connector. */
@@ -371,6 +401,10 @@ const ALIASES: Readonly<Record<string, string>> = {
   brevo: "brevo",
   teams: "microsoft_teams",
   "microsoft teams": "microsoft_teams",
+  meta: "meta_business",
+  "meta business": "meta_business",
+  youtube: "youtube",
+  ticktick: "ticktick",
   whatsapp: "whatsapp",
   telegram: "telegram",
   hubspot: "hubspot",

@@ -119,6 +119,8 @@ export interface DepartmentTask {
   readonly departmentId: string;
   readonly objectiveId: string | null;
   readonly requestedBy: string;
+  /** Canonical Marketing specialist actually assigned to this work item. */
+  readonly assignedEmployeeId?: string | null;
   readonly title: string;
   readonly summary: string;
   /** Required capability that fulfils this task. */

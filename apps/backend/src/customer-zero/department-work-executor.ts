@@ -54,6 +54,8 @@ export interface ExecuteWorkInput {
   readonly departmentId: "marketing";
   readonly objectiveId: string | null;
   readonly requestedBy: string;
+  /** Specialist selected by Elvira's plan; persisted for honest status. */
+  readonly assignedEmployeeId?: string;
   readonly title: string;
   readonly summary: string;
   /** Capability the engine plan is invoking. */
@@ -470,6 +472,7 @@ export class DepartmentWorkExecutor {
       departmentId: input.departmentId,
       objectiveId: input.objectiveId,
       requestedBy: input.requestedBy,
+      assignedEmployeeId: input.assignedEmployeeId ?? specialistForCapability(capability),
       title: input.title,
       summary: input.summary,
       capability,
@@ -660,6 +663,12 @@ export class DepartmentWorkExecutor {
       finalSpeaker: "elvira",
     };
   }
+}
+
+function specialistForCapability(capability: BusinessCapability): string {
+  if (capability.startsWith("crm.")) return "agent_content_strategist";
+  if (capability.startsWith("email.")) return "agent_social_media_manager";
+  return "agent_ads_specialist";
 }
 
 /* ----------------------------------------------------------------------------

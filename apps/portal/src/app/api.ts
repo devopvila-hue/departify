@@ -680,6 +680,13 @@ export interface ConversationListView {
   maxActive: number;
 }
 
+export interface ConversationPageView {
+  conversation: ConversationView;
+  messages: MessageView[];
+  hasMore: boolean;
+  nextCursor?: string;
+}
+
 export interface MaxActiveConversationsError {
   code: "MAX_ACTIVE_CONVERSATIONS";
   message: string;
@@ -1059,9 +1066,9 @@ export const api = {
       `/api/customer-zero/${org}/conversations`,
       title ? { title } : undefined,
     ),
-  conversation: (org: string, conversationId: string) =>
-    getJson<{ conversation: ConversationView; messages: MessageView[] }>(
-      `/api/customer-zero/${org}/conversations/${conversationId}`,
+  conversation: (org: string, conversationId: string, before?: string) =>
+    getJson<ConversationPageView>(
+      `/api/customer-zero/${org}/conversations/${conversationId}${before ? `?before=${encodeURIComponent(before)}` : ""}`,
     ),
   sendConversationMessage: (
     org: string,

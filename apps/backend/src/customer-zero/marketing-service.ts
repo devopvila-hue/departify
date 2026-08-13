@@ -90,6 +90,8 @@ const MARKETING_TOOLS: readonly Omit<ConnectedTool, "status" | "note">[] = [
   { toolId: "mautic", label: "Mautic", capability: "CRM" },
   { toolId: "gmail", label: "Gmail", capability: "Email" },
   { toolId: "notion", label: "Notion", capability: "Documentos" },
+  { toolId: "youtube", label: "YouTube", capability: "Vídeo y distribución" },
+  { toolId: "ticktick", label: "TickTick", capability: "Tareas del equipo" },
 ];
 
 export interface ElviraMessageInput {
@@ -595,7 +597,7 @@ export class MarketingService {
       };
     }
 
-    const status: DepartmentStatus = activeWork.length > 0 || objective
+    const status: DepartmentStatus = activeWork.length > 0
       ? approvals.length > 0
         ? "bloqueado"
         : "trabajando"

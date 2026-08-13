@@ -193,7 +193,7 @@ describe("native company context gateway", () => {
     expect(response.json().reply).toContain("Contexto de empresa consultado");
     const lastInput = engine.inputs.at(-1);
     expect(lastInput?.nativeBusinessTools).toBe(true);
-    expect(engine.nativePolicies).toHaveLength(0);
+    expect(engine.nativePolicies).toHaveLength(1);
     const trace = engine.inputs.at(-1);
     expect(trace?.nativeBusinessTools).toBe(true);
     expect(lastInput?.runtimeContext).toContain("DEPARTIFY_NATIVE_RUNTIME_CONTEXT");
@@ -388,7 +388,7 @@ describe("native company context gateway", () => {
     expect(response.json().reply).toContain("Contexto de empresa consultado");
     expect(response.json().reply).not.toMatch(/Elvira|Marketing|No puedo afirmar/i);
     expect(engine.inputs.at(-1)?.nativeBusinessTools).toBe(true);
-    expect(engine.nativePolicies).toHaveLength(0);
+    expect(engine.nativePolicies.length).toBeGreaterThan(0);
   });
 
   it("keeps an ambiguous native business response in the same CEO path", async () => {
