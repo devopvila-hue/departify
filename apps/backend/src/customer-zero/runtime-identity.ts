@@ -4,11 +4,14 @@ const TOKEN_VERSION = "v1";
 const DEFAULT_AUDIENCE = "departify-tool-gateway";
 const DEFAULT_TTL_SECONDS = 60;
 const ORGANIZATION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const USER_ID_PATTERN = ORGANIZATION_ID_PATTERN;
 
 export interface RuntimeTokenClaims {
   readonly sub: string;
   readonly aud: string;
   readonly organizationId: string;
+  /** Authenticated CEO user bound to this native execution context. */
+  readonly userId?: string;
   readonly sessionKey: string;
   readonly agentId: string;
   readonly iat: number;
@@ -40,6 +43,7 @@ function signature(secret: string, body: string): string {
 export function issueScopedRuntimeToken(input: {
   readonly secret: string;
   readonly organizationId: string;
+  readonly userId?: string;
   readonly sessionKey: string;
   readonly agentId?: string;
   readonly nowSeconds?: number;
@@ -51,6 +55,7 @@ export function issueScopedRuntimeToken(input: {
     sub: "openclaw-native-tool",
     aud: input.audience ?? DEFAULT_AUDIENCE,
     organizationId: input.organizationId,
+    ...(input.userId ? { userId: input.userId } : {}),
     sessionKey: input.sessionKey,
     agentId: input.agentId ?? "main",
     iat: now,
@@ -114,10 +119,15 @@ export function validateScopedRuntimeToken(input: {
  */
 export function organizationFromOpenClawSessionKey(
   sessionKey: string,
-): { organizationId: string; agentId: string } | null {
-  const match = /^(?:departify:ceo:|agent:main:departify:ceo:)([^:]+)$/.exec(sessionKey.trim());
+): { organizationId: string; userId?: string; agentId: string } | null {
+  const match = /^(?:departify:ceo:|agent:main:departify:ceo:)([^:]+)(?::([^:]+))?$/.exec(sessionKey.trim());
   if (!match?.[1]) return null;
-  return { organizationId: match[1], agentId: "main" };
+  if (match[2] && !USER_ID_PATTERN.test(match[2])) return null;
+  return {
+    organizationId: match[1],
+    ...(match[2] ? { userId: match[2] } : {}),
+    agentId: "main",
+  };
 }
 
 /** Persistent organization stores use PostgreSQL UUID primary keys. */

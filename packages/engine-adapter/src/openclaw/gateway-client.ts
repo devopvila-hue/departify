@@ -94,6 +94,11 @@ export interface RunEvents {
   lifecycleError?: string;
 }
 
+export type GatewayTimeline = (
+  stage: string,
+  metadata?: Readonly<Record<string, unknown>>,
+) => void;
+
 /**
  * Maps a gateway frame error into a provider-independent EngineError.
  * Central place where OpenClaw/Vertex error codes become Departify errors.
@@ -312,6 +317,7 @@ export class OpenClawGatewayClient {
     params: ReqParams,
     waitTimeoutMs: number,
     collectEvents = false,
+    timeline?: GatewayTimeline,
   ): Promise<{ result: unknown; events?: RunEvents }> {
     await this.ensureConnected();
     const runEvents: RunEvents = { assistantChunks: [], toolCalls: [] };
@@ -321,6 +327,7 @@ export class OpenClawGatewayClient {
       // `sessions.send` accepts only the documented params (key, message,
       // etc.). Model overrides are applied at session create / agent config,
       // never embedded in the send frame.
+      timeline?.("T6_provider_request_started");
       sendResult = await this.requestOnce("sessions.send", params);
     } catch (err) {
       throw this.mapToEngineError(err, "sessions.send");
@@ -341,7 +348,9 @@ export class OpenClawGatewayClient {
       // run cannot contaminate this turn.
       runEvents.toolCalls = [];
     }
-    const runEventCapture = collectEvents ? this.startEventCapture(runEvents, runId) : null;
+    const runEventCapture = collectEvents
+      ? this.startEventCapture(runEvents, runId, timeline)
+      : null;
 
     let wait: unknown;
     try {
@@ -352,6 +361,9 @@ export class OpenClawGatewayClient {
       throw mapped;
     }
     runEventCapture?.stop();
+    timeline?.("T8_provider_generation_completed", {
+      status: String((wait as { status?: unknown })?.status ?? "unknown"),
+    });
     return collectEvents ? { result: wait, events: runEvents } : { result: wait };
   }
 
@@ -364,6 +376,7 @@ export class OpenClawGatewayClient {
   async runAndReadResult(
     params: ReqParams,
     waitTimeoutMs: number,
+    timeline?: GatewayTimeline,
   ): Promise<{
     runStatus: string;
     lastAssistant: {
@@ -381,7 +394,7 @@ export class OpenClawGatewayClient {
   }> {
     const key = String(params.key);
     const historyBefore = await this.chatHistory(key);
-    const { result, events } = await this.runAgent(params, waitTimeoutMs, true);
+    const { result, events } = await this.runAgent(params, waitTimeoutMs, true, timeline);
     const runStatus = String((result as { status?: unknown })?.status ?? "");
     const history = await this.chatHistory(key);
     const messages = history?.messages ?? [];
@@ -442,6 +455,11 @@ export class OpenClawGatewayClient {
       status: "completed",
     }));
     const text = extractText(la.content) ?? (events?.assistantChunks?.join("") || undefined);
+    timeline?.("T11_openclaw_final_response_completed", {
+      status: runStatus,
+      textBytes: text ? Buffer.byteLength(text, "utf8") : 0,
+      toolCallCount: toolCalls.length,
+    });
     return {
       runStatus,
       lastAssistant: {
@@ -621,7 +639,12 @@ export class OpenClawGatewayClient {
     };
   }
 
-  private startEventCapture(runEvents: RunEvents, activeRunId: string): { stop: () => void } {
+  private startEventCapture(
+    runEvents: RunEvents,
+    activeRunId: string,
+    timeline?: GatewayTimeline,
+  ): { stop: () => void } {
+    let firstEventSeen = false;
     const handler = (ev: MessageEvent) => {
       let frame: { type?: string; event?: string; payload?: AgentEvent };
       try {
@@ -634,14 +657,27 @@ export class OpenClawGatewayClient {
       if (payload.runId && payload.runId !== activeRunId) return;
       const stream = payload.stream;
       const data = payload.data ?? {};
+      if (!firstEventSeen) {
+        firstEventSeen = true;
+        timeline?.("T7_provider_first_event", { stream: stream ?? "unknown" });
+      }
       if (stream === "assistant") {
         // The gateway sends `data.delta` (incremental) and `data.text`
         // (running full text) per chunk. Use `delta` to avoid duplication.
         const d = data as { delta?: string; text?: string };
         const chunk = d.delta ?? d.text ?? "";
-        if (chunk) (runEvents.assistantChunks ??= []).push(chunk);
+        if (chunk) {
+          (runEvents.assistantChunks ??= []).push(chunk);
+        }
       } else if (stream === "tool" || payload.status === "tool") {
         const name = String((data as { name?: string }).name ?? "tool");
+        const status = String(payload.status ?? (data as { status?: string }).status ?? "completed");
+        timeline?.(
+          /start|call|invoke/i.test(status)
+            ? "T9_tool_invocation_started"
+            : "T10_tool_invocation_completed",
+          { toolName: name, status },
+        );
         (runEvents.toolCalls ??= []).push({ name, status: "completed" });
       } else if (stream === "lifecycle") {
         const status = String(payload.status ?? "");

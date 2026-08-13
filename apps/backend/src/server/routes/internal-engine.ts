@@ -41,7 +41,11 @@ const NATIVE_TOOL_NAME = "departify.company.context";
 function nativeRuntimeConnections(
   connections: ReadonlyArray<Awaited<ReturnType<typeof buildCanonicalConnectionViews>>[number]>,
   googleSummaries: Awaited<ReturnType<ReturnType<typeof getGoogleTokenStore>["listForOrg"]>>,
+  userId?: string,
 ) {
+  const userGoogleSummaries = userId
+    ? googleSummaries.filter((summary) => summary.userId === userId)
+    : googleSummaries;
   return connections.map((connection) => ({
     toolId: connection.toolId,
     label: connection.label,
@@ -50,10 +54,10 @@ function nativeRuntimeConnections(
     ...(connection.toolId === "gmail"
       ? {
           capabilities: [
-            ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "email.read"))
+            ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "email.read"))
               ? ["email.read", "email.search", "email.thread.read"]
               : []),
-            ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "email.send"))
+            ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "email.send"))
               ? ["email.send.personal"]
               : []),
           ],
@@ -61,15 +65,15 @@ function nativeRuntimeConnections(
       : connection.toolId === "google_calendar"
         ? {
             capabilities: [
-              ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "calendar.read")) ? ["calendar.read"] : []),
-              ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "calendar.create")) ? ["calendar.create"] : []),
+              ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "calendar.read")) ? ["calendar.read"] : []),
+              ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "calendar.create")) ? ["calendar.create"] : []),
             ],
           }
         : connection.toolId === "google_workspace" || connection.toolId === "google_drive"
           ? {
               capabilities: [
-                ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.search")) ? ["drive.search"] : []),
-                ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.read")) ? ["drive.read"] : []),
+                ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.search")) ? ["drive.search"] : []),
+                ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.read")) ? ["drive.read"] : []),
               ],
             }
           : connection.capabilities
@@ -162,12 +166,21 @@ export async function registerInternalEngineRoutes(
       }
       const sessionKey = request.body?.sessionKey?.trim() ?? "";
       const identity = organizationFromOpenClawSessionKey(sessionKey);
-      if (!identity || (config?.environment === "production" && !isPersistedOrganizationId(identity.organizationId))) {
+      if (!identity || (config?.environment === "production" && (!isPersistedOrganizationId(identity.organizationId) || !identity.userId))) {
         return reply.code(403).send({ error: "invalid_session_scope" });
+      }
+      if (config?.environment === "production" && identity.userId) {
+        const membership = deps.auth
+          ? await deps.auth.resolveMembership(identity.userId, identity.organizationId)
+          : null;
+        if (!membership || membership.userId !== identity.userId) {
+          return reply.code(403).send({ error: "invalid_session_scope" });
+        }
       }
       const issued = issueScopedRuntimeToken({
         secret,
         organizationId: identity.organizationId,
+        ...(identity.userId ? { userId: identity.userId } : {}),
         sessionKey,
         agentId: identity.agentId,
       });
@@ -203,7 +216,7 @@ export async function registerInternalEngineRoutes(
         return reply.code(401).send({ error: "invalid_runtime_identity" });
       }
       const identity = organizationFromOpenClawSessionKey(validation.claims.sessionKey);
-      if (!identity || (config?.environment === "production" && !isPersistedOrganizationId(identity.organizationId)) || identity.organizationId !== validation.claims.organizationId) {
+      if (!identity || (config?.environment === "production" && (!isPersistedOrganizationId(identity.organizationId) || !identity.userId)) || identity.organizationId !== validation.claims.organizationId || (validation.claims.userId !== undefined && validation.claims.userId !== identity.userId)) {
         return reply.code(403).send({ error: "invalid_session_scope" });
       }
       const session = await requireSession(identity.organizationId, deps);
@@ -214,7 +227,7 @@ export async function registerInternalEngineRoutes(
         workStoreForRoutes().listResultsForOrg(identity.organizationId, 20),
         getGoogleTokenStore().listForOrg(identity.organizationId),
       ]);
-      const runtimeConnections = nativeRuntimeConnections(connections, googleSummaries);
+      const runtimeConnections = nativeRuntimeConnections(connections, googleSummaries, identity.userId);
       const capabilities = buildRuntimeCapabilityManifest(runtimeConnections);
       const companyContextCapability = capabilities.capabilities.find(
         (capability) => capability.id === "company.context",
@@ -293,7 +306,7 @@ export async function registerInternalEngineRoutes(
         return reply.code(401).send({ error: "invalid_runtime_identity" });
       }
       const identity = organizationFromOpenClawSessionKey(validation.claims.sessionKey);
-      if (!identity || (config?.environment === "production" && !isPersistedOrganizationId(identity.organizationId)) || identity.organizationId !== validation.claims.organizationId || validation.claims.agentId !== "main") {
+      if (!identity || (config?.environment === "production" && (!isPersistedOrganizationId(identity.organizationId) || !identity.userId)) || identity.organizationId !== validation.claims.organizationId || validation.claims.userId !== identity.userId || validation.claims.agentId !== "main") {
         return reply.code(403).send({ error: "invalid_session_scope" });
       }
       if (!isNativeReadToolName(toolName)) {
@@ -302,7 +315,7 @@ export async function registerInternalEngineRoutes(
       const session = await requireSession(identity.organizationId, deps);
       const connections = await buildCanonicalConnectionViews(session, session.state.locale);
       const googleSummaries = await getGoogleTokenStore().listForOrg(identity.organizationId);
-      const runtimeConnections = nativeRuntimeConnections(connections, googleSummaries);
+      const runtimeConnections = nativeRuntimeConnections(connections, googleSummaries, identity.userId);
       const capabilities = buildRuntimeCapabilityManifest(runtimeConnections);
       const availableTools = nativeToolsForManifest(capabilities);
       if (!availableTools.includes(toolName as NativeReadToolName)) {
@@ -358,6 +371,7 @@ export async function registerInternalEngineRoutes(
               ? { query: nativeText(args, "query") }
               : {}),
             locale: session.state.locale,
+            ...(identity.userId ? { userId: identity.userId } : {}),
             session,
             limit: nativeBoundedInt(args, "limit", 5, 1, 20),
             offset: nativeBoundedInt(args, "offset", 0, 0, 50),
@@ -375,7 +389,10 @@ export async function registerInternalEngineRoutes(
           session,
           nativeText(args, "range") || "mis próximos eventos",
           isEs,
-          { timeOfDay: nativeText(args, "timeOfDay") },
+          {
+            timeOfDay: nativeText(args, "timeOfDay"),
+            ...(identity.userId ? { userId: identity.userId } : {}),
+          },
         );
         result = {
           status: runtimeProviderUnavailable(outcome.reply) ? "blocked" : "success",
@@ -385,7 +402,7 @@ export async function registerInternalEngineRoutes(
         };
       } else if (toolName === "departify.drive.search" || toolName === "departify.drive.read") {
         const driveCapability = toolName === "departify.drive.read" ? "drive.read" : "drive.search";
-        const identityForDrive = await findOperationalGoogleIdentityForOrg(identity.organizationId, driveCapability);
+        const identityForDrive = await findOperationalGoogleIdentityForOrg(identity.organizationId, driveCapability, identity.userId);
         if (!identityForDrive) {
           result = { status: "blocked", operation: toolName, summary: "Drive todavía no está activado." };
         } else {

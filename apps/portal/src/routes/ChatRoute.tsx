@@ -77,6 +77,7 @@ export function ChatRoute() {
   }>({ open: false, activeCount: 0, maxActive: 5 });
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const [followRequested, setFollowRequested] = useState(false);
+  const [followingLatest, setFollowingLatest] = useState(true);
 
   const focusFromUrl = useMemo(() => {
     const params = new URLSearchParams(location.search);
@@ -99,9 +100,10 @@ export function ChatRoute() {
   }, [organizationId]);
 
   const loadConversation = useCallback(
-    async (conversationId: string) => {
+    async (conversationId: string, options?: { preserveEvents?: boolean }) => {
       const data = await api.conversation(organizationId!, conversationId);
       if (!data) return;
+      if (!options?.preserveEvents) setEvents([]);
       setTranscript(
         data.messages.map((message: MessageView) => ({
           role: message.role,
@@ -129,7 +131,7 @@ export function ChatRoute() {
     const data = await api.conversations(organizationId);
     const first = data?.conversations?.[0];
     if (first) {
-      await loadConversation(first.id);
+      await loadConversation(first.id, { preserveEvents: true });
     } else {
       setTranscript([]);
       setCurrentConversationId(null);
@@ -161,7 +163,11 @@ export function ChatRoute() {
       if (!el) return;
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
       // < 80px from the bottom counts as "near".
-      stickToBottomRef.current = distance < 80;
+      const nearLatest = distance < 80;
+      stickToBottomRef.current = nearLatest;
+      setFollowingLatest((current) =>
+        current === nearLatest ? current : nearLatest,
+      );
     }
     node.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
@@ -175,6 +181,8 @@ export function ChatRoute() {
     if (!node) return;
     const follow = () => {
       node.scrollTop = node.scrollHeight;
+      stickToBottomRef.current = true;
+      setFollowingLatest(true);
       setFollowRequested(false);
     };
     // Wait for the history DOM to be laid out before reading scrollHeight.
@@ -290,9 +298,63 @@ export function ChatRoute() {
     await refreshConversations();
   }
 
+  async function recoverCompletedTurn(
+    organizationId: string,
+    expectedConversationId: string | null,
+    userMessage: string,
+    correlationId: string,
+  ): Promise<boolean> {
+    const candidates = expectedConversationId
+      ? [expectedConversationId]
+      : ((await api.conversations(organizationId))?.conversations ?? [])
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+          .map((conversation) => conversation.id);
+    for (const conversationId of candidates) {
+      const data = await api.conversation(organizationId, conversationId);
+      const messages = data?.messages ?? [];
+      const last = messages.at(-1);
+      const previous = messages.at(-2);
+      if (
+        previous?.role === "user" &&
+        previous.content === userMessage &&
+        last?.role === "assistant" &&
+        last.content.trim().length > 0
+      ) {
+        setTranscript(
+          messages.map((message: MessageView) => ({
+            role: message.role,
+            content: message.content,
+          })),
+        );
+        setCurrentConversationId(conversationId);
+        setCurrentSummary(data?.conversation.summary ?? null);
+        setEvents([]);
+        setError(null);
+        console.info("[chat-timeline]", {
+          correlationId,
+          stage: "post_generation_recovery_completed",
+          errorClass: "post_generation_failure",
+          messageCount: messages.length,
+        });
+        return true;
+      }
+    }
+    return false;
+  }
+
   async function send() {
     const value = input.trim();
     if (!organizationId || !value || busy) return;
+    const correlationId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `chat_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const clientStartedAt = performance.now();
+    console.info("[chat-timeline]", {
+      correlationId,
+      stage: "T0_portal_submit",
+      conversationSelected: Boolean(currentConversationId),
+    });
     setBusy(true);
     setError(null);
     setProcessStatus("Departify está pensando…");
@@ -315,22 +377,12 @@ export function ChatRoute() {
           organizationId,
           currentConversationId,
           value,
+          correlationId,
         )
-      : await api.commandCenterMessage(organizationId, value);
+      : await api.commandCenterMessage(organizationId, value, undefined, correlationId);
     setBusy(false);
     setProcessStatus(null);
-    // A parsed error payload is still a failed primary turn. Do not append an
-    // empty assistant message or treat a backend error envelope as success.
-    if (!result || typeof result.reply !== "string" || result.reply.trim().length === 0) {
-      setError(
-        "Departify no ha podido responderte ahora mismo. Vuelve a intentarlo en un momento.",
-      );
-      return;
-    }
-    if (
-      result.error &&
-      result.error.code === "MAX_ACTIVE_CONVERSATIONS"
-    ) {
+    if (result?.error && result.error.code === "MAX_ACTIVE_CONVERSATIONS") {
       setCapDialog({
         open: true,
         activeCount: result.error.activeCount,
@@ -338,6 +390,38 @@ export function ChatRoute() {
       });
       return;
     }
+    // If the transport failed after the backend persisted a valid pair, the
+    // durable transcript is the completion gate. Recover it before showing a
+    // generic error; an old assistant message is not sufficient evidence.
+    if (!result || typeof result.reply !== "string" || result.reply.trim().length === 0) {
+      const recovered = await recoverCompletedTurn(
+        organizationId,
+        currentConversationId ?? result?.conversationId ?? null,
+        value,
+        correlationId,
+      );
+      console.info("[chat-timeline]", {
+        correlationId,
+        stage: recovered
+          ? "T16_portal_completion_received_via_recovery"
+          : "T16_portal_error_received",
+        elapsedMs: Math.round((performance.now() - clientStartedAt) * 100) / 100,
+      });
+      if (recovered) {
+        await refreshConversations();
+        return;
+      }
+      setError(
+        "Departify no ha podido responderte ahora mismo. Vuelve a intentarlo en un momento.",
+      );
+      return;
+    }
+    console.info("[chat-timeline]", {
+      correlationId,
+      stage: "T16_portal_completion_received",
+      elapsedMs: Math.round((performance.now() - clientStartedAt) * 100) / 100,
+      responseBytes: new Blob([result.reply]).size,
+    });
     // Central Chat UX P0 — only the assistant reply is appended. The
     // connection_need / process_event cards from the proactive opening
     // payload are filtered out so they don't pollute the visible
@@ -479,7 +563,7 @@ export function ChatRoute() {
             <SparkIcon /> {processStatus}
           </div>
         )}
-        {!stickToBottomRef.current && (transcript.length > 0 || events.length > 0) && (
+        {!followingLatest && (transcript.length > 0 || events.length > 0) && (
           <button
             type="button"
             className="dfy-chat-jump-latest"
@@ -487,6 +571,7 @@ export function ChatRoute() {
             onClick={() => {
               setFollowRequested(true);
               stickToBottomRef.current = true;
+              setFollowingLatest(true);
             }}
             aria-label="Ir al último mensaje"
           >

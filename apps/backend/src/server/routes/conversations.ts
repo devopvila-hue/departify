@@ -26,6 +26,7 @@
  */
 
 import type { FastifyInstance } from "fastify";
+import { performance } from "node:perf_hooks";
 import {
   COMPACTION_THRESHOLD_CHARS,
   DEFAULT_CONVERSATION_TITLE,
@@ -38,6 +39,8 @@ import {
   buildCeoRuntimeForRequest,
   createCeoTurnTrace,
   emitCeoTurnTrace,
+  traceRequestReceived,
+  traceStage,
   processCeoMessage,
   requireSession,
   MaxActiveConversationsError,
@@ -317,7 +320,14 @@ export async function registerConversationRoutes(
         conversationId: string;
       };
       const { message } = request.body as { message: string };
+      const startedMonotonicAt = performance.now();
+      const correlationId = String(
+        request.headers["x-departify-correlation-id"] ?? request.id,
+      );
+      traceRequestReceived(correlationId, organizationId, startedMonotonicAt);
       const session = await requireSession(organizationId, deps);
+      const trace = createCeoTurnTrace(session, correlationId, startedMonotonicAt);
+      traceStage(trace, "T2_auth_tenant_resolution_complete");
       const conversation = await session.conversations.get(
         organizationId,
         conversationId,
@@ -326,10 +336,16 @@ export async function registerConversationRoutes(
         return reply.code(404).send({ error: "Conversation not found." });
       }
       session.state.currentConversationId = conversation.id;
-      const trace = createCeoTurnTrace(session, request.id);
+      traceStage(trace, "T3_conversation_session_resolution_complete");
       let result;
       try {
-        const runtime = await buildCeoRuntimeForRequest(session, deps, message, trace);
+        const runtime = await buildCeoRuntimeForRequest(
+          session,
+          deps,
+          message,
+          trace,
+          request.authUser?.id,
+        );
         result = await processCeoMessage(
           session,
           message,
@@ -389,6 +405,10 @@ export async function registerConversationRoutes(
         // summary until the next attempt.
       }
 
+      traceStage(trace, "T15_backend_response_finalization", {
+        responseStatus: 200,
+        finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
+      });
       return reply.code(200).send(result);
     },
   );

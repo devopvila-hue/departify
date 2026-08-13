@@ -7,20 +7,16 @@ const ORG_B = "8b660597-34cb-5e58-a299-023915cad64e";
 
 function registeredPlugin() {
   let factory;
-  let gatewayHandler;
   plugin.register({
-    registerGatewayMethod(_name, handler) {
-      gatewayHandler = handler;
-    },
     registerTool(candidate) {
       factory = candidate;
     },
   });
-  return { factory, gatewayHandler };
+  return { factory };
 }
 
 test("registers the native tool surface", async () => {
-  const { factory, gatewayHandler } = registeredPlugin();
+  const { factory } = registeredPlugin();
   assert.deepEqual(TOOL_NAMES, [
     "departify.company.context",
     "departify.email.list",
@@ -33,14 +29,6 @@ test("registers the native tool surface", async () => {
     "departify.results.list",
     "departify.work.deliverable",
   ]);
-  const beforePolicy = factory({ sessionKey: `departify:ceo:${ORG_A}`, agentId: "main" });
-  assert.deepEqual(beforePolicy, []);
-  let response;
-  await gatewayHandler({
-    params: { sessionKey: `departify:ceo:${ORG_A}`, agentId: "main", toolNames: TOOL_NAMES },
-    respond(ok, result) { response = { ok, result }; },
-  });
-  assert.deepEqual(response, { ok: true, result: { ok: true, toolCount: 10 } });
   const tools = factory({ sessionKey: `departify:ceo:${ORG_A}`, agentId: "main" });
   assert.equal(tools.length, 10);
   const company = tools.find((tool) => tool.name === "departify.company.context");
@@ -68,9 +56,9 @@ test("uses trusted session identity and returns the structured gateway result", 
     return new Response(JSON.stringify({ status: "success", operation: "departify.email.list", data: { messages: [] } }), { status: 200 });
   };
   try {
-    const { factory, gatewayHandler } = registeredPlugin();
-    await gatewayHandler({ params: { sessionKey: `departify:ceo:${ORG_A}`, agentId: "main", toolNames: ["departify.email.list"] }, respond() {} });
-    const [tool] = factory({ sessionKey: `departify:ceo:${ORG_A}`, agentId: "main" });
+    const { factory } = registeredPlugin();
+    const tool = factory({ sessionKey: `departify:ceo:${ORG_A}`, agentId: "main" })
+      .find((candidate) => candidate.name === "departify.email.list");
     const result = await tool.execute("call-1", { organizationId: "org-b" });
     assert.deepEqual(result.details, { status: "success", operation: "departify.email.list", data: { messages: [] } });
     assert.equal(requests.length, 2);
@@ -85,19 +73,13 @@ test("uses trusted session identity and returns the structured gateway result", 
   }
 });
 
-test("rejects another agent and never exposes a mutation through policy", async () => {
-  const { factory, gatewayHandler } = registeredPlugin();
-  await assert.rejects(
-    () => gatewayHandler({ params: { sessionKey: `agent:other:departify:ceo:${ORG_A}`, agentId: "other", toolNames: TOOL_NAMES }, respond() {} }),
+test("rejects another agent while exposing only the read-only native catalog", async () => {
+  const { factory } = registeredPlugin();
+  assert.throws(
+    () => factory({ sessionKey: `agent:other:departify:ceo:${ORG_A}`, agentId: "other" }),
     /scoped CEO session/,
   );
-  let response;
-  await gatewayHandler({
-    params: { sessionKey: `departify:ceo:${ORG_A}`, agentId: "main", toolNames: ["departify.email.send", "unknown", "departify.calendar.list"] },
-    respond(ok, result) { response = { ok, result }; },
-  });
-  assert.deepEqual(response, { ok: true, result: { ok: true, toolCount: 1 } });
-  assert.deepEqual(factory({ sessionKey: `departify:ceo:${ORG_A}`, agentId: "main" }).map((tool) => tool.name), ["departify.calendar.list"]);
+  assert.deepEqual(factory({ sessionKey: `departify:ceo:${ORG_A}`, agentId: "main" }).map((tool) => tool.name), TOOL_NAMES);
 });
 
 test("rejects a malformed organization session before any gateway request", async () => {

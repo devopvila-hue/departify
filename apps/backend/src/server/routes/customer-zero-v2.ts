@@ -16,6 +16,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { createHash } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import {
   fetchAndExtractWebsite,
   interpretWebsite,
@@ -2302,10 +2303,22 @@ export async function registerCustomerZeroV2Routes(
     async (request, reply) => {
       const { organizationId } = request.params as { organizationId: string };
       const body = request.body as { message: string; conversationId?: string };
+      const startedMonotonicAt = performance.now();
+      const correlationId = String(
+        request.headers["x-departify-correlation-id"] ?? request.id,
+      );
+      traceRequestReceived(correlationId, organizationId, startedMonotonicAt);
       const session = await requireSession(organizationId, deps);
-      const trace = newCeoTurnTrace(session, request.id);
+      const trace = newCeoTurnTrace(session, correlationId, startedMonotonicAt);
+      traceStage(trace, "T2_auth_tenant_resolution_complete");
       try {
-        const runtime = await buildCeoRuntimeForRequest(session, deps, body.message, trace);
+        const runtime = await buildCeoRuntimeForRequest(
+          session,
+          deps,
+          body.message,
+          trace,
+          request.authUser?.id,
+        );
         const result = await processCeoMessage(
           session,
           body.message,
@@ -2316,6 +2329,10 @@ export async function registerCustomerZeroV2Routes(
           trace,
         );
         emitCeoTurnTrace(session, runtime?.trace ?? trace, result);
+        traceStage(trace, "T15_backend_response_finalization", {
+          responseStatus: 200,
+          finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
+        });
         return reply.code(200).send(result);
       } catch (cause) {
         if (cause instanceof MaxActiveConversationsError) {
@@ -2934,6 +2951,8 @@ export interface CeoMessageResult {
 interface RuntimeBridgeInput {
   readonly engine: EngineAdapter;
   readonly sessionId: string;
+  /** Authenticated CEO identity for this runtime turn. */
+  readonly userId: string | null;
   readonly context: RuntimeBusinessContext;
   readonly capabilities: RuntimeCapabilityManifest;
   readonly executeTool: (
@@ -2949,6 +2968,8 @@ interface CeoTurnTraceState {
   readonly requestCorrelationId: string;
   readonly organizationHash: string;
   readonly startedAt: number;
+  readonly startedMonotonicAt: number;
+  readonly timeline: Record<string, number>;
   /** Opaque/hash-based form: never log the raw organization id. */
   readonly logicalSessionKey: string;
   engineSessionId: string | null;
@@ -2987,6 +3008,35 @@ type PendingOperationDecision = "APPROVE" | "CANCEL" | "OTHER";
 
 function safeTraceHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 12);
+}
+
+export function traceStage(
+  trace: CeoTurnTraceState,
+  stage: string,
+  metadata?: Readonly<Record<string, unknown>>,
+): void {
+  const elapsedMs = Math.round((performance.now() - trace.startedMonotonicAt) * 100) / 100;
+  trace.timeline[stage] = elapsedMs;
+  console.info("[chat-timeline]", {
+    correlationId: trace.requestCorrelationId,
+    organizationHash: trace.organizationHash,
+    stage,
+    elapsedMs,
+    ...(metadata ?? {}),
+  });
+}
+
+export function traceRequestReceived(
+  correlationId: string,
+  organizationId: string,
+  startedMonotonicAt: number,
+): void {
+  console.info("[chat-timeline]", {
+    correlationId,
+    organizationHash: safeTraceHash(organizationId),
+    stage: "T1_backend_request_received",
+    elapsedMs: Math.round((performance.now() - startedMonotonicAt) * 100) / 100,
+  });
 }
 
 function pendingOperationType(session: CustomerZeroSession): string | null {
@@ -3058,6 +3108,7 @@ export async function buildCeoRuntimeForRequest(
   deps: ServerDeps,
   message: string,
   trace: CeoTurnTraceState,
+  userId?: string,
 ): Promise<RuntimeBridgeInput | null> {
   const normalizedMessage = normalizeOperationalLanguage(message);
   const bypassRuntime = shouldBypassRuntimeForPendingOperation(
@@ -3072,18 +3123,21 @@ export async function buildCeoRuntimeForRequest(
   if (!deps.engine || bypassRuntime || (pendingRead && deps.nativeBusinessTools !== true)) {
     return null;
   }
-  return buildRuntimeBridgeForCeoTurn(session, deps, trace);
+  return buildRuntimeBridgeForCeoTurn(session, deps, trace, userId);
 }
 
 function newCeoTurnTrace(
   session: CustomerZeroSession,
   requestCorrelationId: string,
+  startedMonotonicAt = performance.now(),
 ): CeoTurnTraceState {
   const organizationHash = safeTraceHash(session.organizationId);
   return {
     requestCorrelationId,
     organizationHash,
     startedAt: Date.now(),
+    startedMonotonicAt,
+    timeline: {},
     logicalSessionKey: `ceo:${organizationHash}`,
     engineSessionId: null,
     turnNumber: session.state.conversation.filter((entry) => entry.role === "user").length + 1,
@@ -3123,8 +3177,9 @@ function newCeoTurnTrace(
 export function createCeoTurnTrace(
   session: CustomerZeroSession,
   requestCorrelationId: string,
+  startedMonotonicAt?: number,
 ): CeoTurnTraceState {
-  return newCeoTurnTrace(session, requestCorrelationId);
+  return newCeoTurnTrace(session, requestCorrelationId, startedMonotonicAt);
 }
 
 export function emitCeoTurnTrace(
@@ -3171,6 +3226,15 @@ export function emitCeoTurnTrace(
     productTruthCalled: trace.productTruthCalled,
     finalResponseSource: trace.finalResponseSource,
     assistantTextBytes: trace.assistantTextBytes,
+    timeline: trace.timeline,
+    completionGate:
+      trace.nativeResponseTerminal && trace.timeline.T14_persistence_completed !== undefined
+        ? "success"
+        : trace.nativeResponseTerminal && trace.timeline.T14_persistence_failed !== undefined
+          ? "persistence_failed"
+        : trace.openclawStatus === "failed"
+          ? "generation_failed"
+          : "completed_without_durable_persistence",
     resultStatus: trace.toolResultStatuses.at(-1) ?? "completed",
     durationMs: Date.now() - trace.startedAt,
   });
@@ -3190,6 +3254,7 @@ async function buildRuntimeBridge(
   deps: ServerDeps,
   inboxStore: InboxStore,
   trace: CeoTurnTraceState,
+  userId?: string,
 ): Promise<RuntimeBridgeInput | null> {
   if (!deps.engine) return null;
   const workStore = workStoreForRoutes();
@@ -3209,6 +3274,9 @@ async function buildRuntimeBridge(
       : Promise.resolve([]),
     getGoogleTokenStore().listForOrg(session.organizationId),
   ]);
+  const userGoogleSummaries = userId
+    ? googleSummaries.filter((summary) => summary.userId === userId)
+    : googleSummaries;
   const runtimeConnections = connections.map((connection) => ({
     toolId: connection.toolId,
     label: connection.label,
@@ -3217,10 +3285,10 @@ async function buildRuntimeBridge(
     ...(connection.toolId === "gmail"
       ? {
           capabilities: [
-            ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "email.read"))
+            ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "email.read"))
               ? ["email.read", "email.search", "email.thread.read"]
               : []),
-            ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "email.send"))
+            ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "email.send"))
               ? ["email.send.personal"]
               : []),
           ],
@@ -3228,15 +3296,15 @@ async function buildRuntimeBridge(
       : connection.toolId === "google_calendar"
         ? {
             capabilities: [
-              ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "calendar.read")) ? ["calendar.read"] : []),
-              ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "calendar.create")) ? ["calendar.create"] : []),
+              ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "calendar.read")) ? ["calendar.read"] : []),
+              ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "calendar.create")) ? ["calendar.create"] : []),
             ],
           }
         : connection.toolId === "google_workspace" || connection.toolId === "google_drive"
           ? {
               capabilities: [
-                ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.search")) ? ["drive.search"] : []),
-                ...(googleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.read")) ? ["drive.read"] : []),
+                ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.search")) ? ["drive.search"] : []),
+                ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.read")) ? ["drive.read"] : []),
               ],
             }
           : connection.capabilities
@@ -3273,7 +3341,13 @@ async function buildRuntimeBridge(
       content: message.content,
     })),
   });
-  const sessionId = `ceo:${session.organizationId}`;
+  // Production runtime sessions are bound to both tenant and authenticated
+  // user. Keeping only the organization here would let two members share
+  // OpenClaw transcript/tool context and would make credential selection
+  // ambiguous.
+  const sessionId = userId
+    ? `ceo:${session.organizationId}:${userId}`
+    : `ceo:${session.organizationId}`;
   const existingEngineSession = await deps.engine.getSession(sessionId);
   const engineSession = existingEngineSession
     ?? await deps.engine.createSession({ sessionId });
@@ -3282,6 +3356,7 @@ async function buildRuntimeBridge(
   return {
     engine: deps.engine,
     sessionId: engineSession.id,
+    userId: userId ?? null,
     context,
     capabilities,
     executeTool: (call, userMessage) => executeRuntimeTool(session, deps, call, inboxStore, userMessage),
@@ -3295,12 +3370,14 @@ export async function buildRuntimeBridgeForCeoTurn(
   session: CustomerZeroSession,
   deps: ServerDeps,
   trace: CeoTurnTraceState,
+  userId?: string,
 ): Promise<RuntimeBridgeInput | null> {
   return buildRuntimeBridge(
     session,
     deps,
     deps.inbox ?? new InMemoryInboxStore(),
     trace,
+    userId,
   );
 }
 
@@ -3741,6 +3818,7 @@ export async function processCeoMessage(
     }
     throw cause;
   }
+  if (trace) traceStage(trace, "T3_conversation_session_resolution_complete");
   const organizationId = session.organizationId;
   const turnStartedAt = Date.now();
 
@@ -3849,20 +3927,15 @@ export async function processCeoMessage(
       trace.exposedToolNames = [...runtime.nativeToolNames];
     }
     try {
-      // Founder parity deliberately leaves native OpenClaw tool selection to
-      // OpenClaw. The old per-session setter reconstructed a narrow
-      // Departify allowlist and made ordinary reasoning less capable. The
-      // business tool names remain context/telemetry only in this mode.
-      if (process.env.DEPARTIFY_OPENCLAW_MODE !== "founder-development") {
-        if (!runtime.engine.setNativeToolPolicy) {
-          throw new Error("native_tool_policy_unsupported");
-        }
-        await runtime.engine.setNativeToolPolicy({
-          sessionId: runtime.sessionId,
-          toolNames: runtime.nativeToolNames,
+      // Native OpenClaw owns discovery. Do not reconstruct a second per-session
+      // allowlist here: the gateway validates tenant/user/connection
+      // authorization on every native invocation.
+      const nativeContext = renderRuntimeBusinessContextForNativeEngine(runtime.context);
+      if (trace) {
+        traceStage(trace, "T4_request_sent_to_engine_adapter", {
+          contextBytes: Buffer.byteLength(nativeContext, "utf8"),
         });
       }
-      const nativeContext = renderRuntimeBusinessContextForNativeEngine(runtime.context);
       const nativeResult = await runtime.engine.sendMessage({
         sessionId: runtime.sessionId,
         // Native mode receives the CEO's actual utterance. The existing
@@ -3871,6 +3944,9 @@ export async function processCeoMessage(
         message,
         runtimeContext: nativeContext,
         nativeBusinessTools: true,
+        ...(trace
+          ? { timeline: (stage: string, metadata?: Readonly<Record<string, unknown>>) => traceStage(trace, stage, metadata) }
+          : {}),
       });
       if (trace) trace.openclawStatus = nativeResult.status;
       if (trace) trace.openclawTextBytes = Buffer.byteLength(nativeResult.text ?? "", "utf8");
@@ -4528,13 +4604,16 @@ export async function processCeoMessage(
       : "legacy_router";
   }
 
+  if (trace) traceStage(trace, "T13_persistence_started");
   try {
     await session.conversations.addMessage(
       conversation.id,
       "assistant",
       marketingTurn?.content ?? assistantReply,
     );
+    if (trace) traceStage(trace, "T14_persistence_completed");
   } catch (cause) {
+    if (trace) traceStage(trace, "T14_persistence_failed", { errorClass: "secondary_write" });
     console.error("[conversation] assistant_persist_failed", {
       organizationId,
       conversationId: conversation.id,
@@ -4654,9 +4733,12 @@ async function completeRuntimeCeoTurn(
       ? "The engine completed without returning an assistant response. Please try again."
       : "El motor terminó sin devolver una respuesta del asistente. Vuelve a intentarlo.");
   if (trace) trace.assistantTextBytes = Buffer.byteLength(finalReply, "utf8");
+  if (trace) traceStage(trace, "T13_persistence_started");
   try {
     await session.conversations.addMessage(conversation.id, "assistant", finalReply);
+    if (trace) traceStage(trace, "T14_persistence_completed");
   } catch (cause) {
+    if (trace) traceStage(trace, "T14_persistence_failed", { errorClass: "secondary_write" });
     console.info("[runtime-business-context]", {
       event: "assistant_persist_failed",
       organizationId: session.organizationId,
@@ -5191,9 +5273,9 @@ export async function runCalendarReadTurn(
   session: CustomerZeroSession,
   message: string,
   isEs: boolean,
-  options?: { readonly timeOfDay?: string },
+  options?: { readonly timeOfDay?: string; readonly userId?: string },
 ): Promise<{ reply: string; data?: { readonly events: readonly CalendarReadEvent[] } }> {
-  const identity = await findOperationalGoogleIdentityForOrg(session.organizationId, "calendar.read");
+  const identity = await findOperationalGoogleIdentityForOrg(session.organizationId, "calendar.read", options?.userId);
   if (!identity) {
     return { reply: isEs
       ? "Calendar todavía no está activado. Puedes dar acceso a Calendar desde Conexiones."
@@ -6187,6 +6269,7 @@ export async function readEmailNativeResult(
     readonly session?: CustomerZeroSession;
     readonly limit?: number;
     readonly offset?: number;
+    readonly userId?: string;
   },
 ): Promise<NativeEmailReadResult | null> {
   const message = input.message ?? (input.query ? `busca correos sobre ${input.query}` : `dame los ${input.limit ?? 5} últimos correos`);
@@ -6201,7 +6284,7 @@ export async function readEmailNativeResult(
   const maxResults = Math.min(10, limit + offset);
   if (provider === "corporate") return readCorporateEmailNativeResult(organizationId, message, input.locale, input.session, maxResults, offset);
   if (provider === "hostinger") return readHostingerEmailNativeResult(message, input.locale, input.session, maxResults, offset);
-  if (provider === "google") return runGmailNativeRead(organizationId, message, input.locale, input.session, maxResults, offset);
+  if (provider === "google") return runGmailNativeRead(organizationId, message, input.locale, input.session, maxResults, offset, input.userId);
   return null;
 }
 
@@ -6220,11 +6303,12 @@ async function runGmailNativeRead(
   session: CustomerZeroSession | undefined,
   maxResults: number,
   offset: number,
+  userId?: string,
 ): Promise<NativeEmailReadResult | null> {
   const clientId = process.env["GOOGLE_OAUTH_CLIENT_ID"]?.trim();
   const clientSecret = process.env["GOOGLE_OAUTH_CLIENT_SECRET"]?.trim();
   if (!clientId || !clientSecret) return null;
-  const target = await findOperationalGoogleIdentityForOrg(organizationId, "email.read");
+  const target = await findOperationalGoogleIdentityForOrg(organizationId, "email.read", userId);
   if (!target) return null;
   const plan = gmailDeriveReadPlan(message);
   const adapter = new (await import("../../customer-zero/gmail-adapter.js")).GmailAdapter(

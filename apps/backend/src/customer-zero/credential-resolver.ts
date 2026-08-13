@@ -349,10 +349,12 @@ export async function hasOperationalGoogleCapabilityForOrg(
 export async function findOperationalGoogleIdentityForOrg(
   organizationId: string,
   capability: GoogleCapability,
+  userId?: string,
 ): Promise<GoogleTokenSummary | null> {
   const summaries = await getGoogleTokenStore().listForOrg(organizationId);
   return summaries.find(
     (summary) =>
+      (!userId || summary.userId === userId) &&
       summary.hasRefreshToken &&
       Boolean(summary.operationalVerifiedAt) &&
       hasOperationalGoogleCapability(summary, capability),

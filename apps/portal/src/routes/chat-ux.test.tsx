@@ -57,8 +57,17 @@ const conversations = {
       updatedAt: "2026-08-10T00:00:00.000Z",
       lastMessageAt: "2026-08-10T00:00:00.000Z",
     },
+    {
+      id: "conv-2",
+      organizationId: "org_moon",
+      title: "Otra conversación",
+      status: "active" as const,
+      createdAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-09T00:00:00.000Z",
+      lastMessageAt: "2026-08-09T00:00:00.000Z",
+    },
   ],
-  activeCount: 1,
+  activeCount: 2,
   maxActive: 5,
 };
 
@@ -96,6 +105,26 @@ const assistantReply = {
   conversationId: "conv-1",
 };
 
+const conversationTwoDetail = {
+  conversation: {
+    id: "conv-2",
+    organizationId: "org_moon",
+    title: "Otra conversación",
+    status: "active" as const,
+    createdAt: "2026-08-09T00:00:00.000Z",
+    updatedAt: "2026-08-09T00:00:00.000Z",
+  },
+  messages: [
+    {
+      id: "m5",
+      conversationId: "conv-2",
+      role: "user" as const,
+      content: "Mensaje de la otra conversación",
+      createdAt: "2026-08-09T09:00:00.000Z",
+    },
+  ],
+};
+
 function mockChatFetch() {
   vi.stubGlobal(
     "fetch",
@@ -108,6 +137,8 @@ function mockChatFetch() {
         body = openingEs;
       } else if (u.includes("/conversations/conv-1/messages")) {
         body = assistantReply;
+      } else if (u.includes("/conversations/conv-2")) {
+        body = conversationTwoDetail;
       } else if (u.includes("/conversations/conv-1")) {
         body = conversationDetail;
       } else if (u.includes("/conversations")) {
@@ -196,6 +227,66 @@ describe("Central Chat UX P0 — chat interaction", () => {
     await waitFor(() => expect(el.scrollTop).toBe(el.scrollHeight));
   });
 
+  it("S2b. a transport failure recovers a durable completed turn", async () => {
+    const value = "¿Qué tal va la campaña?";
+    const recoveredReply = "La respuesta ya estaba completada y se ha recuperado.";
+    const persisted = {
+      ...conversationDetail,
+      messages: [
+        ...conversationDetail.messages,
+        {
+          id: "m5",
+          conversationId: "conv-1",
+          role: "user" as const,
+          content: value,
+          createdAt: "2026-08-10T09:02:00.000Z",
+        },
+        {
+          id: "m6",
+          conversationId: "conv-1",
+          role: "assistant" as const,
+          content: recoveredReply,
+          createdAt: "2026-08-10T09:02:05.000Z",
+        },
+      ],
+    };
+    mockChatFetch();
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+        const target = String(url);
+        if (target.includes("/conversations/conv-1/messages")) {
+          return Promise.resolve({
+            ok: false,
+            status: 504,
+            json: async () => ({ error: { code: "stream_failed" } }),
+          } as Response);
+        }
+        if (target.includes("/conversations/conv-1") && init?.method !== "POST") {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => persisted,
+          } as Response);
+        }
+        return baseFetch(url, init);
+      }),
+    );
+
+    renderChat();
+    await screen.findByText(/elvira toma la iniciativa/i);
+    await screen.findByText(/¿tengo correos importantes\?/i);
+    const input = await screen.findByLabelText(/mensaje para departify/i);
+    fireEvent.change(input, { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: /enviar/i }));
+
+    await waitFor(() => expect(document.body.textContent).toContain(recoveredReply));
+    expect(
+      screen.queryByText(/departify no ha podido responderte ahora mismo/i),
+    ).not.toBeInTheDocument();
+  });
+
   it("S3. 'Ir al último mensaje' appears when scrolled up and snaps to the bottom", async () => {
     const { container } = renderChat();
     await screen.findByText(/elvira toma la iniciativa/i);
@@ -216,6 +307,19 @@ describe("Central Chat UX P0 — chat interaction", () => {
     scrollTo(el, 60);
     fireEvent.click(screen.getByTestId("chat-jump-latest"));
     await waitFor(() => expect(el.scrollTop).toBe(el.scrollHeight));
+  });
+
+  it("S3b. scrolling up immediately exposes the latest-message affordance", async () => {
+    const { container } = renderChat();
+    await screen.findByText(/elvira toma la iniciativa/i);
+    const el = scroller(container);
+    setupScrollMetrics(el, 900, 300);
+
+    scrollTo(el, 100);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("chat-jump-latest")).toBeInTheDocument(),
+    );
   });
 
   it("S4. a passive event does not yank the viewport while reading history", async () => {
@@ -249,5 +353,21 @@ describe("Central Chat UX P0 — chat interaction", () => {
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     });
     await waitFor(() => expect(el.scrollTop).toBe(el.scrollHeight));
+  });
+
+  it("S6. switching conversations clears events from the previous thread", async () => {
+    renderChat();
+    await screen.findByText(/elvira toma la iniciativa/i);
+
+    const input = await screen.findByLabelText(/mensaje para departify/i);
+    fireEvent.change(input, { target: { value: "hola" } });
+    fireEvent.click(screen.getByRole("button", { name: /enviar/i }));
+    await screen.findByText(/he encontrado 2 correos/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /conversaciones/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Otra conversación" }));
+
+    await screen.findByText(/mensaje de la otra conversación/i);
+    expect(screen.queryByText(/he encontrado 2 correos/i)).not.toBeInTheDocument();
   });
 });

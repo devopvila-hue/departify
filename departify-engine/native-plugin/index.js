@@ -11,14 +11,7 @@ const TOOL_NAMES = [
   "departify.work.deliverable",
 ];
 const DEFAULT_AUDIENCE = "departify-tool-gateway";
-const TOOL_POLICY_METHOD = "departify.native-tools.set-session-tools";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const sessionToolPolicies = new Map();
-
-function policyKey(sessionKey) {
-  return sessionKey.replace(/^agent:main:/, "");
-}
-
 function runtimeConfig() {
   const apiUrl = process.env.DEPARTIFY_API_URL?.trim();
   const runtimeToken = process.env.DEPARTIFY_RUNTIME_TOKEN?.trim();
@@ -31,8 +24,8 @@ function runtimeConfig() {
 function sessionKeyFromContext(ctx) {
   const sessionKey = typeof ctx?.sessionKey === "string" ? ctx.sessionKey.trim() : "";
   const agentId = typeof ctx?.agentId === "string" ? ctx.agentId.trim() : "main";
-  const match = /^(?:departify:ceo:|agent:main:departify:ceo:)([^:]+)$/.exec(sessionKey);
-  if (agentId !== "main" || !match?.[1] || !UUID_PATTERN.test(match[1])) {
+  const match = /^(?:departify:ceo:|agent:main:departify:ceo:)([^:]+)(?::([^:]+))?$/.exec(sessionKey);
+  if (agentId !== "main" || !match?.[1] || !UUID_PATTERN.test(match[1]) || (match[2] && !UUID_PATTERN.test(match[2]))) {
     throw new Error("Departify native tool requires a scoped CEO session");
   }
   return sessionKey;
@@ -113,11 +106,6 @@ function toolParameters(name) {
   }
 }
 
-function sessionTools(ctx) {
-  const sessionKey = sessionKeyFromContext(ctx);
-  return sessionToolPolicies.get(policyKey(sessionKey)) ?? [];
-}
-
 function makeTool(ctx, name) {
   return {
     name,
@@ -152,13 +140,15 @@ export default {
   name: "Departify Native Tools",
   description: "Native Departify business tools.",
   register(api) {
-    api.registerGatewayMethod(TOOL_POLICY_METHOD, async ({ params, respond }) => {
-      const sessionKey = sessionKeyFromContext({ sessionKey: params?.sessionKey, agentId: params?.agentId ?? "main" });
-      const toolNames = Array.isArray(params?.toolNames) ? params.toolNames.filter((name) => TOOL_NAMES.includes(name)) : [];
-      sessionToolPolicies.set(policyKey(sessionKey), [...new Set(toolNames)]);
-      respond(true, { ok: true, toolCount: sessionToolPolicies.get(policyKey(sessionKey)).length }, undefined);
-    }, { scope: "operator.write" });
-    api.registerTool((ctx) => sessionTools(ctx).map((name) => makeTool(ctx, name)), { names: TOOL_NAMES });
+    // Discovery is native OpenClaw capability discovery. Authorization is
+    // deliberately deferred to Departify's tenant-scoped gateway on every
+    // invocation, where the signed session identity, connection, entitlement
+    // and user credential are checked again. A per-session allowlist here
+    // caused Founder parity sessions to discover zero tools.
+    api.registerTool((ctx) => {
+      sessionKeyFromContext(ctx);
+      return TOOL_NAMES.map((name) => makeTool(ctx, name));
+    }, { names: TOOL_NAMES });
   },
 };
 

@@ -113,6 +113,7 @@ export class OpenClawEngineAdapter implements EngineAdapter {
 
   async sendMessage(input: EngineSendMessageInput): Promise<EngineMessageResult> {
     const startedAt = Date.now();
+    input.timeline?.("T5_openclaw_request_received");
     try {
       const { runStatus, lastAssistant } = await this.client.runAndReadResult(
         {
@@ -120,6 +121,7 @@ export class OpenClawEngineAdapter implements EngineAdapter {
           message: renderOpenClawTurn(input),
         },
         this.client.config.requestTimeoutMs,
+        input.timeline,
       );
       if (runStatus !== "ok") {
         throw new EngineExecutionError(
@@ -128,6 +130,10 @@ export class OpenClawEngineAdapter implements EngineAdapter {
         );
       }
       const text = lastAssistant.text ?? "";
+      input.timeline?.("T12_adapter_received_final", {
+        status: runStatus,
+        textBytes: Buffer.byteLength(text, "utf8"),
+      });
       const toolCalls = (lastAssistant.toolCalls ?? []).map((tc) => ({
         name: tc.name,
         status: "completed" as const,
@@ -164,6 +170,10 @@ export class OpenClawEngineAdapter implements EngineAdapter {
       const durationMs = Date.now() - startedAt;
       if (err instanceof EngineSessionNotFoundError) throw err;
       if (err instanceof EngineError) {
+        input.timeline?.("T12_adapter_received_final", {
+          status: "failed",
+          errorCode: err.code,
+        });
         return {
           sessionId: input.sessionId,
           text: "",

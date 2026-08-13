@@ -19,6 +19,9 @@ export interface EngineSession {
 export interface EngineSendMessageInput {
   sessionId: string;
   message: string;
+  /** Optional server-side timing sink. Stage metadata must remain
+   * non-sensitive (no prompt, response, credentials or token values). */
+  timeline?: (stage: string, metadata?: Readonly<Record<string, unknown>>) => void;
   /** Optional OpenClaw model override (provider/model). Defaults to agent model. */
   model?: string;
   /** Safe, structured runtime context rendered by the provider adapter. */

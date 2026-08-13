@@ -760,9 +760,16 @@ async function getJson<T>(url: string): Promise<T | null> {
   }
 }
 
-async function postJson<T>(url: string, body?: unknown): Promise<T | null> {
+async function postJson<T>(
+  url: string,
+  body?: unknown,
+  options?: { correlationId?: string },
+): Promise<T | null> {
   try {
     const headers = buildHeaders();
+    if (options?.correlationId) {
+      headers.set("x-departify-correlation-id", options.correlationId);
+    }
     if (body !== undefined) {
       headers.set("content-type", "application/json");
     }
@@ -1024,13 +1031,19 @@ export const api = {
     getJson<CommandCenterOpening>(
       `/api/customer-zero/${org}/command-center/opening`,
     ),
-  commandCenterMessage: (org: string, message: string, conversationId?: string) =>
+  commandCenterMessage: (
+    org: string,
+    message: string,
+    conversationId?: string,
+    correlationId?: string,
+  ) =>
     postJson<CommandCenterMessageResult & {
       conversationId?: string;
       error?: MaxActiveConversationsError;
     }>(
       `/api/customer-zero/${org}/command-center/message`,
       conversationId ? { message, conversationId } : { message },
+      correlationId ? { correlationId } : undefined,
     ),
   // Durable conversations (Phase P-B part 15 + 26).
   conversations: (org: string) =>
@@ -1050,10 +1063,16 @@ export const api = {
     getJson<{ conversation: ConversationView; messages: MessageView[] }>(
       `/api/customer-zero/${org}/conversations/${conversationId}`,
     ),
-  sendConversationMessage: (org: string, conversationId: string, message: string) =>
+  sendConversationMessage: (
+    org: string,
+    conversationId: string,
+    message: string,
+    correlationId?: string,
+  ) =>
     postJson<CommandCenterMessageResult & { conversationId: string }>(
       `/api/customer-zero/${org}/conversations/${conversationId}/messages`,
       { message },
+      correlationId ? { correlationId } : undefined,
     ),
   archiveConversation: (org: string, conversationId: string) =>
     postJson<{ ok: boolean }>(
