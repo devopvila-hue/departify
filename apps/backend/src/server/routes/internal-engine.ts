@@ -1141,12 +1141,32 @@ export async function registerInternalEngineRoutes(
         });
       }
       const engine = deps.engine!;
+      const startedMonotonicAt = performance.now();
+      const correlationId = String(
+        request.headers["x-departify-correlation-id"] ?? request.id,
+      );
+      const timeline: Record<string, number> = {};
+      const mark = (stage: string) => {
+        timeline[stage] = Number(
+          (performance.now() - startedMonotonicAt).toFixed(2),
+        );
+      };
+      mark("T1_direct_adapter_request_received");
       const session = await engine.createSession(
         sessionId ? { sessionId } : {},
       );
+      mark("T4_direct_adapter_session_ready");
       const result = await engine.sendMessage({
         sessionId: session.id,
         message,
+        timeline: mark,
+      });
+      mark("T15_direct_adapter_response_finalized");
+      console.info("[engine-direct-trace]", {
+        correlationId,
+        status: result.status,
+        timeline,
+        textBytes: Buffer.byteLength(result.text ?? "", "utf8"),
       });
       return {
         sessionId: session.id,
@@ -1155,6 +1175,8 @@ export async function registerInternalEngineRoutes(
         usage: result.usage,
         toolCalls: result.toolCalls,
         durationMs: result.durationMs,
+        correlationId,
+        timeline,
       };
     },
   );
