@@ -9,13 +9,26 @@ import { describe, expect, it } from "vitest";
 
 import {
   boundedConversationHistory,
+  conversationSearchTerms,
   DEFAULT_CONVERSATION_TITLE,
   deriveConversationTitle,
   InMemoryConversationStore,
+  shouldCompact,
+  splitForCompaction,
+  summarizeOldMessages,
   type ConversationMessage,
 } from "../src/customer-zero/conversation-store.js";
 
 describe("conversation store", () => {
+  it("resolves one canonical conversation and never forks on repeated resolution", async () => {
+    const store = new InMemoryConversationStore();
+    const first = await store.ensureCanonical("orgA");
+    const second = await store.ensureCanonical("orgA", "Otro título");
+
+    expect(second.id).toBe(first.id);
+    expect((await store.listForOrg("orgA")).map((item) => item.id)).toEqual([first.id]);
+  });
+
   it("creates, lists and archives conversations per organization", async () => {
     const store = new InMemoryConversationStore();
     const a = await store.create("orgA", "Primeros 20 clientes");
@@ -87,6 +100,28 @@ describe("conversation store", () => {
     expect(bounded.length).toBe(10);
     expect(bounded[0]?.content).toBe("msg 20");
     expect(bounded[9]?.content).toBe("msg 29");
+  });
+
+  it("keeps raw history while making compaction and retrieval usable", async () => {
+    const store = new InMemoryConversationStore();
+    const conversation = await store.create("orgA", "Marketing");
+    const messages = [
+      ["user", "La campaña de lanzamiento debe centrarse en clínicas privadas."],
+      ["assistant", "Lo tendré en cuenta para el plan de adquisición."],
+      ["user", "Nunca uses descuentos sin mi aprobación."],
+    ] as const;
+    for (const [role, content] of messages) await store.addMessage(conversation.id, role, content);
+    const raw = await store.listMessages("orgA", conversation.id);
+    const { older } = splitForCompaction(raw, 1);
+    expect(shouldCompact(raw.reduce((sum, message) => sum + message.content.length, 0))).toBe(false);
+    expect(summarizeOldMessages(older)).toContain("campaña");
+    await store.saveCompaction("orgA", conversation.id, summarizeOldMessages(older), older.at(-1)!.id, older.length);
+    expect((await store.get("orgA", conversation.id))?.summary).toContain("campaña");
+    expect((await store.listMessages("orgA", conversation.id)).length).toBe(3);
+    expect(conversationSearchTerms("¿te acuerdas de lo que hablamos sobre la campaña?"))
+      .toEqual(["acuerdas", "hablamos", "campaña"]);
+    expect((await store.searchMessages("orgA", conversation.id, "¿te acuerdas de lo que hablamos sobre la campaña?"))[0]?.content)
+      .toContain("campaña");
   });
 
   it("archiving a conversation does not delete company-level tool state", async () => {

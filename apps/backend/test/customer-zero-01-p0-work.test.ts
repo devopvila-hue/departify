@@ -187,6 +187,38 @@ describe("P0 A — work item creation", () => {
   });
 });
 
+describe("restart recovery", () => {
+  it("marks an expired durable task failed instead of leaving it working forever", async () => {
+    const store = new InMemoryDepartmentWorkStore();
+    const task = await store.createTask({
+      organizationId: "org_restart",
+      departmentId: "marketing",
+      objectiveId: null,
+      requestedBy: "elvira",
+      assignedEmployeeId: "agent_content_strategist",
+      title: "Campaña pendiente",
+      summary: "Trabajo interrumpido",
+      capability: "results.publish",
+      toolId: "openclaw.agent",
+      status: "running",
+      statusMessage: "Trabajando",
+      progress: 0,
+      requiredCapabilities: [],
+      startedAt: "2026-08-13T00:00:00.000Z",
+      completedAt: null,
+      resultId: null,
+      errorCode: null,
+      errorMessage: null,
+      timeoutMs: 60_000,
+    });
+
+    expect(await store.recoverExpiredTasks(new Date("2026-08-14T00:00:00.000Z"))).toBe(1);
+    const recovered = await store.getTask(task.id);
+    expect(recovered?.status).toBe("failed");
+    expect(recovered?.errorCode).toBe("TASK_TIMEOUT");
+  });
+});
+
 /* ----------------------------------------------------------------------------
  * B + C + D + L — WorkItem completes, result is created, message injected.
  * ----------------------------------------------------------------------------*/

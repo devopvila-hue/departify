@@ -8,6 +8,7 @@ import { getOrCreateCustomerZeroSession } from "../src/customer-zero/customer-ze
 import {
   compileRuntimeBusinessContext,
   renderRuntimeBusinessContextForEngine,
+  renderRuntimeBusinessContextForNativeEngine,
 } from "../src/customer-zero/department-context-compiler.js";
 import {
   buildRuntimeCapabilityManifest,
@@ -130,6 +131,19 @@ describe("Engine 02 — Runtime Business Context + Capability Bridge", () => {
     expect(rendered).not.toContain("client_secret");
   });
 
+  it("passes the durable compaction summary to native OpenClaw without replaying raw history", () => {
+    const { context } = runtimeContext("org_runtime_compaction");
+    const compacted = compileRuntimeBusinessContext({
+      ...contextToInput(context),
+      conversationSummary: "La campaña aprobada se dirige a clínicas privadas.",
+      recentConversation: [{ role: "user", content: "¿Qué hacemos ahora?" }],
+    });
+    const rendered = renderRuntimeBusinessContextForNativeEngine(compacted);
+    expect(rendered).toContain("clínicas privadas");
+    expect(rendered).toContain("¿Qué hacemos ahora?");
+    expect(rendered).not.toContain("raw historical message");
+  });
+
   it("refreshes authorization when a capability changes between turns", () => {
     const connected = buildRuntimeCapabilityManifest([
       { toolId: "google_calendar", label: "Google Calendar", state: "connected", capabilities: ["calendar.read", "calendar.create"] },
@@ -195,3 +209,15 @@ describe("Engine 02 — Runtime Business Context + Capability Bridge", () => {
     expect(engine.inputs[0]?.businessTools?.some((tool) => tool.name === "departify.email.list")).toBe(true);
   });
 });
+
+function contextToInput(context: ReturnType<typeof compileRuntimeBusinessContext>) {
+  const session = getOrCreateCustomerZeroSession(context.organization.id, { locale: context.identity.locale });
+  return {
+    session,
+    capabilities: context.capabilities,
+    connections: context.connections,
+    tasks: [],
+    results: [],
+    approvals: [],
+  };
+}

@@ -113,6 +113,22 @@ try {
   );
 }
 
+// A marketing delegation currently runs in-process, while its task state is
+// durable. On boot, close only tasks whose own persisted deadline elapsed so
+// a deploy/restart cannot leave the portal showing invented "working" state.
+if (deps.workStore) {
+  try {
+    const recovered = await deps.workStore.recoverExpiredTasks();
+    if (recovered > 0) {
+      console.warn(`[department-work] recovered ${recovered} expired task(s) after boot`);
+    }
+  } catch (cause) {
+    console.warn(
+      `[department-work] boot recovery unavailable: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+  }
+}
+
 // Engine Adapter (Sprint ENGINE 02). Only wired when the gateway URL is
 // configured; otherwise the backend runs without an engine and product routes
 // that need one fail with a clear configuration error.

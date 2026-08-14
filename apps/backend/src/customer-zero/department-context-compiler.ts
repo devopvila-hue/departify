@@ -660,6 +660,10 @@ export interface RuntimeBusinessContextInput {
     readonly role: "user" | "assistant";
     readonly content: string;
   }[];
+  /** Durable summary of compacted history. Raw messages remain in the store
+   * and are retrieved separately; this bounded projection keeps native and
+   * textual engine modes on the same continuity contract. */
+  readonly conversationSummary?: string | null;
   readonly timezone?: string;
 }
 
@@ -757,6 +761,7 @@ export interface RuntimeBusinessContext {
     readonly role: "user" | "assistant";
     readonly content: string;
   }[];
+  readonly conversationSummary?: string | null;
 }
 
 function operationFromSession(
@@ -916,6 +921,7 @@ export function compileRuntimeBusinessContext(
       createdAt: activity.createdAt,
     })),
     recentConversation: (input.recentConversation ?? []).slice(-12),
+    conversationSummary: input.conversationSummary?.trim() || null,
   };
 }
 

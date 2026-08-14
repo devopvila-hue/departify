@@ -9,6 +9,9 @@
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { AuthConfig } from "@departify/config";
+import {
+  conversationSearchTerms,
+} from "./conversation-store.js";
 import type {
   ConversationMessage,
   ConversationRecord,
@@ -236,14 +239,14 @@ export class SupabaseConversationStore implements ConversationStore {
   ): Promise<ConversationMessage[]> {
     const record = await this.get(organizationId, conversationId);
     if (!record) return [];
-    const term = query.toLowerCase().match(/[a-záéíóúñ0-9]{4,}/i)?.[0];
-    if (!term) return [];
+    const terms = conversationSearchTerms(query);
+    if (terms.length === 0) return [];
     const bounded = Math.max(1, Math.min(limit, 20));
     const { data, error } = await this.admin
       .from("conversation_messages")
       .select("*")
       .eq("conversation_id", conversationId)
-      .ilike("content", `%${term}%`)
+      .or(terms.map((term) => `content.ilike.%${term}%`).join(","))
       .order("created_at", { ascending: false })
       .limit(bounded);
     if (error) throw error;

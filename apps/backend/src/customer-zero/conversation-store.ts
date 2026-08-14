@@ -153,6 +153,21 @@ export const COMPACTION_THRESHOLD_CHARS = 8_000;
  *  context. Older ones live in `conversation_messages` only. */
 export const COMPACTION_RECENT_VERBATIM = BOUNDED_HISTORY_LIMIT;
 
+const HISTORY_SEARCH_STOP_WORDS = new Set([
+  "para", "porque", "como", "esta", "este", "estos", "estas", "sobre",
+  "desde", "hace", "tres", "cuatro", "quiero", "puedes", "podemos",
+  "donde", "cuando", "quien", "what", "with", "from", "that", "this",
+]);
+
+/** Extract meaningful bounded terms so a natural-language follow-up can
+ * retrieve older business turns instead of searching only its first word. */
+export function conversationSearchTerms(query: string): string[] {
+  return [...new Set(
+    query.toLocaleLowerCase("es-ES")
+      .match(/[a-záéíóúüñ0-9]{4,}/gi)?.filter((term) => !HISTORY_SEARCH_STOP_WORDS.has(term)) ?? [],
+  )].slice(0, 4);
+}
+
 /** True when the transcript is large enough to compact. */
 export function shouldCompact(totalChars: number): boolean {
   return totalChars > COMPACTION_THRESHOLD_CHARS;
@@ -395,7 +410,7 @@ export class InMemoryConversationStore implements ConversationStore {
   ): Promise<ConversationMessage[]> {
     const record = await this.get(organizationId, conversationId);
     if (!record) return [];
-    const terms = query.toLowerCase().split(/\s+/).filter((term) => term.length >= 4).slice(0, 4);
+    const terms = conversationSearchTerms(query);
     if (terms.length === 0) return [];
     return (this.messages.get(conversationId) ?? [])
       .filter((message) => terms.some((term) => message.content.toLowerCase().includes(term)))

@@ -213,6 +213,36 @@ export class SupabaseDepartmentWorkStore implements DepartmentWorkStore {
     return count ?? 0;
   }
 
+  async recoverExpiredTasks(now = new Date()): Promise<number> {
+    const { data, error } = await this.admin
+      .from("department_tasks")
+      .select("*")
+      .in("status", ["running", "queued"])
+      .limit(1000);
+    if (error) throw error;
+    let recovered = 0;
+    for (const row of data ?? []) {
+      const task = mapTask(row as TaskRow);
+      const start = new Date(task.startedAt ?? task.createdAt).getTime();
+      if (now.getTime() - start <= task.timeoutMs) continue;
+      const message = "La tarea expiró mientras el runtime estaba reiniciándose.";
+      const update = await this.admin
+        .from("department_tasks")
+        .update({
+          status: "failed",
+          status_message: message,
+          completed_at: now.toISOString(),
+          error_code: "TASK_TIMEOUT",
+          error_message: message,
+        })
+        .eq("id", task.id)
+        .in("status", ["running", "queued"]);
+      if (update.error) throw update.error;
+      recovered += 1;
+    }
+    return recovered;
+  }
+
   async feedSince(organizationId: string, since: string): Promise<{
     tasks: readonly DepartmentTask[];
     results: readonly DepartmentResult[];

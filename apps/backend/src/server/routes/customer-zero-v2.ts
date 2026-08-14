@@ -3396,7 +3396,10 @@ async function buildRuntimeBridge(
 ): Promise<RuntimeBridgeInput | null> {
   if (!deps.engine) return null;
   const workStore = workStoreForRoutes();
-  const [connections, tasks, results, companyDna, approvals, activeObjective, recentMessages, retrievedMessages, googleSummaries] = await Promise.all([
+  const [conversation, connections, tasks, results, companyDna, approvals, activeObjective, recentMessages, retrievedMessages, googleSummaries] = await Promise.all([
+    session.state.currentConversationId
+      ? session.conversations.get(session.organizationId, session.state.currentConversationId)
+      : Promise.resolve(null),
     buildCanonicalConnectionViews(session, session.state.locale),
     workStore.listTasksForOrg(session.organizationId, 50),
     workStore.listResultsForOrg(session.organizationId, 20),
@@ -3489,6 +3492,7 @@ async function buildRuntimeBridge(
       role: message.role,
       content: message.content,
     })),
+    conversationSummary: conversation?.summary ?? null,
   });
   // Production runtime sessions are bound to both tenant and authenticated
   // user. Keeping only the organization here would let two members share

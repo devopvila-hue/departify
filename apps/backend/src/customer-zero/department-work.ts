@@ -219,6 +219,9 @@ export interface DepartmentWorkStore {
   getResult(id: string): Promise<DepartmentResult | null>;
   listResultsForOrg(organizationId: string, limit?: number): Promise<DepartmentResult[]>;
   countDashboardsForOrg(organizationId: string): Promise<number>;
+  /** On process boot, close tasks whose durable deadline elapsed while the
+   * in-process executor was unavailable. This makes restart state honest. */
+  recoverExpiredTasks(now?: Date): Promise<number>;
   /** New tasks / status changes since a given iso timestamp. */
   feedSince(organizationId: string, since: string): Promise<{
     tasks: readonly DepartmentTask[];
@@ -305,6 +308,27 @@ export class InMemoryDepartmentWorkStore implements DepartmentWorkStore {
     return [...this.results.values()].filter(
       (result) => result.organizationId === organizationId && result.chart !== undefined,
     ).length;
+  }
+
+  async recoverExpiredTasks(now = new Date()): Promise<number> {
+    let recovered = 0;
+    for (const task of this.tasks.values()) {
+      if (task.status !== "running" && task.status !== "queued") continue;
+      const start = new Date(task.startedAt ?? task.createdAt).getTime();
+      if (now.getTime() - start <= task.timeoutMs) continue;
+      const message = "La tarea expiró mientras el runtime estaba reiniciándose.";
+      this.tasks.set(task.id, {
+        ...task,
+        status: "failed",
+        statusMessage: message,
+        completedAt: now.toISOString(),
+        errorCode: "TASK_TIMEOUT",
+        errorMessage: message,
+      });
+      this.updatedAt.set(`task:${task.id}`, now.toISOString());
+      recovered += 1;
+    }
+    return recovered;
   }
 
   async feedSince(organizationId: string, since: string): Promise<{

@@ -264,6 +264,12 @@ export function ChatRoute() {
               return [...prev, resultEvent(result)];
             });
           }
+          // Results are projected into the canonical conversation by the
+          // backend. Reload that durable projection instead of appending a
+          // second assistant transcript entry from the work feed.
+          if (currentConversationId) {
+            await loadConversation(currentConversationId, { preserveEvents: true });
+          }
         }
         lastSeen = feed.serverTime;
       } catch {
@@ -275,7 +281,7 @@ export function ChatRoute() {
       cancelled = true;
       window.clearInterval(handle);
     };
-  }, [organizationId]);
+  }, [organizationId, currentConversationId, loadConversation]);
 
   async function recoverCompletedTurn(
     organizationId: string,
