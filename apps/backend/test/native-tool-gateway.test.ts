@@ -1,5 +1,14 @@
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import type { EngineAdapter, EngineHealth, EngineHistory, EngineMessageResult, EngineSendMessageInput, EngineSession, EngineToolState, EngineUsage } from "@departify/engine-adapter";
+import type {
+  EngineAdapter,
+  EngineHealth,
+  EngineHistory,
+  EngineMessageResult,
+  EngineSendMessageInput,
+  EngineSession,
+  EngineToolState,
+  EngineUsage,
+} from "@departify/engine-adapter";
 import { buildServer } from "../src/server/server.js";
 import { loadBackendConfig } from "@departify/config";
 import type { FastifyInstance } from "fastify";
@@ -9,14 +18,19 @@ import { MarketingService } from "../src/customer-zero/marketing-service.js";
 
 class GatewayTestEngine implements EngineAdapter {
   readonly inputs: EngineSendMessageInput[] = [];
-  readonly nativePolicies: Array<{ sessionId: string; toolNames: readonly string[] }> = [];
+  readonly nativePolicies: Array<{
+    sessionId: string;
+    toolNames: readonly string[];
+  }> = [];
   nativeSelection = true;
   nativeFailure = false;
   nativeText = "Contexto de empresa consultado.";
   async createSession(input?: { sessionId?: string }): Promise<EngineSession> {
     return { id: input?.sessionId ?? "ceo:test", status: "active" };
   }
-  async sendMessage(input: EngineSendMessageInput): Promise<EngineMessageResult> {
+  async sendMessage(
+    input: EngineSendMessageInput,
+  ): Promise<EngineMessageResult> {
     this.inputs.push(input);
     if (input.nativeBusinessTools && this.nativeFailure) {
       throw new Error("simulated native engine outage");
@@ -30,19 +44,47 @@ class GatewayTestEngine implements EngineAdapter {
         : "ok",
       status: "completed",
       ...(input.nativeBusinessTools && this.nativeSelection
-        ? { toolCalls: [{ name: "departify.company.context", status: "completed" as const }] }
+        ? {
+            toolCalls: [
+              {
+                name: "departify.company.context",
+                status: "completed" as const,
+              },
+            ],
+          }
         : {}),
     };
   }
-  async setNativeToolPolicy(input: { sessionId: string; toolNames: readonly string[] }): Promise<void> {
+  async setNativeToolPolicy(input: {
+    sessionId: string;
+    toolNames: readonly string[];
+  }): Promise<void> {
     this.nativePolicies.push(input);
   }
-  async getSession(): Promise<EngineSession | null> { return null; }
-  async getHistory(sessionId: string): Promise<EngineHistory> { return { sessionId, items: [] }; }
+  async getSession(): Promise<EngineSession | null> {
+    return null;
+  }
+  async getHistory(sessionId: string): Promise<EngineHistory> {
+    return { sessionId, items: [] };
+  }
   async closeSession(): Promise<void> {}
-  async getUsage(): Promise<EngineUsage> { return {}; }
-  async getToolState(): Promise<EngineToolState> { return { available: [], denied: [] }; }
-  async health(): Promise<EngineHealth> { return { healthy: true, ready: true, provider: "test" }; }
+  async getUsage(): Promise<EngineUsage> {
+    return {};
+  }
+  async getToolState(): Promise<EngineToolState> {
+    return { available: [], denied: [] };
+  }
+  async health(): Promise<EngineHealth> {
+    return { healthy: true, ready: true, provider: "test" };
+  }
+}
+
+async function waitFor(check: () => boolean, timeoutMs = 3_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(check()).toBe(true);
 }
 
 describe("native company context gateway", () => {
@@ -109,8 +151,12 @@ describe("native company context gateway", () => {
       organization: { id: orgA },
       company: { name: "Native Context A" },
     });
-    expect(JSON.stringify(response.json())).not.toMatch(/access_token|refresh_token|service_role|authorization/i);
-    expect(JSON.stringify(response.json())).not.toMatch(/Google|Gmail|Hostinger|Mautic|provider/i);
+    expect(JSON.stringify(response.json())).not.toMatch(
+      /access_token|refresh_token|service_role|authorization/i,
+    );
+    expect(JSON.stringify(response.json())).not.toMatch(
+      /Google|Gmail|Hostinger|Mautic|provider/i,
+    );
   });
 
   it("delegates to native Marketing specialist sessions and persists assigned work", async () => {
@@ -147,19 +193,67 @@ describe("native company context gateway", () => {
       },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toMatchObject({ status: "success", operation: "departify.marketing.delegate" });
+    expect(response.json()).toMatchObject({
+      status: "success",
+      operation: "departify.marketing.delegate",
+    });
+    expect(response.json().data).toMatchObject({ acceptedAsync: true });
     expect(response.json().data.delegated).toEqual([
-      expect.objectContaining({ specialistId: "agent_content_strategist", status: "completed" }),
-      expect.objectContaining({ specialistId: "agent_ads_specialist", status: "completed" }),
+      expect.objectContaining({
+        specialistId: "agent_content_strategist",
+        status: "running",
+      }),
+      expect.objectContaining({
+        specialistId: "agent_ads_specialist",
+        status: "running",
+      }),
     ]);
+    await waitFor(
+      () =>
+        engine.inputs.slice(before).filter((input) => input.agentId).length >=
+        3,
+    );
     const specialistInputs = engine.inputs.slice(before);
-    expect(specialistInputs.filter((input) => input.agentId !== "agent_marketing_director").map((input) => input.agentId)).toEqual([
-      "agent_content_strategist",
-      "agent_ads_specialist",
-    ]);
-    expect(specialistInputs.every((input) => input.nativeBusinessTools !== true)).toBe(true);
+    expect(
+      specialistInputs
+        .filter((input) => input.agentId !== "agent_marketing_director")
+        .map((input) => input.agentId),
+    ).toEqual(["agent_content_strategist", "agent_ads_specialist"]);
+    expect(
+      specialistInputs.every((input) => input.nativeBusinessTools !== true),
+    ).toBe(true);
     expect(specialistInputs.at(-1)?.agentId).toBe("agent_marketing_director");
-    expect(response.json().data.synthesis).toBeTruthy();
+    const feed = await server.inject({
+      method: "GET",
+      url: `/api/customer-zero/${organizationId}/work-feed`,
+      headers: { authorization: "Bearer token-a" },
+    });
+    expect(feed.statusCode).toBe(200);
+    expect(feed.json().tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          assignedEmployeeId: "agent_content_strategist",
+          status: "completed",
+        }),
+        expect.objectContaining({
+          assignedEmployeeId: "agent_ads_specialist",
+          status: "completed",
+        }),
+      ]),
+    );
+    expect(feed.json().results.length).toBeGreaterThanOrEqual(2);
+    const conversations = await server.inject({
+      method: "GET",
+      url: `/api/customer-zero/${organizationId}/conversations`,
+      headers: { authorization: "Bearer token-a" },
+    });
+    const conversationId = conversations.json().conversations[0].id as string;
+    const conversation = await server.inject({
+      method: "GET",
+      url: `/api/customer-zero/${organizationId}/conversations/${conversationId}`,
+      headers: { authorization: "Bearer token-a" },
+    });
+    expect(conversation.json().messages.at(-1).role).toBe("assistant");
   });
 
   it("rejects a token from tenant A when its signed claims are changed to tenant B", async () => {
@@ -170,7 +264,13 @@ describe("native company context gateway", () => {
       sessionKey: "departify:ceo:org-a",
     });
     const parts = issued.token.split(".");
-    const forgedPayload = Buffer.from(JSON.stringify({ ...issued.claims, organizationId: "org-b", sessionKey: "departify:ceo:org-b" })).toString("base64url");
+    const forgedPayload = Buffer.from(
+      JSON.stringify({
+        ...issued.claims,
+        organizationId: "org-b",
+        sessionKey: "departify:ceo:org-b",
+      }),
+    ).toString("base64url");
     const forged = `${parts[0]}.${forgedPayload}.${parts[2]}`;
     const response = await server.inject({
       method: "POST",
@@ -184,7 +284,11 @@ describe("native company context gateway", () => {
   it("rejects unknown, unavailable, expired, and wrong-audience native calls", async () => {
     process.env.DEPARTIFY_RUNTIME_TOKEN = secret;
     const org = "native-negative-org";
-    const token = issueScopedRuntimeToken({ secret, organizationId: org, sessionKey: `departify:ceo:${org}` }).token;
+    const token = issueScopedRuntimeToken({
+      secret,
+      organizationId: org,
+      sessionKey: `departify:ceo:${org}`,
+    }).token;
     const headers = { authorization: `Bearer ${token}` };
     const unknown = await server.inject({
       method: "POST",
@@ -200,7 +304,13 @@ describe("native company context gateway", () => {
       payload: { toolName: "departify.email.list", params: { limit: 3 } },
     });
     expect(unavailable.statusCode).toBe(403);
-    const expired = issueScopedRuntimeToken({ secret, organizationId: org, sessionKey: `departify:ceo:${org}`, nowSeconds: 100, ttlSeconds: 1 }).token;
+    const expired = issueScopedRuntimeToken({
+      secret,
+      organizationId: org,
+      sessionKey: `departify:ceo:${org}`,
+      nowSeconds: 100,
+      ttlSeconds: 1,
+    }).token;
     const expiredResponse = await server.inject({
       method: "POST",
       url: "/internal/native-tools/tool",
@@ -208,7 +318,12 @@ describe("native company context gateway", () => {
       payload: { toolName: "departify.company.context", params: {} },
     });
     expect(expiredResponse.statusCode).toBe(401);
-    const wrongAudience = issueScopedRuntimeToken({ secret, organizationId: org, sessionKey: `departify:ceo:${org}`, audience: "wrong-audience" }).token;
+    const wrongAudience = issueScopedRuntimeToken({
+      secret,
+      organizationId: org,
+      sessionKey: `departify:ceo:${org}`,
+      audience: "wrong-audience",
+    }).token;
     const wrongAudienceResponse = await server.inject({
       method: "POST",
       url: "/internal/native-tools/tool",
@@ -219,11 +334,13 @@ describe("native company context gateway", () => {
   });
 
   it("rejects a malformed organization session before a UUID-backed store query", async () => {
-    expect(issueScopedRuntimeToken({
-      secret,
-      organizationId: "engine032fresh20260812",
-      sessionKey: "departify:ceo:engine032fresh20260812",
-    }).claims.organizationId).not.toMatch(/^[0-9a-f-]{36}$/i);
+    expect(
+      issueScopedRuntimeToken({
+        secret,
+        organizationId: "engine032fresh20260812",
+        sessionKey: "departify:ceo:engine032fresh20260812",
+      }).claims.organizationId,
+    ).not.toMatch(/^[0-9a-f-]{36}$/i);
   });
 
   it("routes the real CEO HTTP entrypoint through native mode without textual tools", async () => {
@@ -254,8 +371,12 @@ describe("native company context gateway", () => {
     expect(engine.nativePolicies).toHaveLength(1);
     const trace = engine.inputs.at(-1);
     expect(trace?.nativeBusinessTools).toBe(true);
-    expect(lastInput?.runtimeContext).toContain("DEPARTIFY_NATIVE_RUNTIME_CONTEXT");
-    expect(lastInput?.runtimeContext).not.toContain("DEPARTIFY_BUSINESS_TOOL_DEFINITIONS");
+    expect(lastInput?.runtimeContext).toContain(
+      "DEPARTIFY_NATIVE_RUNTIME_CONTEXT",
+    );
+    expect(lastInput?.runtimeContext).not.toContain(
+      "DEPARTIFY_BUSINESS_TOOL_DEFINITIONS",
+    );
     expect(lastInput?.businessTools).toBeUndefined();
   });
 
@@ -282,7 +403,10 @@ describe("native company context gateway", () => {
       payload: { message: "¿Qué está pasando en mi empresa?" },
     });
     expect(response.statusCode).toBe(502);
-    expect(response.json().error).toMatchObject({ code: "ENGINE_EXECUTION", statusCode: 502 });
+    expect(response.json().error).toMatchObject({
+      code: "ENGINE_EXECUTION",
+      statusCode: 502,
+    });
     expect(engine.inputs.slice(before)).toHaveLength(1);
   });
 
@@ -314,14 +438,18 @@ describe("native company context gateway", () => {
       method: "POST",
       url: `/api/customer-zero/${organizationId}/conversations/${conversationId}/messages`,
       headers: { authorization: "Bearer token-a" },
-      payload: { message: "Hazme un mailing de tres correos para vender Departify." },
+      payload: {
+        message: "Hazme un mailing de tres correos para vender Departify.",
+      },
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().reply).toContain("Contexto de empresa consultado");
     const input = engine.inputs[before];
     expect(input?.nativeBusinessTools).toBe(true);
     expect(input?.sessionId).toBeTruthy();
-    expect(response.json().reply).not.toMatch(/Lo paso a Elvira|Marketing|No puedo afirmar/i);
+    expect(response.json().reply).not.toMatch(
+      /Lo paso a Elvira|Marketing|No puedo afirmar/i,
+    );
   });
 
   it("keeps the legacy Marketing message ingress on the canonical conversation", async () => {
@@ -361,12 +489,16 @@ describe("native company context gateway", () => {
       url: `/api/customer-zero/${organizationId}/conversations/${conversationId}`,
       headers: { authorization: "Bearer token-a" },
     });
-    expect(history.json().messages.at(-1)).toMatchObject({ role: "assistant", content: engine.nativeText });
+    expect(history.json().messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: engine.nativeText,
+    });
   });
 
   it("persists and returns the exact native response across a durable conversation", async () => {
     engine.nativeSelection = false;
-    engine.nativeText = "Mailing preparado:\n1. Presentación\n2. Caso de uso\n3. Cierre";
+    engine.nativeText =
+      "Mailing preparado:\n1. Presentación\n2. Caso de uso\n3. Cierre";
     const start = await server.inject({
       method: "POST",
       url: "/api/customer-zero/start",
@@ -390,7 +522,9 @@ describe("native company context gateway", () => {
       method: "POST",
       url: `/api/customer-zero/${organizationId}/conversations/${conversationId}/messages`,
       headers: { authorization: "Bearer token-a" },
-      payload: { message: "Hazme un mailing de tres correos para vender Departify." },
+      payload: {
+        message: "Hazme un mailing de tres correos para vender Departify.",
+      },
     });
     expect(first.statusCode).toBe(200);
     expect(first.json().reply).toBe(engine.nativeText);
@@ -401,10 +535,17 @@ describe("native company context gateway", () => {
       url: `/api/customer-zero/${organizationId}/conversations/${conversationId}`,
       headers: { authorization: "Bearer token-a" },
     });
-    const messages = history.json().messages as Array<{ role: string; content: string }>;
-    expect(messages.at(-1)).toMatchObject({ role: "assistant", content: engine.nativeText });
+    const messages = history.json().messages as Array<{
+      role: string;
+      content: string;
+    }>;
+    expect(messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: engine.nativeText,
+    });
 
-    engine.nativeText = "Mailing revisado: el segundo correo queda más corto y directo.";
+    engine.nativeText =
+      "Mailing revisado: el segundo correo queda más corto y directo.";
     const second = await server.inject({
       method: "POST",
       url: `/api/customer-zero/${organizationId}/conversations/${conversationId}/messages`,
@@ -434,10 +575,15 @@ describe("native company context gateway", () => {
       method: "POST",
       url: `/api/customer-zero/${organizationId}/command-center/message`,
       headers: { authorization: "Bearer token-a" },
-      payload: { message: "Hazme un mailing de tres correos para vender Departify." },
+      payload: {
+        message: "Hazme un mailing de tres correos para vender Departify.",
+      },
     });
     expect(response.statusCode).toBe(502);
-    expect(response.json().error).toMatchObject({ code: "ENGINE_EXECUTION", statusCode: 502 });
+    expect(response.json().error).toMatchObject({
+      code: "ENGINE_EXECUTION",
+      statusCode: 502,
+    });
     engine.nativeText = "Contexto de empresa consultado.";
   });
 
@@ -506,11 +652,15 @@ describe("native company context gateway", () => {
       method: "POST",
       url: `/api/customer-zero/${organizationId}/command-center/message`,
       headers: { authorization: "Bearer token-a" },
-      payload: { message: "Hazme un mailing de tres correos para vender Departify." },
+      payload: {
+        message: "Hazme un mailing de tres correos para vender Departify.",
+      },
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().reply).toContain("Contexto de empresa consultado");
-    expect(response.json().reply).not.toMatch(/Elvira|Marketing|No puedo afirmar/i);
+    expect(response.json().reply).not.toMatch(
+      /Elvira|Marketing|No puedo afirmar/i,
+    );
     expect(engine.inputs.at(-1)?.nativeBusinessTools).toBe(true);
     expect(engine.nativePolicies.length).toBeGreaterThan(0);
   });
@@ -534,7 +684,10 @@ describe("native company context gateway", () => {
       method: "POST",
       url: `/api/customer-zero/${organizationId}/command-center/message`,
       headers: { authorization: "Bearer token-a" },
-      payload: { message: "Quiero crear listas con mis contactos pero no sé cómo categorizarlos." },
+      payload: {
+        message:
+          "Quiero crear listas con mis contactos pero no sé cómo categorizarlos.",
+      },
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().reply).toContain("Contexto de empresa consultado");
@@ -562,7 +715,10 @@ describe("native company context gateway", () => {
       method: "POST",
       url: `/api/customer-zero/${organizationId}/command-center/message`,
       headers: { authorization: "Bearer token-a" },
-      payload: { message: "Quiero crear listas con mis contactos pero no sé cómo categorizarlos." },
+      payload: {
+        message:
+          "Quiero crear listas con mis contactos pero no sé cómo categorizarlos.",
+      },
     });
     const second = await server.inject({
       method: "POST",
@@ -575,7 +731,9 @@ describe("native company context gateway", () => {
     const turnInputs = engine.inputs.slice(beforeInputs);
     expect(turnInputs).toHaveLength(2);
     expect(turnInputs[0]?.sessionId).toBe(turnInputs[1]?.sessionId);
-    expect(turnInputs.every((input) => input.nativeBusinessTools === true)).toBe(true);
+    expect(
+      turnInputs.every((input) => input.nativeBusinessTools === true),
+    ).toBe(true);
     expect(second.json().reply).not.toMatch(/Lo paso a Elvira|Marketing/i);
   });
 
@@ -602,7 +760,9 @@ describe("native company context gateway", () => {
     expect(response.statusCode).toBe(200);
     const input = offEngine.inputs.at(-1);
     expect(input?.nativeBusinessTools).toBeUndefined();
-    expect(input?.runtimeContext).toContain("DEPARTIFY_RUNTIME_BUSINESS_CONTEXT");
+    expect(input?.runtimeContext).toContain(
+      "DEPARTIFY_RUNTIME_BUSINESS_CONTEXT",
+    );
     expect(input?.businessTools).toBeDefined();
   });
 });
