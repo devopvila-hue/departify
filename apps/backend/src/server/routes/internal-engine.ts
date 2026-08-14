@@ -63,7 +63,11 @@ interface NativeMarketingDelegationItem extends NativeMarketingDelegationTask {
   readonly output?: string;
 }
 
-const MARKETING_BACKGROUND_TIMEOUT_MS = 60_000;
+// A production trace showed a valid Advertising specialist run completing at
+// 81.9s while the Adapter's request budget is 120s. Keep the background work
+// bounded, but do not classify a completed specialist as unavailable at 60s.
+// This remains outside the CEO response critical path.
+const MARKETING_BACKGROUND_TIMEOUT_MS = 120_000;
 
 function withMarketingDeadline<T>(
   promise: Promise<T>,
