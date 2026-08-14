@@ -180,6 +180,22 @@ describe("canonical Marketing roster projections", () => {
     expect(employees.filter((employee) => employee.status === "trabajando")).toHaveLength(1);
   });
 
+  it("reconstructs the roster from a real durable assignment when DNA is absent", async () => {
+    const service = new MarketingService({
+      engine: { sendMessage: async () => ({ status: "completed", text: "" }) } as never,
+      companyDna: new InMemoryCompanyDnaStore(),
+      workStore: buildWorkStore([activeTask]),
+    });
+
+    const employees = await service.getDigitalEmployees(organizationId);
+
+    expect(employees.map((employee) => employee.id)).toEqual([
+      "agent_content_strategist",
+      "agent_social_media_manager",
+      "agent_ads_specialist",
+    ]);
+  });
+
   it("keeps company employee counters aligned with cards when a legacy task has no assignment", async () => {
     const companyDna = new InMemoryCompanyDnaStore();
     await companyDna.upsert({

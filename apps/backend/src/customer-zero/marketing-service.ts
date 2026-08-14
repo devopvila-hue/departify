@@ -458,9 +458,29 @@ export class MarketingService {
     // only as a test/dev fallback when no durable store is injected.
     if (this.companyDna) {
       const dna = await this.companyDna.get(organizationId);
-      return dna?.departmentProvisionedAt
-        ? { employees: MARKETING_ROSTER.map((employee) => employee.id) }
-        : null;
+      if (dna?.departmentProvisionedAt) {
+        return { employees: MARKETING_ROSTER.map((employee) => employee.id) };
+      }
+
+      // A native OpenClaw delegation is also a durable provisioning signal.
+      // Older/test organizations can have real department tasks without a
+      // Company DNA row (for example, before onboarding was persisted). Do
+      // not hide that already-provisioned workforce after a restart, while
+      // still keeping fresh organizations empty until actual work exists.
+      if (this.workStore) {
+        const tasks = await this.workStore.listTasksForOrg(organizationId, 100);
+        const hasMarketingAssignment = tasks.some(
+          (task) =>
+            task.departmentId === "marketing" &&
+            MARKETING_ROSTER.some(
+              (employee) => employee.id === task.assignedEmployeeId,
+            ),
+        );
+        if (hasMarketingAssignment) {
+          return { employees: MARKETING_ROSTER.map((employee) => employee.id) };
+        }
+      }
+      return null;
     }
     const session = (await import("./customer-zero-session.js")).getCustomerZeroSession(
       organizationId,
