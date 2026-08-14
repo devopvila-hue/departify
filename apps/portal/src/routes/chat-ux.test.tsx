@@ -18,7 +18,7 @@ import { render, screen, waitFor, fireEvent, act } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { OrgProvider } from "@/app/org-context";
+import { OrgProvider, useOrg } from "@/app/org-context";
 import { ChatRoute } from "@/routes/ChatRoute";
 
 const openingEs = {
@@ -162,6 +162,15 @@ function renderChat() {
         <ChatRoute />
       </OrgProvider>
     </MemoryRouter>,
+  );
+}
+
+function OrgSwitcher() {
+  const { setOrganizationId } = useOrg();
+  return (
+    <button type="button" onClick={() => setOrganizationId("org_sun")}>
+      Cambiar empresa
+    </button>
   );
 }
 
@@ -367,5 +376,89 @@ describe("Central Chat UX P0 — chat interaction", () => {
     expect(screen.queryByRole("button", { name: /conversaciones/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /nueva conversación/i })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Conversación única")).toHaveTextContent("Conversación continua");
+  });
+
+  it("S7. an older organization load cannot overwrite the new organization transcript", async () => {
+    let releaseMoonOpening: ((value: Response) => void) | undefined;
+    const moonOpening = new Promise<Response>((resolve) => {
+      releaseMoonOpening = resolve;
+    });
+    const sunOpening = {
+      organizationId: "org_sun",
+      events: [],
+    };
+    const sunConversations = {
+      organizationId: "org_sun",
+      conversations: [
+        {
+          id: "sun-conv",
+          organizationId: "org_sun",
+          title: "Empresa Sol",
+          status: "active" as const,
+          createdAt: "2026-08-11T00:00:00.000Z",
+          updatedAt: "2026-08-11T00:00:00.000Z",
+        },
+      ],
+      activeCount: 1,
+      maxActive: 1,
+    };
+    const sunDetail = {
+      conversation: sunConversations.conversations[0],
+      messages: [
+        {
+          id: "sun-message",
+          conversationId: "sun-conv",
+          role: "assistant" as const,
+          content: "Historial de Empresa Sol",
+          createdAt: "2026-08-11T09:00:00.000Z",
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        const target = String(url);
+        if (target.includes("org_moon/command-center/opening")) return moonOpening;
+        if (target.includes("org_sun/command-center/opening")) {
+          return Promise.resolve({ ok: true, status: 200, json: async () => sunOpening } as Response);
+        }
+        if (target.includes("org_sun/conversations/sun-conv")) {
+          return Promise.resolve({ ok: true, status: 200, json: async () => sunDetail } as Response);
+        }
+        if (target.includes("org_sun/conversations")) {
+          return Promise.resolve({ ok: true, status: 200, json: async () => sunConversations } as Response);
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({}) } as Response);
+      }),
+    );
+
+    window.localStorage.setItem(
+      "departify_customer_zero",
+      JSON.stringify({ organizationId: "org_moon" }),
+    );
+    render(
+      <MemoryRouter initialEntries={["/chat"]}>
+        <OrgProvider>
+          <OrgSwitcher />
+          <ChatRoute />
+        </OrgProvider>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /cambiar empresa/i }));
+    expect(await screen.findByText("Historial de Empresa Sol")).toBeInTheDocument();
+
+    releaseMoonOpening?.({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        organizationId: "org_moon",
+        events: [{ kind: "transcript", role: "assistant", content: "Historial antiguo" }],
+      }),
+    } as Response);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByText("Historial antiguo")).not.toBeInTheDocument();
   });
 });

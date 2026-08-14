@@ -59,6 +59,8 @@ export function ChatRoute() {
   const [error, setError] = useState<string | null>(null);
   const [processStatus, setProcessStatus] = useState<string | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  /** Invalidates in-flight loads/turns when the authorized organization changes. */
+  const loadGenerationRef = useRef(0);
   const [followRequested, setFollowRequested] = useState(false);
   const [followingLatest, setFollowingLatest] = useState(true);
 
@@ -68,9 +70,13 @@ export function ChatRoute() {
   }, [location.search]);
 
   const loadConversation = useCallback(
-    async (conversationId: string, options?: { preserveEvents?: boolean }) => {
+    async (
+      conversationId: string,
+      options?: { preserveEvents?: boolean; generation?: number },
+    ) => {
+      const generation = options?.generation ?? loadGenerationRef.current;
       const data = await api.conversation(organizationId!, conversationId);
-      if (!data) return;
+      if (!data || generation !== loadGenerationRef.current) return;
       if (!options?.preserveEvents) setEvents([]);
       setTranscript(
         data.messages.map((message: MessageView) => ({
@@ -93,33 +99,52 @@ export function ChatRoute() {
 
   const load = useCallback(async () => {
     if (!organizationId) return;
+    const generation = ++loadGenerationRef.current;
+    // Do not leave the previous tenant's transcript visible while the new
+    // tenant is resolving its canonical conversation.
+    setTranscript([]);
+    setEvents([]);
+    setCurrentConversationId(null);
+    setCurrentSummary(null);
+    setHasOlderMessages(false);
+    setOlderCursor(null);
+    setOpening(true);
+    setError(null);
+    setBusy(false);
     const openingData = await api.commandCenterOpening(organizationId);
+    if (generation !== loadGenerationRef.current) return;
     if (openingData) setEvents(filterContextualEvents(openingData.events));
 
     const data = await api.conversations(organizationId);
+    if (generation !== loadGenerationRef.current) return;
     const first = data?.conversations?.[0];
     if (first) {
-      await loadConversation(first.id, { preserveEvents: true });
+      await loadConversation(first.id, { preserveEvents: true, generation });
     } else {
+      if (generation !== loadGenerationRef.current) return;
       setTranscript([]);
       setCurrentConversationId(null);
       setCurrentSummary(null);
     }
+    if (generation !== loadGenerationRef.current) return;
     setOpening(false);
   }, [organizationId, loadConversation]);
 
   const loadOlderMessages = useCallback(async () => {
     if (!organizationId || !currentConversationId || !olderCursor || loadingOlder) return;
+    const generation = loadGenerationRef.current;
+    const requestedOrganizationId = organizationId;
+    const requestedConversationId = currentConversationId;
     const node = scrollerRef.current;
     const previousHeight = node?.scrollHeight ?? 0;
     setLoadingOlder(true);
     try {
       const page = await api.conversation(
-        organizationId,
-        currentConversationId,
+        requestedOrganizationId,
+        requestedConversationId,
         olderCursor,
       );
-      if (!page) return;
+      if (!page || generation !== loadGenerationRef.current) return;
       const older = page.messages.map((message: MessageView) => ({
         role: message.role,
         content: message.content,
@@ -131,7 +156,7 @@ export function ChatRoute() {
         if (node) node.scrollTop += node.scrollHeight - previousHeight;
       });
     } finally {
-      setLoadingOlder(false);
+      if (generation === loadGenerationRef.current) setLoadingOlder(false);
     }
   }, [organizationId, currentConversationId, olderCursor, loadingOlder]);
 
@@ -258,6 +283,7 @@ export function ChatRoute() {
     userMessage: string,
     correlationId: string,
   ): Promise<boolean> {
+    const generation = loadGenerationRef.current;
     const candidates = expectedConversationId
       ? [expectedConversationId]
       : [((await api.conversations(organizationId))?.conversations ?? [])[0]?.id].filter(
@@ -265,6 +291,7 @@ export function ChatRoute() {
         );
     for (const conversationId of candidates) {
       const data = await api.conversation(organizationId, conversationId);
+      if (generation !== loadGenerationRef.current) return false;
       const messages = data?.messages ?? [];
       const last = messages.at(-1);
       const previous = messages.at(-2);
@@ -304,6 +331,7 @@ export function ChatRoute() {
         ? crypto.randomUUID()
         : `chat_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const clientStartedAt = performance.now();
+    const generation = loadGenerationRef.current;
     console.info("[chat-timeline]", {
       correlationId,
       stage: "T0_portal_submit",
@@ -333,6 +361,7 @@ export function ChatRoute() {
           correlationId,
         )
       : await api.commandCenterMessage(organizationId, value, undefined, correlationId);
+    if (generation !== loadGenerationRef.current) return;
     setBusy(false);
     setProcessStatus(null);
     // If the transport failed after the backend persisted a valid pair, the
