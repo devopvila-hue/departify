@@ -39,6 +39,7 @@ import {
   buildCeoRuntimeForRequest,
   createCeoTurnTrace,
   emitCeoTurnTrace,
+  ceoTurnResponseStatus,
   emitCeoTurnFailureTrace,
   traceRequestReceived,
   traceStage,
@@ -290,6 +291,11 @@ export async function registerConversationRoutes(
             },
           },
           404: { type: "object", properties: { error: { type: "string" } } },
+          400: { type: "object", additionalProperties: true },
+          429: { type: "object", additionalProperties: true },
+          502: { type: "object", additionalProperties: true },
+          503: { type: "object", additionalProperties: true },
+          504: { type: "object", additionalProperties: true },
           409: {
             type: "object",
             required: ["error"],
@@ -421,10 +427,25 @@ export async function registerConversationRoutes(
       }
 
       traceStage(trace, "T15_backend_response_finalization", {
-        responseStatus: 200,
+        responseStatus: ceoTurnResponseStatus(trace),
         finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
       });
       emitCeoTurnTrace(session, trace, result);
+      const responseStatus = ceoTurnResponseStatus(trace);
+      if (responseStatus >= 400) {
+        const errorCode = trace.engineErrorCode ?? "ENGINE_EXECUTION";
+        return reply
+          .header("x-departify-correlation-id", correlationId)
+          .code(responseStatus)
+          .send({
+            error: {
+              code: errorCode,
+              message: "No he podido completar esa respuesta porque el motor de negocio ha fallado. Vuelve a intentarlo.",
+              requestId: correlationId,
+              statusCode: responseStatus,
+            },
+          });
+      }
       return reply
         .header("x-departify-correlation-id", correlationId)
         .code(200)

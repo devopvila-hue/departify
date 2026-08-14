@@ -3364,7 +3364,7 @@ function traceResponseStatus(errorCode: string | null): number {
 
 type CeoTurnResponseStatus = 200 | 400 | 404 | 409 | 429 | 502 | 503 | 504;
 
-function ceoTurnResponseStatus(trace: CeoTurnTraceState): CeoTurnResponseStatus {
+export function ceoTurnResponseStatus(trace: CeoTurnTraceState): CeoTurnResponseStatus {
   if (
     (trace.openclawStatus === "failed" || trace.openclawStatus === "error") &&
     !trace.nativeResponseTerminal
