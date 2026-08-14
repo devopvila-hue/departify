@@ -171,92 +171,95 @@ async function runNativeMarketingDelegation(input: {
   deps: ServerDeps;
 }): Promise<void> {
   if (!input.deps.engine) throw new Error("engine_unavailable");
+  const engine = input.deps.engine;
   const workStore = workStoreForRoutes();
-  const completed: NativeMarketingDelegationItem[] = [];
-
-  for (const assignment of input.tasks) {
-    try {
-      const specialistSessionId = `employee:${input.organizationId}:${input.userId}:${assignment.specialistId}`;
-      const existing = await input.deps.engine.getSession(
-        specialistSessionId,
-        assignment.specialistId,
-      );
-      const specialistSession =
-        existing ??
-        (await input.deps.engine.createSession({
-          sessionId: specialistSessionId,
-          agentId: assignment.specialistId,
-        }));
-      const specialistPrompt = [
-        `Elvira te delega este objetivo de Marketing: ${input.objective}`,
-        input.context
-          ? `Contexto verificado de la empresa: ${input.context}`
-          : "",
-        "Entrega trabajo accionable para que Elvira lo sintetice. Distingue recomendaciones de acciones externas. No inventes conexiones, publicaciones, gasto ni resultados de proveedores.",
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-      const specialistResult = await input.deps.engine.sendMessage({
-        sessionId: specialistSession.id,
-        agentId: assignment.specialistId,
-        message: specialistPrompt,
-      });
-      if (
-        specialistResult.status !== "completed" ||
-        !specialistResult.text.trim()
-      ) {
-        throw new Error("specialist_generation_failed");
-      }
-      const output = specialistResult.text.trim().slice(0, 16_000);
-      const storedResult = await workStore.createResult({
-        organizationId: input.organizationId,
-        departmentId: "marketing",
-        relatedWorkItemId: assignment.taskId,
-        title: `${assignment.label}: resultado de trabajo`,
-        summary: output.slice(0, 400),
-        content: output,
-        data: {
-          specialistId: assignment.specialistId,
-          objective: input.objective.slice(0, 500),
-        },
-        source: "OpenClaw native Marketing workforce",
-        producedByCapability: "results.publish",
-      });
-      await workStore.updateTask(assignment.taskId, {
-        status: "completed",
-        statusMessage: `${assignment.label} ha terminado el trabajo delegado por Elvira.`,
-        progress: 1,
-        completedAt: new Date().toISOString(),
-        resultId: storedResult.id,
-      });
-      completed.push({
-        ...assignment,
-        status: "completed",
-        resultId: storedResult.id,
-        output,
-      });
-    } catch (cause) {
-      const errorCode =
-        cause instanceof Error &&
-        cause.message === "specialist_generation_failed"
-          ? "generation_failed"
-          : "specialist_unavailable";
-      try {
-        await workStore.updateTask(assignment.taskId, {
-          status: "failed",
-          statusMessage: `${assignment.label} no ha podido completar el trabajo delegado.`,
-          progress: 0,
-          completedAt: new Date().toISOString(),
-          errorCode,
-          errorMessage: errorCode,
-        });
-      } catch {
-        // The task was already durable; leave the original state intact if a
-        // secondary failure prevents the terminal update.
-      }
-      completed.push({ ...assignment, status: "failed" });
-    }
-  }
+  const completed = await Promise.all(
+    input.tasks.map(
+      async (assignment): Promise<NativeMarketingDelegationItem> => {
+        try {
+          const specialistSessionId = `employee:${input.organizationId}:${input.userId}:${assignment.specialistId}`;
+          const existing = await engine.getSession(
+            specialistSessionId,
+            assignment.specialistId,
+          );
+          const specialistSession =
+            existing ??
+            (await engine.createSession({
+              sessionId: specialistSessionId,
+              agentId: assignment.specialistId,
+            }));
+          const specialistPrompt = [
+            `Elvira te delega este objetivo de Marketing: ${input.objective}`,
+            input.context
+              ? `Contexto verificado de la empresa: ${input.context}`
+              : "",
+            "Entrega trabajo accionable para que Elvira lo sintetice en un máximo de 600 palabras. Usa viñetas. Distingue recomendaciones de acciones externas. No inventes conexiones, publicaciones, gasto ni resultados de proveedores.",
+          ]
+            .filter(Boolean)
+            .join("\n\n");
+          const specialistResult = await engine.sendMessage({
+            sessionId: specialistSession.id,
+            agentId: assignment.specialistId,
+            message: specialistPrompt,
+          });
+          if (
+            specialistResult.status !== "completed" ||
+            !specialistResult.text.trim()
+          ) {
+            throw new Error("specialist_generation_failed");
+          }
+          const output = specialistResult.text.trim().slice(0, 16_000);
+          const storedResult = await workStore.createResult({
+            organizationId: input.organizationId,
+            departmentId: "marketing",
+            relatedWorkItemId: assignment.taskId,
+            title: `${assignment.label}: resultado de trabajo`,
+            summary: output.slice(0, 400),
+            content: output,
+            data: {
+              specialistId: assignment.specialistId,
+              objective: input.objective.slice(0, 500),
+            },
+            source: "OpenClaw native Marketing workforce",
+            producedByCapability: "results.publish",
+          });
+          await workStore.updateTask(assignment.taskId, {
+            status: "completed",
+            statusMessage: `${assignment.label} ha terminado el trabajo delegado por Elvira.`,
+            progress: 1,
+            completedAt: new Date().toISOString(),
+            resultId: storedResult.id,
+          });
+          return {
+            ...assignment,
+            status: "completed",
+            resultId: storedResult.id,
+            output,
+          };
+        } catch (cause) {
+          const errorCode =
+            cause instanceof Error &&
+            cause.message === "specialist_generation_failed"
+              ? "generation_failed"
+              : "specialist_unavailable";
+          try {
+            await workStore.updateTask(assignment.taskId, {
+              status: "failed",
+              statusMessage: `${assignment.label} no ha podido completar el trabajo delegado.`,
+              progress: 0,
+              completedAt: new Date().toISOString(),
+              errorCode,
+              errorMessage: errorCode,
+            });
+          } catch {
+            // The task was already durable; leave the original state intact if a
+            // secondary failure prevents the terminal update.
+          }
+          return { ...assignment, status: "failed" };
+        }
+      },
+    ),
+  );
 
   const finished = completed.filter(
     (
@@ -270,13 +273,13 @@ async function runNativeMarketingDelegation(input: {
   if (finished.length > 0) {
     const elviraSessionId = `employee:${input.organizationId}:${input.userId}:agent_marketing_director`;
     try {
-      const existingElvira = await input.deps.engine.getSession(
+      const existingElvira = await engine.getSession(
         elviraSessionId,
         "agent_marketing_director",
       );
       const elviraSession =
         existingElvira ??
-        (await input.deps.engine.createSession({
+        (await engine.createSession({
           sessionId: elviraSessionId,
           agentId: "agent_marketing_director",
         }));
@@ -284,7 +287,7 @@ async function runNativeMarketingDelegation(input: {
         .map((assignment) => `${assignment.label}:\n${assignment.output}`)
         .join("\n\n")
         .slice(0, 24_000);
-      const elviraResult = await input.deps.engine.sendMessage({
+      const elviraResult = await engine.sendMessage({
         sessionId: elviraSession.id,
         agentId: "agent_marketing_director",
         message: [

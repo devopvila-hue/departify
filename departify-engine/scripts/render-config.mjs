@@ -71,8 +71,17 @@ const modelProvider = optional("OPENCLAW_MODEL_PROVIDER", "google-vertex");
 const modelName = optional("OPENCLAW_MODEL_NAME", "gemini-2.5-flash");
 const modelBaseUrl = optional("OPENCLAW_MODEL_BASE_URL", "");
 const modelApiKey = optional("OPENCLAW_MODEL_API_KEY", "");
-const fallbackProvider = optional("OPENCLAW_FALLBACK_PROVIDER", "ollama");
-const fallbackModel = optional("OPENCLAW_FALLBACK_MODEL", "qwen3:0.6b");
+// Railway does not provide host.docker.internal/Ollama. An explicit
+// disabled/none/off value removes the fallback instead of silently routing a
+// production run to a provider that cannot exist in that environment.
+const fallbackSetting = process.env.OPENCLAW_FALLBACK_PROVIDER;
+const fallbackDisabled = /^(disabled|none|off)$/i.test(fallbackSetting ?? "");
+const fallbackProvider = fallbackDisabled
+  ? ""
+  : optional("OPENCLAW_FALLBACK_PROVIDER", "ollama");
+const fallbackModel = fallbackProvider
+  ? optional("OPENCLAW_FALLBACK_MODEL", "qwen3:0.6b")
+  : "";
 const fallbackBaseUrl = optional(
   "OPENCLAW_FALLBACK_BASE_URL",
   "http://host.docker.internal:11434/v1",
@@ -107,7 +116,9 @@ const founderParity = runtimeMode === "founder-development";
 const departifyApiUrl = optional("DEPARTIFY_API_URL", "");
 const departifyRuntimeToken = optional("DEPARTIFY_RUNTIME_TOKEN", "");
 if (enableNativeBusinessTools && (!departifyApiUrl || !departifyRuntimeToken)) {
-  console.error("[render-config] native business tools require DEPARTIFY_API_URL and DEPARTIFY_RUNTIME_TOKEN");
+  console.error(
+    "[render-config] native business tools require DEPARTIFY_API_URL and DEPARTIFY_RUNTIME_TOKEN",
+  );
   process.exit(1);
 }
 const maxTokens = int("OPENCLAW_MAX_TOKENS", 2048);
@@ -206,7 +217,8 @@ const buildProviders = () => {
         fallbackProvider === "ollama"
           ? fallbackBaseUrl || "http://host.docker.internal:11434/v1"
           : fallbackBaseUrl,
-        fallbackApiKey || (fallbackProvider === "ollama" ? "ollama" : undefined),
+        fallbackApiKey ||
+          (fallbackProvider === "ollama" ? "ollama" : undefined),
       );
     }
   }
@@ -342,8 +354,8 @@ const config = {
                 "departify.tasks.list",
                 "departify.approvals.list",
                 "departify.results.list",
-              "departify.work.deliverable",
-              "departify.marketing.delegate",
+                "departify.work.deliverable",
+                "departify.marketing.delegate",
               ]
             : []),
           ...(execMode === "test" ? ["exec", "process", "read"] : []),
@@ -412,7 +424,9 @@ const config = {
         ...(enableAdminHttpRpc || enableNativeBusinessTools
           ? {
               entries: {
-                ...(enableAdminHttpRpc ? { "admin-http-rpc": { enabled: true } } : {}),
+                ...(enableAdminHttpRpc
+                  ? { "admin-http-rpc": { enabled: true } }
+                  : {}),
                 ...(enableNativeBusinessTools
                   ? { "departify-native-tools": { enabled: true } }
                   : {}),
@@ -436,7 +450,9 @@ const config = {
         ...(enableNativeBusinessTools
           ? {
               entries: {
-                ...(enableAdminHttpRpc ? { "admin-http-rpc": { enabled: true } } : {}),
+                ...(enableAdminHttpRpc
+                  ? { "admin-http-rpc": { enabled: true } }
+                  : {}),
                 "departify-native-tools": { enabled: true },
               },
             }
@@ -504,16 +520,28 @@ await writeSafely(
 );
 
 if (!founderParity) {
-  await writeSafely(join(workspaceDir, "AGENTS.md"), "# Departify Engine Workspace\n\nInternal workspace for the Departify engine. Not visible to the customer.\n", 0o644);
-await writeSafely(join(workspaceDir, "MEMORY.md"), "", 0o644);
-await writeSafely(join(workspaceDir, "IDENTITY.md"), "# Engine Identity\n\nEngine: Departify internal runtime (OpenClaw Gateway).\nNot customer-facing.\n", 0o644);
-await writeSafely(
-  join(agentWorkspace, "AGENTS.md"),
-  "# Agent: main\n\nDefault OpenClaw agent used by Departify tests and (later) the Engine Adapter.\n",
-  0o644,
-);
-await writeSafely(join(agentWorkspace, "MEMORY.md"), "", 0o644);
-  await writeSafely(join(agentWorkspace, "IDENTITY.md"), "# Agent Identity\n\nInternal. Not exposed to the Departify customer.\n", 0o644);
+  await writeSafely(
+    join(workspaceDir, "AGENTS.md"),
+    "# Departify Engine Workspace\n\nInternal workspace for the Departify engine. Not visible to the customer.\n",
+    0o644,
+  );
+  await writeSafely(join(workspaceDir, "MEMORY.md"), "", 0o644);
+  await writeSafely(
+    join(workspaceDir, "IDENTITY.md"),
+    "# Engine Identity\n\nEngine: Departify internal runtime (OpenClaw Gateway).\nNot customer-facing.\n",
+    0o644,
+  );
+  await writeSafely(
+    join(agentWorkspace, "AGENTS.md"),
+    "# Agent: main\n\nDefault OpenClaw agent used by Departify tests and (later) the Engine Adapter.\n",
+    0o644,
+  );
+  await writeSafely(join(agentWorkspace, "MEMORY.md"), "", 0o644);
+  await writeSafely(
+    join(agentWorkspace, "IDENTITY.md"),
+    "# Agent Identity\n\nInternal. Not exposed to the Departify customer.\n",
+    0o644,
+  );
 } else {
   await mkdir(agentWorkspace, { recursive: true });
 }
@@ -523,17 +551,25 @@ await writeSafely(join(agentWorkspace, "MEMORY.md"), "", 0o644);
 // business data and credentials are supplied by Departify at runtime.
 const workforceInstructions = {
   main: "# Agent: main\n\nYou are the internal CEO-facing Departify agent. When the request is a Marketing business objective, coordinate with Elvira through Departify's native marketing delegation capability. Never expose internal agent ids or runtime details.\n",
-  agent_marketing_director: "# Agent: agent_marketing_director\n\nYou are Elvira, Jefa de Marketing. Diagnose the CEO's objective, choose the right specialists, and synthesize their results. Use Departify's native delegation capability when a specialist is needed. Never expose internal runtime details.\n",
-  agent_content_strategist: "# Agent: agent_content_strategist\n\nYou are the Marketing Content Specialist. Produce practical content strategy, copy, scripts, editorial calendars, and YouTube preparation. Return concise, actionable work to Elvira. Do not claim external publishing without an authorized connection.\n",
-  agent_social_media_manager: "# Agent: agent_social_media_manager\n\nYou are the Marketing Social Media Specialist. Produce organic social strategy, channel adaptations, publishing plans, and Meta Business preparation. Separate recommendations from actions and never claim a post was published without authorization.\n",
-  agent_ads_specialist: "# Agent: agent_ads_specialist\n\nYou are the Marketing Advertising Specialist. Produce paid acquisition strategy, campaign structure, audience hypotheses, creative requirements, and measurement plans. Treat spend and campaign mutations as approval-sensitive.\n",
+  agent_marketing_director:
+    "# Agent: agent_marketing_director\n\nYou are Elvira, Jefa de Marketing. Diagnose the CEO's objective, choose the right specialists, and synthesize their results. Use Departify's native delegation capability when a specialist is needed. Never expose internal runtime details.\n",
+  agent_content_strategist:
+    "# Agent: agent_content_strategist\n\nYou are the Marketing Content Specialist. Produce practical content strategy, copy, scripts, editorial calendars, and YouTube preparation. Return concise, actionable work to Elvira. Do not claim external publishing without an authorized connection.\n",
+  agent_social_media_manager:
+    "# Agent: agent_social_media_manager\n\nYou are the Marketing Social Media Specialist. Produce organic social strategy, channel adaptations, publishing plans, and Meta Business preparation. Separate recommendations from actions and never claim a post was published without authorization.\n",
+  agent_ads_specialist:
+    "# Agent: agent_ads_specialist\n\nYou are the Marketing Advertising Specialist. Produce paid acquisition strategy, campaign structure, audience hypotheses, creative requirements, and measurement plans. Treat spend and campaign mutations as approval-sensitive.\n",
 };
 for (const [agentId, instructions] of Object.entries(workforceInstructions)) {
   const workspace = join(workspaceDir, "agents", agentId);
   await mkdir(workspace, { recursive: true });
   await writeSafely(join(workspace, "AGENTS.md"), instructions, 0o644);
   await writeSafely(join(workspace, "MEMORY.md"), "", 0o644);
-  await writeSafely(join(workspace, "IDENTITY.md"), `# ${agentId}\n\nInternal Departify workforce identity. Not customer-facing.\n`, 0o644);
+  await writeSafely(
+    join(workspace, "IDENTITY.md"),
+    `# ${agentId}\n\nInternal Departify workforce identity. Not customer-facing.\n`,
+    0o644,
+  );
 }
 
 const finalStat = await stat(CONFIG_PATH);
