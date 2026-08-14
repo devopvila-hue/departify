@@ -3302,8 +3302,9 @@ export function emitCeoTurnFailureTrace(
   const errorClass = errorCode?.startsWith("ENGINE_")
     ? "generation_failed"
     : "backend_failed";
+  const responseStatus = traceResponseStatus(errorCode);
   traceStage(trace, "T15_backend_response_finalization", {
-    responseStatus: 500,
+    responseStatus,
     errorClass,
   });
   console.info("[ceo-turn-trace]", {
@@ -3312,9 +3313,31 @@ export function emitCeoTurnFailureTrace(
     engineSessionId: trace.engineSessionId,
     timeline: trace.timeline,
     completionGate: errorClass,
+    responseStatus,
     ...(errorCode ? { errorCode } : {}),
     durationMs: Date.now() - trace.startedAt,
   });
+}
+
+function traceResponseStatus(errorCode: string | null): number {
+  switch (errorCode) {
+    case "ENGINE_INVALID_REQUEST":
+      return 400;
+    case "ENGINE_RATE_LIMIT":
+      return 429;
+    case "ENGINE_TIMEOUT":
+      return 504;
+    case "ENGINE_AUTHENTICATION":
+    case "ENGINE_UNAVAILABLE":
+      return 503;
+    case "ENGINE_SESSION_NOT_FOUND":
+      return 404;
+    case "ENGINE_EXECUTION":
+    case "ENGINE_PROTOCOL":
+      return 502;
+    default:
+      return 500;
+  }
 }
 
 function pendingOperationStatus(session: CustomerZeroSession): string | null {

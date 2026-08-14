@@ -40,6 +40,7 @@ export function engineErrorStatusCode(error: EngineError): number {
 export function registerErrorHandling(server: FastifyInstance): void {
   server.setErrorHandler(handleError);
   server.setNotFoundHandler((request, reply) => {
+    reply.header("x-departify-correlation-id", correlationIdFor(request));
     reply.status(404).send({
       error: {
         code: "NOT_FOUND",
@@ -56,6 +57,7 @@ function handleError(
   request: FastifyRequest,
   reply: FastifyReply,
 ): void {
+  reply.header("x-departify-correlation-id", correlationIdFor(request));
   // EngineErrors are already provider-independent; map them to clean responses
   // so no raw OpenClaw/Vertex error ever reaches the portal.
   if (error instanceof EngineError) {
@@ -94,6 +96,13 @@ function handleError(
       statusCode,
     },
   } satisfies ErrorResponse);
+}
+
+function correlationIdFor(request: FastifyRequest): string {
+  const supplied = request.headers["x-departify-correlation-id"];
+  return typeof supplied === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(supplied)
+    ? supplied
+    : request.id;
 }
 
 function normalizeStatusCode(statusCode: number | undefined): number {

@@ -1,4 +1,5 @@
 import type { BackendConfig } from "@departify/config";
+import { EngineInvalidRequestError } from "@departify/engine-adapter";
 import { buildServer } from "../src/server/server.js";
 
 const testConfig: BackendConfig = {
@@ -61,6 +62,31 @@ describe("backend server", () => {
         requestId: "test-request-id",
         statusCode: 404,
       },
+    });
+  });
+
+  it("preserves the chat correlation id on centralized engine errors", async () => {
+    const server = await buildServer(testConfig);
+    server.get("/test-engine-error", async () => {
+      throw new EngineInvalidRequestError("invalid request", {
+        provider: "openclaw",
+      });
+    });
+
+    const response = await server.inject({
+      headers: { "x-departify-correlation-id": "chat-test-correlation" },
+      method: "GET",
+      url: "/test-engine-error",
+    });
+    await server.close();
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers["x-departify-correlation-id"]).toBe(
+      "chat-test-correlation",
+    );
+    expect(response.json().error).toMatchObject({
+      code: "ENGINE_INVALID_REQUEST",
+      statusCode: 400,
     });
   });
 });
