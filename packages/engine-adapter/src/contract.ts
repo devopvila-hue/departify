@@ -33,7 +33,11 @@ export interface EngineAdapter {
    */
   sendMessage(input: EngineSendMessageInput): Promise<EngineMessageResult>;
 
-  /** Publish the backend-authorized native read surface for this session. */
+  /**
+   * Publish a backend-authorized native read surface when the provider exposes
+   * a real session-policy primitive. Providers without that primitive may
+   * authorize the same surface at tool invocation time.
+   */
   setNativeToolPolicy?(input: EngineNativeToolPolicyInput): Promise<void>;
 
   /**

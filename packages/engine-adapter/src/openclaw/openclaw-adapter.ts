@@ -190,12 +190,12 @@ export class OpenClawEngineAdapter implements EngineAdapter {
   }
 
   async setNativeToolPolicy(input: EngineNativeToolPolicyInput): Promise<void> {
-    const agentId = input.agentId ?? AGENT_ID;
-    await this.client.request("departify.native-tools.set-session-tools", {
-      sessionKey: sessionKey(input.sessionId, agentId),
-      agentId,
-      toolNames: [...new Set(input.toolNames)],
-    });
+    // The deployed Departify native-tools plugin deliberately does not expose
+    // a session-policy RPC. It discovers the read-only native catalog for the
+    // CEO agent and authorizes every invocation again through the signed,
+    // tenant-scoped Departify gateway. Calling the old RPC here makes every
+    // production native turn fail with UNKNOWN_METHOD before sessions.send.
+    void input;
   }
 
   async getSession(sessionId: string, agentId = AGENT_ID): Promise<EngineSession | null> {

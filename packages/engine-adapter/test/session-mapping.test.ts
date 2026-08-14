@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { sessionKey, isLoopbackUrl } from "../src/openclaw/openclaw-adapter.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  OpenClawEngineAdapter,
+  sessionKey,
+  isLoopbackUrl,
+} from "../src/openclaw/openclaw-adapter.js";
 
 describe("session mapping", () => {
   it("derives the OpenClaw session key from a Departify id", () => {
@@ -18,6 +22,29 @@ describe("session mapping", () => {
   it("maps internal workforce sessions to their native OpenClaw agent", () => {
     expect(sessionKey("employee:org:user:agent_content_strategist", "agent_content_strategist"))
       .toBe("agent:agent_content_strategist:departify:employee:org:user:agent_content_strategist");
+  });
+
+  it("does not call the removed native-tools session-policy RPC", async () => {
+    const adapter = new OpenClawEngineAdapter({
+      provider: "openclaw",
+      gatewayUrl: "ws://127.0.0.1:18889",
+      gatewayToken: "test-token",
+      requestTimeoutMs: 1000,
+      connectTimeoutMs: 1000,
+      retryLimit: 0,
+      maxRetryDelayMs: 0,
+    });
+    const client = (adapter as unknown as {
+      client: { request: (method: string, params: unknown) => Promise<unknown> };
+    }).client;
+    const request = vi.spyOn(client, "request").mockResolvedValue({});
+
+    await adapter.setNativeToolPolicy?.({
+      sessionId: "ceo:org-a:user-a",
+      toolNames: ["departify.company.context"],
+    });
+
+    expect(request).not.toHaveBeenCalled();
   });
 });
 
