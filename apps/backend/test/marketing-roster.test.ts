@@ -179,4 +179,62 @@ describe("canonical Marketing roster projections", () => {
     });
     expect(employees.filter((employee) => employee.status === "trabajando")).toHaveLength(1);
   });
+
+  it("keeps company employee counters aligned with cards when a legacy task has no assignment", async () => {
+    const companyDna = new InMemoryCompanyDnaStore();
+    await companyDna.upsert({
+      organizationId,
+      companyName: "Empresa real",
+      description: "Servicio real",
+      objective: "Conseguir clientes",
+      products: ["Servicio"],
+      customers: ["Clientes"],
+      channels: ["Web"],
+      declaredTools: [],
+      uncertainties: [],
+      provenance: {},
+      factsUpdatedAt: "2026-08-12T00:00:00.000Z",
+      departmentProvisionedAt: "2026-08-12T00:00:00.000Z",
+    });
+    const service = new MarketingService({
+      engine: { sendMessage: async () => ({ status: "completed", text: "" }) } as never,
+      companyDna,
+      workStore: buildWorkStore([{ ...activeTask, assignedEmployeeId: null }]),
+    });
+    const status = await service.getDepartmentStatus(
+      organizationId,
+      [],
+      "es",
+      {
+        tasks: [{ ...activeTask, assignedEmployeeId: null }],
+        results: [],
+        connections: [],
+      },
+    );
+    const company = buildCompanyOperatingState({
+      base: {
+        goal: "Conseguir clientes",
+        companyName: "Empresa real",
+        heads: [status.head],
+        decisions: [],
+        activity: [],
+        results: [],
+        connections: [],
+        working: 0,
+        done: 0,
+      },
+      head: status.head,
+      tasks: [{ ...activeTask, assignedEmployeeId: null }],
+      results: [],
+      inboxItems: [],
+      connections: [],
+      dna: null,
+      marketing: status,
+      marketingApprovals: [],
+    });
+
+    expect(company.employees.every((employee) => employee.status !== "trabajando")).toBe(true);
+    expect(company.summary.workingNow).toBe(0);
+    expect(company.departments[0]?.employeesWorkingNow).toBe(0);
+  });
 });

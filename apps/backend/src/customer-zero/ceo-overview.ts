@@ -188,6 +188,16 @@ export function buildCompanyOperatingState(input: {
     status: employee.status,
     ...(employee.currentWork ? { currentWork: employee.currentWork } : {}),
   }));
+  // Employee counters must come from the same assigned-work projection as
+  // the cards. Counting raw tasks here made legacy/unassigned tasks report
+  // "2 working" while every specialist card was AVAILABLE.
+  const workingEmployeeCount = input.marketing
+    ? marketingEmployees.filter((employee) => employee.status === "trabajando").length
+    : new Set(
+        marketingTasks
+          .map((task) => task.assignedEmployeeId)
+          .filter((employeeId): employeeId is string => Boolean(employeeId)),
+      ).size || marketingTasks.length;
   const marketingTools = (input.marketing?.tools ?? [])
     .filter((tool) => tool.status === "connected")
     .map((tool) => ({ toolId: tool.toolId, label: tool.label, capability: tool.capability }));
@@ -257,7 +267,7 @@ export function buildCompanyOperatingState(input: {
     dataStatus: "available",
     summary: {
       digitalEmployees: marketingEmployees.length,
-      workingNow: activeTasks.length,
+      workingNow: workingEmployeeCount,
       connectedTools: connectedTools.length,
       pendingApprovals,
       activeObjective,
@@ -268,7 +278,7 @@ export function buildCompanyOperatingState(input: {
       status: marketingStatus,
       head: input.head,
       employees: marketingEmployees,
-      employeesWorkingNow: marketingTasks.length,
+      employeesWorkingNow: workingEmployeeCount,
       tools: marketingTools,
       toolsConnected: marketingTools.length,
       activeObjective: marketingObjective,
