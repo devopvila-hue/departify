@@ -25,6 +25,30 @@ function buildClient(overrides: Record<string, unknown> = {}) {
 }
 
 describe("request() retry loop", () => {
+  it("deduplicates simultaneous first-use gateway connects", async () => {
+    const client = buildClient();
+    const anyClient = client as unknown as {
+      ensureConnected: () => Promise<void>;
+    };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let connectCalls = 0;
+    const connect = vi.spyOn(client, "connect").mockImplementation(async () => {
+      connectCalls += 1;
+      await gate;
+    });
+
+    const first = anyClient.ensureConnected();
+    const second = anyClient.ensureConnected();
+    release();
+    await Promise.all([first, second]);
+
+    expect(connectCalls).toBe(1);
+    connect.mockRestore();
+  });
+
   it("retries EngineUnavailableError and succeeds on the retry", async () => {
     const client = buildClient();
     // Simulate a connected client whose first call fails with unavailable,

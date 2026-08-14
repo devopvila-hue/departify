@@ -151,6 +151,8 @@ export class OpenClawGatewayClient {
   private nonce: string | null = null;
   private challengeTs = 0;
   private closedByUs = false;
+  /** Deduplicate simultaneous first-use connects on the shared adapter. */
+  private connecting: Promise<void> | null = null;
   private readonly opts: GatewayClientOptions;
 
   constructor(opts: GatewayClientOptions) {
@@ -517,7 +519,19 @@ export class OpenClawGatewayClient {
 
   private async ensureConnected(): Promise<void> {
     if (!this.isConnected) {
-      await this.connect();
+      if (!this.connecting) {
+        const pending = this.connect();
+        this.connecting = pending;
+        void pending.then(
+          () => {
+            if (this.connecting === pending) this.connecting = null;
+          },
+          () => {
+            if (this.connecting === pending) this.connecting = null;
+          },
+        );
+      }
+      await this.connecting;
     }
   }
 
