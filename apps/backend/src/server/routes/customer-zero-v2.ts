@@ -2385,6 +2385,7 @@ export async function registerCustomerZeroV2Routes(
             },
           });
         }
+        emitCeoTurnFailureTrace(trace, cause);
         throw cause;
       }
     },
@@ -3282,6 +3283,36 @@ export function emitCeoTurnTrace(
     timeline: trace.timeline,
     completionGate,
     resultStatus: trace.toolResultStatuses.at(-1) ?? "completed",
+    durationMs: Date.now() - trace.startedAt,
+  });
+}
+
+/** Record a failed turn that never produced a response payload. The raw
+ * exception is intentionally excluded: provider and persistence errors may
+ * contain credentials, request bodies, or tenant data. */
+export function emitCeoTurnFailureTrace(
+  trace: CeoTurnTraceState,
+  cause: unknown,
+): void {
+  const errorCode =
+    cause && typeof cause === "object" && "code" in cause &&
+    typeof (cause as { code?: unknown }).code === "string"
+      ? (cause as { code: string }).code
+      : null;
+  const errorClass = errorCode?.startsWith("ENGINE_")
+    ? "generation_failed"
+    : "backend_failed";
+  traceStage(trace, "T15_backend_response_finalization", {
+    responseStatus: 500,
+    errorClass,
+  });
+  console.info("[ceo-turn-trace]", {
+    requestCorrelationId: trace.requestCorrelationId,
+    organizationHash: trace.organizationHash,
+    engineSessionId: trace.engineSessionId,
+    timeline: trace.timeline,
+    completionGate: errorClass,
+    ...(errorCode ? { errorCode } : {}),
     durationMs: Date.now() - trace.startedAt,
   });
 }

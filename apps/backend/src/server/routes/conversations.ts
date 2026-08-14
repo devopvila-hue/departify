@@ -39,6 +39,7 @@ import {
   buildCeoRuntimeForRequest,
   createCeoTurnTrace,
   emitCeoTurnTrace,
+  emitCeoTurnFailureTrace,
   traceRequestReceived,
   traceStage,
   processCeoMessage,
@@ -365,6 +366,7 @@ export async function registerConversationRoutes(
             },
           });
         }
+        emitCeoTurnFailureTrace(trace, cause);
         throw cause;
       }
 
