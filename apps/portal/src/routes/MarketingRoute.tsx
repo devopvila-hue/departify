@@ -88,6 +88,11 @@ export function MarketingRoute() {
     }
   }, [department]);
 
+  const measuredObjectiveProgress = Boolean(
+    department?.activeObjective &&
+      (department.activeObjective.progress > 0 || department.activeObjective.status === "completed"),
+  );
+
   // Older API responses remain renderable while the backend rolls out the
   // durable work projection.
   const activeWork = department?.activeWork ?? [];
@@ -177,7 +182,9 @@ export function MarketingRoute() {
         {department.activeObjective && (
           <p className="dfy-hero__goal">
             Objetivo: <strong>{department.activeObjective.title}</strong> ·{" "}
-            {department.activeObjective.progress}%
+            {measuredObjectiveProgress
+              ? `${department.activeObjective.progress}%`
+              : "progreso por medir"}
           </p>
         )}
         <div className="dfy-marketing-head__actions">
@@ -268,12 +275,20 @@ export function MarketingRoute() {
                 Restricciones: {department.activeObjective.constraints.join(" · ")}
               </p>
             )}
-            <div className="dfy-progress" role="progressbar" aria-valuenow={department.activeObjective.progress} aria-valuemin={0} aria-valuemax={100}>
-              <span style={{ width: `${department.activeObjective.progress}%` }} />
-            </div>
-            <p className="dfy-muted dfy-muted--small">
-              Progreso: {department.activeObjective.progress}%
-            </p>
+            {measuredObjectiveProgress ? (
+              <>
+                <div className="dfy-progress" role="progressbar" aria-valuenow={department.activeObjective.progress} aria-valuemin={0} aria-valuemax={100}>
+                  <span style={{ width: `${department.activeObjective.progress}%` }} />
+                </div>
+                <p className="dfy-muted dfy-muted--small">
+                  Progreso medido: {department.activeObjective.progress}%
+                </p>
+              </>
+            ) : (
+              <p className="dfy-muted dfy-muted--small">
+                Progreso porcentual pendiente de una primera medición real del departamento.
+              </p>
+            )}
           </>
         ) : (
           <EmptyState
