@@ -3211,6 +3211,7 @@ interface CeoTurnTraceState {
   openclawStatus: string | null;
   openclawTextBytes: number | null;
   nativeResponseTerminal: boolean;
+  postGenerationFailure: boolean;
   engineErrorCode: string | null;
   legacyRouterCalled: boolean;
   legacyRoute: string | null;
@@ -3383,6 +3384,7 @@ function newCeoTurnTrace(
     openclawStatus: null,
     openclawTextBytes: null,
     nativeResponseTerminal: false,
+    postGenerationFailure: false,
     engineErrorCode: null,
     legacyRouterCalled: false,
     legacyRoute: null,
@@ -3406,9 +3408,12 @@ export function emitCeoTurnTrace(
   trace: CeoTurnTraceState,
   result: CeoMessageResult,
 ): void {
-  const completionGate = trace.openclawStatus === "failed" || trace.openclawStatus === "error"
-    ? "generation_failed"
-    : trace.timeline.T14_persistence_failed !== undefined &&
+  const hasFinalResponse = trace.nativeResponseTerminal || trace.assistantTextBytes !== null;
+  const completionGate = trace.postGenerationFailure && hasFinalResponse
+    ? "post_generation_failure"
+    : (trace.openclawStatus === "failed" || trace.openclawStatus === "error") && !hasFinalResponse
+      ? "generation_failed"
+      : trace.timeline.T14_persistence_failed !== undefined &&
         (trace.nativeResponseTerminal || trace.assistantTextBytes !== null)
       ? "persistence_failed"
       : trace.timeline.T14_persistence_completed !== undefined &&
@@ -4232,6 +4237,7 @@ export async function processCeoMessage(
   }
 
   let nativeEngineFailure = false;
+  let nativeMutationDeferred = false;
   if (runtime?.nativeBusinessTools && shouldUseNativeAgentPath(operationalMessage)) {
     if (trace) {
       trace.nativeAttempted = true;
@@ -4265,6 +4271,9 @@ export async function processCeoMessage(
       if (trace) {
         trace.openclawStatus = nativeResult.status;
         trace.engineErrorCode = nativeResult.errorCode ?? null;
+        if (nativeResult.postGenerationFailure) {
+          trace.postGenerationFailure = true;
+        }
       }
       if (trace) trace.openclawTextBytes = Buffer.byteLength(nativeResult.text ?? "", "utf8");
       const selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
@@ -4327,30 +4336,57 @@ export async function processCeoMessage(
           trace,
         );
       }
-      if (nativeResult.status === "completed") {
+      const nativeHasFinalText = nativeResult.text.trim().length > 0;
+      if (nativeResult.status === "completed" || nativeHasFinalText) {
         if (trace) trace.toolResultStatuses = ["native_deferred_to_deterministic_gate"];
+        nativeMutationDeferred = nativeMutationRequiresDeterministicGate(operationalMessage);
+        if (nativeHasFinalText && nativeResult.status !== "completed" && trace) {
+          trace.postGenerationFailure = true;
+        }
         console.info("[native-tool-trace]", {
           nativeTool: true,
           toolName: selectedTools.join(",") || "native",
           organizationHash: safeTraceHash(organizationId),
           authorized: false,
-          status: "deferred_to_deterministic_mutation_gate",
+          status: nativeMutationDeferred
+            ? "deferred_to_deterministic_mutation_gate"
+            : "post_generation_final_preserved",
+        });
+        if (!nativeMutationDeferred && nativeHasFinalText) {
+          if (trace) {
+            trace.openclawStatus = "completed";
+            trace.nativeResponseTerminal = true;
+            trace.finalResponseSource ??= "openclaw";
+            trace.toolResultStatuses = ["success"];
+          }
+          return completeRuntimeCeoTurn(
+            session,
+            conversation,
+            message,
+            nativeResult.text,
+            selectedTools,
+            ["success"],
+            null,
+            trace,
+          );
+        }
+      }
+      if (!nativeMutationDeferred) {
+        nativeEngineFailure = true;
+        if (trace) trace.openclawStatus = "failed";
+        if (trace) {
+          trace.nativeResponseTerminal = false;
+          trace.finalResponseSource = "error_fallback";
+          trace.toolResultStatuses = ["generation_failed"];
+        }
+        console.info("[native-tool-trace]", {
+          nativeTool: true,
+          toolName: "native",
+          organizationHash: safeTraceHash(organizationId),
+          authorized: false,
+          status: "generation_failed",
         });
       }
-      nativeEngineFailure = true;
-      if (trace) trace.openclawStatus = "failed";
-      if (trace) {
-        trace.nativeResponseTerminal = false;
-        trace.finalResponseSource = "error_fallback";
-        trace.toolResultStatuses = ["generation_failed"];
-      }
-      console.info("[native-tool-trace]", {
-        nativeTool: true,
-        toolName: "native",
-        organizationHash: safeTraceHash(organizationId),
-        authorized: false,
-        status: "generation_failed",
-      });
     } catch {
       if (trace) trace.openclawStatus = "failed";
       nativeEngineFailure = true;

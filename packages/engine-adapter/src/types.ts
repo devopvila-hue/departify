@@ -59,6 +59,12 @@ export interface EngineMessageResult {
   messageId?: string;
   text: string;
   status: EngineMessageStatus;
+  /**
+   * OpenClaw produced a durable final assistant message, but a later run
+   * status/event was non-success. The text is still authoritative and must
+   * not be replaced by a generic generation error.
+   */
+  postGenerationFailure?: boolean;
   usage?: EngineUsage;
   toolCalls?: EngineToolCall[];
   durationMs?: number;

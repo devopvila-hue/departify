@@ -126,21 +126,64 @@ export class OpenClawEngineAdapter implements EngineAdapter {
         this.client.config.requestTimeoutMs,
         input.timeline,
       );
+      const text = lastAssistant.text ?? "";
+      const toolCalls = (lastAssistant.toolCalls ?? []).map((tc) => ({
+        name: tc.name,
+        status: "completed" as const,
+      }));
+
+      // `agent.wait` can report an error after OpenClaw has already appended a
+      // non-empty assistant message (for example, a failed/aborted trailing
+      // tool operation). The history message is the authoritative response;
+      // losing it here makes the backend/portal turn a completed answer into a
+      // generic 502. Preserve the answer and surface the transport anomaly as
+      // metadata so the response gate can classify it as post-generation.
       if (runStatus !== "ok") {
+        if (text.trim()) {
+          input.timeline?.("T12_adapter_received_final", {
+            status: "post_generation_failure",
+            runStatus,
+            textBytes: Buffer.byteLength(text, "utf8"),
+          });
+          const durationMs = Date.now() - startedAt;
+          return {
+            sessionId: input.sessionId,
+            text,
+            status: "completed",
+            postGenerationFailure: true,
+            ...(toolCalls.length > 0 ? { toolCalls } : {}),
+            ...(lastAssistant.usage
+              ? {
+                  usage: {
+                    ...(lastAssistant.provider ? { provider: lastAssistant.provider } : {}),
+                    ...(lastAssistant.model ? { model: lastAssistant.model } : {}),
+                    ...(lastAssistant.usage.input !== undefined
+                      ? { inputTokens: lastAssistant.usage.input }
+                      : {}),
+                    ...(lastAssistant.usage.output !== undefined
+                      ? { outputTokens: lastAssistant.usage.output }
+                      : {}),
+                    ...(lastAssistant.usage.totalTokens !== undefined
+                      ? { totalTokens: lastAssistant.usage.totalTokens }
+                      : {}),
+                    ...(lastAssistant.usage.cacheRead !== undefined
+                      ? { cacheReadTokens: lastAssistant.usage.cacheRead }
+                      : {}),
+                  },
+                }
+              : {}),
+            durationMs,
+          };
+        }
         throw new EngineExecutionError(
           `Agent run finished with status "${runStatus}"`,
           { operation: "sendMessage", provider: "openclaw" },
         );
       }
-      const text = lastAssistant.text ?? "";
       input.timeline?.("T12_adapter_received_final", {
         status: runStatus,
         textBytes: Buffer.byteLength(text, "utf8"),
       });
-      const toolCalls = (lastAssistant.toolCalls ?? []).map((tc) => ({
-        name: tc.name,
-        status: "completed" as const,
-      }));
       const durationMs = Date.now() - startedAt;
       return {
         sessionId: input.sessionId,

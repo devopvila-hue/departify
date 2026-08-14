@@ -665,6 +665,37 @@ describe("native company context gateway", () => {
     expect(engine.nativePolicies.length).toBeGreaterThan(0);
   });
 
+  it("returns successful native mutation reasoning to the deterministic approval gate", async () => {
+    engine.nativeSelection = false;
+    engine.nativeText = "He revisado la solicitud y prepararé el borrador.";
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Native Mutation Gate",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Conseguir clientes",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const organizationId = start.json().organizationId as string;
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/command-center/message`,
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        message: "respóndele al último correo diciendo que mañana lo miro",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().reply).toMatch(/a qué correo|leer el último correo/i);
+    expect(response.json().reply).not.toMatch(/motor de negocio ha fallado/i);
+    expect(engine.inputs.at(-1)?.nativeBusinessTools).toBe(true);
+    engine.nativeText = "Contexto de empresa consultado.";
+  });
+
   it("keeps an ambiguous native business response in the same CEO path", async () => {
     engine.nativeSelection = false;
     const start = await server.inject({
