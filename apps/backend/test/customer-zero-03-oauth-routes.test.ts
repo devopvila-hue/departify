@@ -77,6 +77,40 @@ describe("CZ03 — Google OAuth unified handshake (routes)", () => {
     expect(body.connection.missingCredentials).toContain("GOOGLE_OAUTH_CLIENT_ID");
   });
 
+  it.each([
+    ["meta_business", "META_APP_ID", "META_APP_SECRET"],
+    ["ticktick", "TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"],
+  ] as const)("provider-backed %s reports missing credentials honestly", async (toolId, clientId, clientSecret) => {
+    const org = await startOrg();
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/${toolId}/connect`,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.connection.status).toBe("blocked");
+    expect(body.connection.missingCredentials).toEqual([clientId, clientSecret]);
+    expect(body.connection.authorizationUrl).toBeUndefined();
+  });
+
+  it("Meta provider route creates state-bound authorization without marking connected", async () => {
+    process.env.META_APP_ID = "meta-app-test";
+    process.env.META_APP_SECRET = "meta-secret-test";
+    process.env.PUBLIC_BASE_URL = "https://app.departify.app";
+    const org = await startOrg();
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/meta_business/connect`,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.connection.status).toBe("connecting");
+    expect(body.connection.authorizationUrl).toContain("facebook.com/v23.0/dialog/oauth");
+    expect(body.connection.oauthState).toBeTruthy();
+    expect(body.connection.lifecycle).toBe("needs_connection");
+    expect(body.connection.status).not.toBe("connected");
+  });
+
   it("connect with credentials returns a Google authorization URL with a state nonce", async () => {
     process.env.GOOGLE_OAUTH_CLIENT_ID = "client-test";
     process.env.GOOGLE_OAUTH_CLIENT_SECRET = "secret-test";

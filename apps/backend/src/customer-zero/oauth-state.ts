@@ -34,13 +34,23 @@ export interface OAuthStateRecord {
   readonly userId: string;
   readonly connectionIntent: "marketing" | "admin";
   /** The bounded Google catalog capability that started this handshake. */
-  readonly requestedToolId?: "gmail" | "google_workspace" | "google_calendar" | "google_drive" | "youtube";
+  readonly requestedToolId?: OAuthRequestedToolId;
   readonly returnPath: string;
   readonly createdAt: string;
   readonly expiresAt: string;
   /** When true the state has been consumed (single use). */
   readonly consumed?: boolean;
 }
+
+/** Catalog tool that may initiate a server-owned OAuth handshake. */
+export type OAuthRequestedToolId =
+  | "gmail"
+  | "google_workspace"
+  | "google_calendar"
+  | "google_drive"
+  | "youtube"
+  | "meta_business"
+  | "ticktick";
 
 /** Durable OAuth state boundary. Async: the durable adapter needs I/O. */
 export interface OAuthStateStore {

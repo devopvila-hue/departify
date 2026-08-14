@@ -167,6 +167,14 @@ import {
 } from "../../customer-zero/gmail-adapter.js";
 import { getGoogleOAuthStateStore } from "../../customer-zero/oauth-state.js";
 import {
+  completeExternalOAuth,
+  externalOAuthCredentials,
+  externalOAuthMissingCredentials,
+  externalOAuthRedirectUri,
+  startExternalOAuth,
+} from "../../customer-zero/external-oauth.js";
+import type { ExternalOAuthProvider } from "../../customer-zero/external-oauth-tokens.js";
+import {
   createPendingEmailWork,
   extractRecipient,
   extractObjective,
@@ -1428,6 +1436,65 @@ export async function registerCustomerZeroV2Routes(
         return reply.code(200).send({ organizationId, connection });
       }
 
+      const externalOAuthTools = new Set<ExternalOAuthProvider>([
+        "meta_business",
+        "ticktick",
+      ]);
+      if (externalOAuthTools.has(tool.id as ExternalOAuthProvider)) {
+        const provider = tool.id as ExternalOAuthProvider;
+        const missing = externalOAuthMissingCredentials(provider);
+        if (missing.length > 0 || !externalOAuthCredentials(provider)) {
+          connection.status = "blocked";
+          connection.lifecycle = "needs_connection";
+          connection.blockedReason = t(
+            session.state.locale,
+            `Faltan las credenciales de OAuth para conectar ${tool.label}.`,
+            `Missing OAuth credentials to connect ${tool.label}.`,
+          );
+          connection.missingCredentials = missing;
+          await persistToolState(session, toolStateFromConnection(session, connection));
+          return reply.code(200).send({ organizationId, connection });
+        }
+        try {
+          const oauthUserId = request.authUser?.id ?? organizationId;
+          const out = await startExternalOAuth({
+            organizationId,
+            userId: oauthUserId,
+            provider,
+            returnPath,
+            redirectUri: externalOAuthRedirectUri(provider, deps.publicBaseUrl),
+          });
+          connection.status = "connecting";
+          connection.lifecycle = "needs_connection";
+          connection.authorizationUrl = out.authorizationUrl;
+          connection.oauthState = out.state;
+          await persistToolState(session, toolStateFromConnection(session, connection));
+          request.log.info({
+            event: "external_oauth_start",
+            organizationId,
+            provider,
+            returnPath,
+          });
+          return reply.code(200).send({ organizationId, connection });
+        } catch (cause) {
+          connection.status = "blocked";
+          connection.lifecycle = "unavailable";
+          connection.blockedReason = t(
+            session.state.locale,
+            `No se pudo iniciar la conexión de ${tool.label}.`,
+            `Could not start the ${tool.label} connection.`,
+          );
+          await persistToolState(session, toolStateFromConnection(session, connection));
+          request.log.warn({
+            event: "external_oauth_start_failed",
+            organizationId,
+            provider,
+            code: cause instanceof Error ? cause.message : "unknown",
+          });
+          return reply.code(200).send({ organizationId, connection });
+        }
+      }
+
       // Non-Google tools (Outlook / Microsoft 365). Each provider has
       // its own OAuth Web Client registered against a stable portal
       // path. Per-organization URLs are NEVER used; organization
@@ -1442,10 +1509,9 @@ export async function registerCustomerZeroV2Routes(
         },
         session.state.locale,
       );
-      // Persist both connecting and blocked outcomes. In particular, Meta
-      // Business and TickTick are intentionally non-connectable until their
-      // provider adapters/credentials exist; that truthful blocked state must
-      // survive the request instead of disappearing from /conexiones.
+      // Persist both connecting and blocked outcomes for providers that still
+      // use the legacy generic path. Meta Business and TickTick are handled
+      // above by their provider-specific OAuth exchanges.
       await persistToolState(session, toolStateFromConnection(session, connection));
 
       return reply.code(200).send({ organizationId, connection });
@@ -1605,12 +1671,17 @@ export async function registerCustomerZeroV2Routes(
             identityProvider: "gmail",
             stateNonceLookup: async (nonce) => {
               const s = await getGoogleOAuthStateStore().get(nonce);
+              const requestedToolId = s?.requestedToolId;
+              const googleRequestedToolId = requestedToolId &&
+                ["gmail", "google_workspace", "google_calendar", "google_drive", "youtube"].includes(requestedToolId)
+                ? requestedToolId as GoogleTokenProvider
+                : undefined;
               return s
                 ? {
                     organizationId: s.organizationId,
                     userId: s.userId,
                     ...(s.returnPath ? { returnPath: s.returnPath } : {}),
-                    ...(s.requestedToolId ? { requestedToolId: s.requestedToolId } : {}),
+                    ...(googleRequestedToolId ? { requestedToolId: googleRequestedToolId } : {}),
                     ...(s.consumed ? { consumed: true } : {}),
                   }
                 : null;
@@ -1748,6 +1819,87 @@ export async function registerCustomerZeroV2Routes(
               message: "Google OAuth callback failed.",
               requestId: request.id,
               statusCode: 500,
+            },
+          });
+        }
+      }
+
+      const externalOAuthTools = new Set<ExternalOAuthProvider>([
+        "meta_business",
+        "ticktick",
+      ]);
+      if (externalOAuthTools.has(effectiveToolId as ExternalOAuthProvider)) {
+        const provider = effectiveToolId as ExternalOAuthProvider;
+        const { code, state: callbackState } = (request.body ?? {}) as {
+          code?: string;
+          state?: string;
+        };
+        if (!code || !callbackState) {
+          return reply.code(400).send({
+            organizationId,
+            error: { code: "MISSING_CODE_OR_STATE", message: "code and state are required." },
+          });
+        }
+        const oauthUserId = request.authUser?.id ?? organizationId;
+        try {
+          const completed = await completeExternalOAuth({
+            organizationId,
+            userId: oauthUserId,
+            provider,
+            code,
+            state: callbackState,
+            redirectUri: externalOAuthRedirectUri(provider, deps.publicBaseUrl),
+          });
+          completeConnection(connection);
+          connection.lifecycle = "connected";
+          connection.configSource = `oauth:${provider}`;
+          connection.verifiedAt = completed.record.operationalVerifiedAt ?? new Date().toISOString();
+          connection.connectedAt = connection.verifiedAt;
+          delete connection.authorizationUrl;
+          delete connection.oauthState;
+          await persistToolState(session, toolStateFromConnection(session, connection));
+          request.log.info({
+            event: "external_oauth_callback_complete",
+            organizationId,
+            provider,
+            operational: true,
+            scopeCount: completed.record.scopes.length,
+          });
+          return reply.code(200).send({
+            organizationId,
+            connection,
+            operational: true,
+            accountLabel: completed.record.accountLabel,
+            grantedScopes: completed.record.scopes,
+            ...(completed.returnPath ? { returnPath: completed.returnPath } : {}),
+          });
+        } catch (cause) {
+          connection.status = "blocked";
+          connection.lifecycle = "unavailable";
+          delete connection.authorizationUrl;
+          delete connection.oauthState;
+          connection.blockedReason = t(
+            session.state.locale,
+            `No se pudo verificar la conexión de ${connection.label}.`,
+            `Could not verify the ${connection.label} connection.`,
+          );
+          await persistToolState(session, toolStateFromConnection(session, connection));
+          const codeValue = cause instanceof Error ? cause.message : "EXTERNAL_OAUTH_FAILED";
+          const clientError = new Set(["invalid_state", "org_or_user_mismatch"]);
+          request.log.warn({
+            event: "external_oauth_callback_failed",
+            organizationId,
+            provider,
+            code: codeValue,
+          });
+          return reply.code(clientError.has(codeValue) ? 401 : 409).send({
+            organizationId,
+            connection,
+            error: {
+              code: codeValue,
+              message: clientError.has(codeValue)
+                ? "OAuth state is invalid or expired."
+                : "The provider connection could not be verified.",
             },
           });
         }

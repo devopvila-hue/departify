@@ -229,7 +229,7 @@ describe("P-B production fix — connections catalog", () => {
     }
   });
 
-  it("L. unsupported marketing connectors are visible without a fake action", async () => {
+  it("L. provider-backed marketing connectors are actionable without a fake connection", async () => {
     const org = await start();
     const response = await server.inject({
       method: "GET",
@@ -243,11 +243,11 @@ describe("P-B production fix — connections catalog", () => {
     }>;
     expect(cards.find((card) => card.id === "meta_business")).toMatchObject({
       name: "Meta Business",
-      actionLabel: null,
+      actionLabel: "Activar",
     });
     expect(cards.find((card) => card.id === "ticktick")).toMatchObject({
       name: "TickTick",
-      actionLabel: null,
+      actionLabel: "Activar",
     });
     expect(cards.find((card) => card.id === "youtube")?.actionLabel).toBeTruthy();
   });

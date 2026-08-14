@@ -123,6 +123,19 @@ if (enableNativeBusinessTools && (!departifyApiUrl || !departifyRuntimeToken)) {
 }
 const maxTokens = int("OPENCLAW_MAX_TOKENS", 2048);
 const contextTokens = int("OPENCLAW_CONTEXT_TOKENS", 131072);
+const compactionKeepRecentTokens = int(
+  "OPENCLAW_COMPACTION_KEEP_RECENT_TOKENS",
+  50000,
+);
+const compactionRecentTurns = int("OPENCLAW_COMPACTION_RECENT_TURNS", 3);
+const compactionTimeoutSeconds = int(
+  "OPENCLAW_COMPACTION_TIMEOUT_SECONDS",
+  180,
+);
+const compactionMaxActiveTranscriptBytes = optional(
+  "OPENCLAW_COMPACTION_MAX_ACTIVE_TRANSCRIPT_BYTES",
+  "20mb",
+);
 const temperature = Number.parseFloat(optional("OPENCLAW_TEMPERATURE", "0.2"));
 const requestTimeoutSec = int("OPENCLAW_REQUEST_TIMEOUT_SECONDS", 300);
 const exposePublic = bool("OPENCLAW_EXPOSE_PUBLIC", false);
@@ -279,6 +292,27 @@ const config = {
           : {}),
       },
       contextTokens,
+      // Use OpenClaw's native transcript compaction for the engine session.
+      // Departify's durable conversation summary remains the business source
+      // of truth and is injected separately by the backend. Memory flush is
+      // intentionally disabled here: the engine workspaces are shared by
+      // agent identity, not physically partitioned per tenant, so writing
+      // tenant facts to MEMORY.md would create a cross-tenant leak risk.
+      contextInjection: "continuation-skip",
+      compaction: {
+        // OpenClaw v2026.7.1 enables native compaction by default; that
+        // version rejects the newer `enabled` field in this object schema.
+        mode: "safeguard",
+        timeoutSeconds: compactionTimeoutSeconds,
+        keepRecentTokens: compactionKeepRecentTokens,
+        recentTurnsPreserve: compactionRecentTurns,
+        identifierPolicy: "strict",
+        qualityGuard: { enabled: true, maxRetries: 1 },
+        midTurnPrecheck: { enabled: true },
+        postIndexSync: "off",
+        maxActiveTranscriptBytes: compactionMaxActiveTranscriptBytes,
+        memoryFlush: { enabled: false },
+      },
       thinkingDefault: "off",
       ...(founderParity ? {} : { skipBootstrap: true }),
       sandbox: enableSandbox

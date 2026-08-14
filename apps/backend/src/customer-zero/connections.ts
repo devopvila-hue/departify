@@ -348,8 +348,18 @@ export const TOOL_CATALOG: readonly ToolDescriptor[] = [
     capability: "marketing.publishing",
     categoryEs: "Marketing",
     categoryEn: "Marketing",
-    connectable: false,
+    connectable: true,
     requiredCredentials: ["META_APP_ID", "META_APP_SECRET"],
+    authorizationEndpoint: "https://www.facebook.com/v23.0/dialog/oauth",
+    scopes: [
+      "pages_show_list",
+      "pages_read_engagement",
+      "business_management",
+      "instagram_basic",
+      "instagram_content_publish",
+      "ads_read",
+      "ads_management",
+    ],
   },
   {
     id: "youtube",
@@ -368,8 +378,10 @@ export const TOOL_CATALOG: readonly ToolDescriptor[] = [
     capability: "tasks.manage",
     categoryEs: "Equipo",
     categoryEn: "Team",
-    connectable: false,
+    connectable: true,
     requiredCredentials: ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"],
+    authorizationEndpoint: "https://ticktick.com/oauth/authorize",
+    scopes: ["tasks:read", "tasks:write"],
   },
 ];
 
@@ -515,6 +527,20 @@ export function startConnection(
   options: ConnectAttemptEnv,
   locale: SupportedLocale,
 ): ConnectionState {
+  // Meta Business and TickTick use provider-specific flows that persist a
+  // durable state nonce and perform a post-exchange operational probe. The
+  // legacy pure helper cannot provide those guarantees, so never manufacture
+  // an authorization URL here. The HTTP route owns those providers.
+  if (tool.id === "meta_business" || tool.id === "ticktick") {
+    connection.status = "blocked";
+    connection.blockedReason = t(
+      locale,
+      `La conexión de ${tool.label} requiere su flujo OAuth seguro.`,
+      `${tool.label} requires its secure provider OAuth flow.`,
+    );
+    connection.missingCredentials = tool.requiredCredentials;
+    return connection;
+  }
   if (!tool.connectable || !tool.authorizationEndpoint) {
     connection.status = "blocked";
     connection.blockedReason = t(

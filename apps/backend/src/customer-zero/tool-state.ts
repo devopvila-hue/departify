@@ -65,6 +65,14 @@ export function availableConfigForTool(toolId: string): string | null {
       return hasEnv(["HOSTINGER_EMAIL_MCP_TOKEN"])
         ? "env:hostinger_email_mcp"
         : null;
+    case "meta_business":
+      return hasEnv(["META_APP_ID", "META_APP_SECRET"])
+        ? "oauth:meta_business"
+        : null;
+    case "ticktick":
+      return hasEnv(["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"])
+        ? "oauth:ticktick"
+        : null;
     default:
       return null;
   }
@@ -98,7 +106,9 @@ export function hasWorkingConnector(toolId: string): boolean {
     toolId === "google_calendar" ||
     toolId === "google_drive" ||
     toolId === "youtube" ||
-    toolId === "hostinger_email"
+    toolId === "hostinger_email" ||
+    toolId === "meta_business" ||
+    toolId === "ticktick"
   );
 }
 

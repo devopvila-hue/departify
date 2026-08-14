@@ -25,6 +25,10 @@ import {
   setGoogleOAuthStateStore,
 } from "./customer-zero/oauth-state.js";
 import {
+  SupabaseExternalOAuthTokenStore,
+  setExternalOAuthTokenStore,
+} from "./customer-zero/external-oauth-tokens.js";
+import {
   SupabaseCorporateEmailStore,
   setCorporateEmailStore,
 } from "./customer-zero/corporate-email-store.js";
@@ -90,6 +94,12 @@ try {
   setGoogleOAuthStateStore(new SupabaseOAuthStateStore(supabaseAuthConfig));
   console.log(
     `[google-oauth] durable Supabase oauth-state store wired`,
+  );
+  setExternalOAuthTokenStore(
+    new SupabaseExternalOAuthTokenStore(supabaseAuthConfig),
+  );
+  console.log(
+    `[external-oauth] durable Meta/TickTick token store wired`,
   );
   // Durable corporate email accounts (IMAP/SMTP). Same security
   // pattern: service-role only, RLS block-all, org+user scoped.
