@@ -10,7 +10,10 @@ import {
   runtimeTokenSecret,
   validateScopedRuntimeToken,
 } from "../../customer-zero/runtime-identity.js";
-import { resolveCompanyDnaStore } from "../../customer-zero/company-readiness.js";
+import {
+  markMilestone,
+  resolveCompanyDnaStore,
+} from "../../customer-zero/company-readiness.js";
 import {
   buildCanonicalConnectionViews,
   buildMarketingOperationalActivity,
@@ -945,6 +948,16 @@ export async function registerInternalEngineRoutes(
               "La delegación necesita un objetivo y uno o más especialistas de Marketing válidos.",
           };
         } else {
+          // Native OpenClaw delegation is itself the real Marketing handoff.
+          // Persist the same readiness milestone used by the onboarding path
+          // so the business-facing employee projection cannot disagree with
+          // the durable tasks/results created below.
+          await markMilestone(
+            identity.organizationId,
+            resolveCompanyDnaStore(deps),
+            "departmentProvisionedAt",
+            new Date().toISOString(),
+          );
           const workStore = workStoreForRoutes();
           const tasks: NativeMarketingDelegationTask[] = [];
           for (const specialistId of specialistIds) {

@@ -15,6 +15,7 @@ import type { FastifyInstance } from "fastify";
 import { makeFakeTenant } from "./helpers/fake-tenant.js";
 import { issueScopedRuntimeToken } from "../src/customer-zero/runtime-identity.js";
 import { MarketingService } from "../src/customer-zero/marketing-service.js";
+import { InMemoryCompanyDnaStore } from "../src/customer-zero/company-dna.js";
 
 class GatewayTestEngine implements EngineAdapter {
   readonly inputs: EngineSendMessageInput[] = [];
@@ -92,17 +93,20 @@ describe("native company context gateway", () => {
   let engine: GatewayTestEngine;
   let offServer: FastifyInstance;
   let offEngine: GatewayTestEngine;
+  let companyDna: InMemoryCompanyDnaStore;
   const secret = "native-gateway-test-secret";
 
   beforeAll(async () => {
     const tenant = makeFakeTenant();
     engine = new GatewayTestEngine();
     offEngine = new GatewayTestEngine();
+    companyDna = new InMemoryCompanyDnaStore();
     server = await buildServer(loadBackendConfig(), {
       auth: tenant,
       organizations: tenant,
       engine,
-      marketing: new MarketingService({ engine }),
+      companyDna,
+      marketing: new MarketingService({ engine, companyDna }),
       nativeBusinessTools: true,
     });
     offServer = await buildServer(loadBackendConfig(), {
@@ -242,6 +246,19 @@ describe("native company context gateway", () => {
       ]),
     );
     expect(feed.json().results.length).toBeGreaterThanOrEqual(2);
+    const employees = await server.inject({
+      method: "GET",
+      url: `/api/departments/marketing/${organizationId}/employees`,
+      headers: { authorization: "Bearer token-a" },
+    });
+    expect(employees.statusCode).toBe(200);
+    expect(employees.json().employees).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "agent_content_strategist" }),
+        expect.objectContaining({ id: "agent_ads_specialist" }),
+      ]),
+    );
+    expect(employees.json().employees).toHaveLength(3);
     const conversations = await server.inject({
       method: "GET",
       url: `/api/customer-zero/${organizationId}/conversations`,
