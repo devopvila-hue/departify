@@ -281,9 +281,8 @@ describe("native company context gateway", () => {
       headers: { authorization: "Bearer token-a" },
       payload: { message: "¿Qué está pasando en mi empresa?" },
     });
-    expect(response.statusCode).toBe(200);
-    expect(response.json().reply).toContain("motor de negocio ha fallado");
-    expect(response.json().reply).not.toContain("Entendido");
+    expect(response.statusCode).toBe(502);
+    expect(response.json().error).toMatchObject({ code: "ENGINE_EXECUTION", statusCode: 502 });
     expect(engine.inputs.slice(before)).toHaveLength(1);
   });
 
@@ -437,9 +436,8 @@ describe("native company context gateway", () => {
       headers: { authorization: "Bearer token-a" },
       payload: { message: "Hazme un mailing de tres correos para vender Departify." },
     });
-    expect(response.statusCode).toBe(200);
-    expect(response.json().reply).toContain("sin devolver una respuesta");
-    expect(response.json().reply).not.toContain("La operación ha terminado");
+    expect(response.statusCode).toBe(502);
+    expect(response.json().error).toMatchObject({ code: "ENGINE_EXECUTION", statusCode: 502 });
     engine.nativeText = "Contexto de empresa consultado.";
   });
 

@@ -2313,6 +2313,11 @@ export async function registerCustomerZeroV2Routes(
             },
           },
           404: { type: "object", properties: { error: { type: "string" } } },
+          400: { type: "object", additionalProperties: true },
+          429: { type: "object", additionalProperties: true },
+          502: { type: "object", additionalProperties: true },
+          503: { type: "object", additionalProperties: true },
+          504: { type: "object", additionalProperties: true },
           409: {
             type: "object",
             required: ["error"],
@@ -2366,10 +2371,25 @@ export async function registerCustomerZeroV2Routes(
           trace,
         );
         traceStage(trace, "T15_backend_response_finalization", {
-          responseStatus: 200,
+          responseStatus: ceoTurnResponseStatus(trace),
           finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
         });
         emitCeoTurnTrace(session, runtime?.trace ?? trace, result);
+        const responseStatus = ceoTurnResponseStatus(runtime?.trace ?? trace);
+        if (responseStatus >= 400) {
+          const errorCode = (runtime?.trace ?? trace).engineErrorCode ?? "ENGINE_EXECUTION";
+          return reply
+            .header("x-departify-correlation-id", correlationId)
+            .code(responseStatus)
+            .send({
+              error: {
+                code: errorCode,
+                message: "No he podido completar esa respuesta porque el motor de negocio ha fallado. Vuelve a intentarlo.",
+                requestId: correlationId,
+                statusCode: responseStatus,
+              },
+            });
+        }
         return reply
           .header("x-departify-correlation-id", correlationId)
           .code(200)
@@ -3039,6 +3059,7 @@ interface CeoTurnTraceState {
   openclawStatus: string | null;
   openclawTextBytes: number | null;
   nativeResponseTerminal: boolean;
+  engineErrorCode: string | null;
   legacyRouterCalled: boolean;
   legacyRoute: string | null;
   marketingServiceCalled: boolean;
@@ -3210,6 +3231,7 @@ function newCeoTurnTrace(
     openclawStatus: null,
     openclawTextBytes: null,
     nativeResponseTerminal: false,
+    engineErrorCode: null,
     legacyRouterCalled: false,
     legacyRoute: null,
     marketingServiceCalled: false,
@@ -3338,6 +3360,21 @@ function traceResponseStatus(errorCode: string | null): number {
     default:
       return 500;
   }
+}
+
+type CeoTurnResponseStatus = 200 | 400 | 404 | 409 | 429 | 502 | 503 | 504;
+
+function ceoTurnResponseStatus(trace: CeoTurnTraceState): CeoTurnResponseStatus {
+  if (
+    (trace.openclawStatus === "failed" || trace.openclawStatus === "error") &&
+    !trace.nativeResponseTerminal
+  ) {
+    const status = traceResponseStatus(trace.engineErrorCode ?? "ENGINE_EXECUTION");
+    return (status === 400 || status === 404 || status === 429 || status === 502 || status === 503 || status === 504)
+      ? status
+      : 502;
+  }
+  return 200;
 }
 
 function pendingOperationStatus(session: CustomerZeroSession): string | null {
@@ -4069,7 +4106,10 @@ export async function processCeoMessage(
           ? { timeline: (stage: string, metadata?: Readonly<Record<string, unknown>>) => traceStage(trace, stage, metadata) }
           : {}),
       });
-      if (trace) trace.openclawStatus = nativeResult.status;
+      if (trace) {
+        trace.openclawStatus = nativeResult.status;
+        trace.engineErrorCode = nativeResult.errorCode ?? null;
+      }
       if (trace) trace.openclawTextBytes = Buffer.byteLength(nativeResult.text ?? "", "utf8");
       const selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
       if (trace) {
@@ -4090,6 +4130,8 @@ export async function processCeoMessage(
         if (trace) {
           trace.finalResponseSource = "error_fallback";
           trace.nativeResponseTerminal = false;
+          trace.openclawStatus = "failed";
+          trace.engineErrorCode = "ENGINE_EXECUTION";
           trace.toolResultStatuses = ["empty_assistant_response"];
         }
         return completeRuntimeCeoTurn(
@@ -4898,25 +4940,35 @@ async function completeRuntimeCeoTurn(
     : safeReply || (session.state.locale === "en"
       ? "The engine completed without returning an assistant response. Please try again."
       : "El motor terminó sin devolver una respuesta del asistente. Vuelve a intentarlo.");
-  if (trace) trace.assistantTextBytes = Buffer.byteLength(finalReply, "utf8");
-  if (trace) traceStage(trace, "T13_persistence_started");
-  try {
-    await session.conversations.addMessage(conversation.id, "assistant", finalReply);
-    if (trace) traceStage(trace, "T14_persistence_completed");
-  } catch (cause) {
-    if (trace) traceStage(trace, "T14_persistence_failed", { errorClass: "secondary_write" });
-    console.info("[runtime-business-context]", {
-      event: "assistant_persist_failed",
-      organizationId: session.organizationId,
-      error: cause instanceof Error ? cause.message : "unknown",
-    });
-  }
-  session.state.conversation = [
-    ...session.state.conversation,
-    { role: "user", content: message },
-    { role: "assistant", content: finalReply },
-  ];
   const primaryStatus = toolStatuses[0] ?? "success";
+  const generationFailed = primaryStatus === "generation_failed" || primaryStatus === "empty_assistant_response";
+  if (trace) trace.assistantTextBytes = generationFailed ? null : Buffer.byteLength(finalReply, "utf8");
+  if (!generationFailed) {
+    if (trace) traceStage(trace, "T13_persistence_started");
+    try {
+      await session.conversations.addMessage(conversation.id, "assistant", finalReply);
+      if (trace) traceStage(trace, "T14_persistence_completed");
+    } catch (cause) {
+      if (trace) traceStage(trace, "T14_persistence_failed", { errorClass: "secondary_write" });
+      console.info("[runtime-business-context]", {
+        event: "assistant_persist_failed",
+        organizationId: session.organizationId,
+        error: cause instanceof Error ? cause.message : "unknown",
+      });
+    }
+    session.state.conversation = [
+      ...session.state.conversation,
+      { role: "user", content: message },
+      { role: "assistant", content: finalReply },
+    ];
+  } else {
+    // A generation failure is not an assistant turn. Persisting the generic
+    // fallback would make the failed request look completed after reload.
+    session.state.conversation = [
+      ...session.state.conversation,
+      { role: "user", content: message },
+    ];
+  }
   const intent = runtimeIntentForTools(toolNames);
   const state = primaryStatus === "success" || primaryStatus === "accepted_unverified"
     ? "tool_completed" as const
