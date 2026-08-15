@@ -10,19 +10,29 @@ import {
 
 const EXTERNAL_OAUTH_TIMEOUT_MS = 15_000;
 const META_API_VERSION = (process.env.META_GRAPH_API_VERSION ?? "v23.0").trim();
+const META_INSTAGRAM_API_VERSION = (process.env.META_INSTAGRAM_GRAPH_API_VERSION ?? "v25.0").trim();
 
 export const EXTERNAL_OAUTH_PROVIDERS: readonly ExternalOAuthProvider[] = [
   "meta_business",
+  "meta_instagram",
   "ticktick",
 ];
 
-export const META_SOCIAL_SCOPES = [
+/** Facebook Login / Facebook Login for Business permissions for Pages. */
+export const META_FACEBOOK_SCOPES = [
   "pages_show_list",
   "pages_read_engagement",
   "pages_manage_posts",
-  "instagram_basic",
-  "instagram_content_publish",
 ] as const;
+
+/** Instagram API with Instagram Login permissions. */
+export const META_INSTAGRAM_SCOPES = [
+  "instagram_business_basic",
+  "instagram_business_content_publish",
+] as const;
+
+/** Backwards-compatible name for callers that mean the Facebook Pages flow. */
+export const META_SOCIAL_SCOPES = META_FACEBOOK_SCOPES;
 
 const TICKTICK_SCOPES = ["tasks:read", "tasks:write"] as const;
 
@@ -30,9 +40,12 @@ const TICKTICK_SCOPES = ["tasks:read", "tasks:write"] as const;
 export async function revokeExternalProviderAccess(
   record: Pick<ExternalOAuthTokenRecord, "provider" | "accessToken">,
 ): Promise<boolean> {
-  if (record.provider !== "meta_business" || !record.accessToken) return false;
+  if (!record.accessToken || (record.provider !== "meta_business" && record.provider !== "meta_instagram")) return false;
+  const graphHost = record.provider === "meta_instagram"
+    ? `https://graph.instagram.com/${META_INSTAGRAM_API_VERSION}`
+    : `https://graph.facebook.com/${META_API_VERSION}`;
   try {
-    const response = await fetch(`https://graph.facebook.com/${META_API_VERSION}/me/permissions`, {
+    const response = await fetch(`${graphHost}/me/permissions`, {
       method: "DELETE",
       headers: { authorization: `Bearer ${record.accessToken}` },
       signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS),
@@ -47,7 +60,7 @@ export function externalOAuthCredentials(provider: ExternalOAuthProvider): {
   clientId: string;
   clientSecret: string;
 } | null {
-  const names: readonly [string, string] = provider === "meta_business"
+  const names: readonly [string, string] = provider === "meta_business" || provider === "meta_instagram"
     ? ["META_APP_ID", "META_APP_SECRET"]
     : ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"];
   const clientId = process.env[names[0]]?.trim() ?? "";
@@ -58,7 +71,7 @@ export function externalOAuthCredentials(provider: ExternalOAuthProvider): {
 export function externalOAuthMissingCredentials(
   provider: ExternalOAuthProvider,
 ): string[] {
-  const names: readonly [string, string] = provider === "meta_business"
+  const names: readonly [string, string] = provider === "meta_business" || provider === "meta_instagram"
     ? ["META_APP_ID", "META_APP_SECRET"]
     : ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"];
   return names.filter((name) => !(process.env[name]?.trim()));
@@ -71,7 +84,7 @@ export function externalOAuthRedirectUri(
   const base = (
     publicBaseUrl?.trim() || process.env.PUBLIC_BASE_URL?.trim() || "http://localhost:3000"
   ).replace(/\/+$/, "");
-  return `${base}/connections/${provider}/callback`;
+  return `${base}/connections/${provider === "meta_instagram" ? "meta_business" : provider}/callback`;
 }
 
 function providerConfig(provider: ExternalOAuthProvider, redirectUri: string) {
@@ -79,7 +92,15 @@ function providerConfig(provider: ExternalOAuthProvider, redirectUri: string) {
     return {
       authorizationEndpoint: `https://www.facebook.com/${META_API_VERSION}/dialog/oauth`,
       tokenEndpoint: `https://graph.facebook.com/${META_API_VERSION}/oauth/access_token`,
-      scopes: META_SOCIAL_SCOPES,
+      scopes: META_FACEBOOK_SCOPES,
+      redirectUri,
+    };
+  }
+  if (provider === "meta_instagram") {
+    return {
+      authorizationEndpoint: "https://www.instagram.com/oauth/authorize",
+      tokenEndpoint: "https://api.instagram.com/oauth/access_token",
+      scopes: META_INSTAGRAM_SCOPES,
       redirectUri,
     };
   }
@@ -119,7 +140,7 @@ export async function startExternalOAuth(input: {
     client_id: credentials.clientId,
     redirect_uri: config.redirectUri,
     response_type: "code",
-    scope: config.scopes.join(" "),
+    scope: config.scopes.join(input.provider === "meta_instagram" ? "," : " "),
     state,
   });
   return {
@@ -178,6 +199,54 @@ async function exchangeMetaCode(
     // Meta does not always echo the granted scopes. An absent scope response
     // must not be treated as consent for a write capability.
     scopes: parseScopes(body.scope, []),
+  };
+}
+
+async function exchangeMetaInstagramCode(
+  code: string,
+  credentials: { clientId: string; clientSecret: string },
+  redirectUri: string,
+): Promise<{ accessToken: string; refreshToken: string | null; expiresAt: string | null; scopes: string[] }> {
+  const form = new URLSearchParams({
+    client_id: credentials.clientId,
+    client_secret: credentials.clientSecret,
+    grant_type: "authorization_code",
+    redirect_uri: redirectUri,
+    code,
+  });
+  const response = await fetch("https://api.instagram.com/oauth/access_token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: form,
+    signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS),
+  });
+  const body = await readJson(response, "meta_instagram");
+  const shortLivedToken = typeof body.access_token === "string" ? body.access_token : "";
+  if (!shortLivedToken) throw new Error("META_INSTAGRAM_MISSING_ACCESS_TOKEN");
+
+  const longLivedParams = new URLSearchParams({
+    grant_type: "ig_exchange_token",
+    client_secret: credentials.clientSecret,
+    access_token: shortLivedToken,
+  });
+  const longLivedResponse = await fetch(
+    `https://graph.instagram.com/access_token?${longLivedParams.toString()}`,
+    { signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS) },
+  );
+  const longLivedBody = await readJson(longLivedResponse, "meta_instagram");
+  const accessToken = typeof longLivedBody.access_token === "string"
+    ? longLivedBody.access_token
+    : shortLivedToken;
+  const expiresIn = typeof longLivedBody.expires_in === "number"
+    ? longLivedBody.expires_in
+    : typeof body.expires_in === "number"
+      ? body.expires_in
+      : null;
+  return {
+    accessToken,
+    refreshToken: null,
+    expiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null,
+    scopes: parseScopes(body.permissions ?? body.scope, []),
   };
 }
 
@@ -284,6 +353,28 @@ async function probeMeta(accessToken: string): Promise<MetaProbe> {
   };
 }
 
+async function probeMetaInstagram(accessToken: string): Promise<MetaProbe> {
+  const query = new URLSearchParams({
+    fields: "id,username,name,user_type",
+    access_token: accessToken,
+  });
+  const response = await fetch(
+    `https://graph.instagram.com/${META_INSTAGRAM_API_VERSION}/me?${query.toString()}`,
+    { signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS) },
+  );
+  const body = await readJson(response, "meta_instagram");
+  const id = typeof body.id === "string" ? body.id.trim() : "";
+  const username = typeof body.username === "string" ? body.username.trim() : "";
+  const name = typeof body.name === "string" ? body.name.trim() : username;
+  if (!id || !name) throw new Error("META_INSTAGRAM_NO_SOCIAL_ASSETS");
+  return {
+    label: username ? `@${username}` : name,
+    scopes: [],
+    facebookPages: [],
+    instagramAccounts: [{ id, name, ...(username ? { username } : {}) }],
+  };
+}
+
 async function probeTickTick(accessToken: string): Promise<{ label: string; scopes: string[] }> {
   const response = await fetch("https://api.ticktick.com/open/v1/project", {
     headers: { authorization: `Bearer ${accessToken}` },
@@ -316,10 +407,14 @@ export async function completeExternalOAuth(input: {
 
   const exchanged = input.provider === "meta_business"
     ? await exchangeMetaCode(input.code, credentials, input.redirectUri)
-    : await exchangeTickTickCode(input.code, credentials, input.redirectUri);
+    : input.provider === "meta_instagram"
+      ? await exchangeMetaInstagramCode(input.code, credentials, input.redirectUri)
+      : await exchangeTickTickCode(input.code, credentials, input.redirectUri);
   const metaProbe = input.provider === "meta_business"
     ? await probeMeta(exchanged.accessToken)
-    : null;
+    : input.provider === "meta_instagram"
+      ? await probeMetaInstagram(exchanged.accessToken)
+      : null;
   const probe = metaProbe ?? await probeTickTick(exchanged.accessToken);
   const record: ExternalOAuthTokenRecord = {
     organizationId: input.organizationId,
@@ -335,16 +430,21 @@ export async function completeExternalOAuth(input: {
   };
   await getExternalOAuthTokenStore().put(record);
   const grantedCapabilities = metaProbe
-    ? [
-        ...(metaProbe.facebookPages.length > 0 ? ["marketing.social.read"] : []),
-        ...(metaProbe.facebookPages.length > 0 && exchanged.scopes.includes("pages_manage_posts")
-          ? ["marketing.social.publish"]
-          : []),
-        ...(metaProbe.instagramAccounts.length > 0 ? ["marketing.social.instagram.read"] : []),
-        ...(metaProbe.instagramAccounts.length > 0 && exchanged.scopes.includes("instagram_content_publish")
-          ? ["marketing.social.instagram.publish"]
-          : []),
-      ]
+    ? input.provider === "meta_instagram"
+      ? [
+          ...(metaProbe.instagramAccounts.length > 0 && exchanged.scopes.includes("instagram_business_basic")
+            ? ["marketing.social.instagram.read"]
+            : []),
+          ...(metaProbe.instagramAccounts.length > 0 && exchanged.scopes.includes("instagram_business_content_publish")
+            ? ["marketing.social.instagram.publish"]
+            : []),
+        ]
+      : [
+          ...(metaProbe.facebookPages.length > 0 ? ["marketing.social.read"] : []),
+          ...(metaProbe.facebookPages.length > 0 && exchanged.scopes.includes("pages_manage_posts")
+            ? ["marketing.social.publish"]
+            : []),
+        ]
     : ["tasks.read", "tasks.write"];
   return { record, returnPath: stateRecord.returnPath, grantedCapabilities };
 }

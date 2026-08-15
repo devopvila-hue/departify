@@ -927,8 +927,16 @@ export async function registerCustomerZeroV2Routes(
         });
       }
       const tokenStore = getExternalOAuthTokenStore();
-      const token = await tokenStore.get(organizationId, userId, externalProvider);
-      if (!token) {
+      const externalProviders: readonly ExternalOAuthProvider[] = externalProvider === "meta_business"
+        ? ["meta_business", "meta_instagram"]
+        : [externalProvider];
+      const tokens = (await Promise.all(
+        externalProviders.map(async (provider) => ({
+          provider,
+          token: await tokenStore.get(organizationId, userId, provider),
+        })),
+      )).filter((entry): entry is { provider: ExternalOAuthProvider; token: NonNullable<typeof entry.token> } => Boolean(entry.token));
+      if (tokens.length === 0) {
         return reply.code(409).send({
           error: {
             code: "connection_not_found",
@@ -936,8 +944,13 @@ export async function registerCustomerZeroV2Routes(
           },
         });
       }
-      const providerRevoked = await revokeExternalProviderAccess(token);
-      await tokenStore.remove(organizationId, userId, externalProvider);
+      const providerRevoked = (await Promise.all(
+        tokens.map(async ({ provider, token }) => {
+          const revoked = await revokeExternalProviderAccess({ ...token, provider });
+          await tokenStore.remove(organizationId, userId, provider);
+          return revoked;
+        }),
+      )).every(Boolean);
       for (const id of new Set([externalProvider, "meta_ads"])) {
         const tool = TOOL_CATALOG.find((entry) => entry.id === id);
         if (!tool) continue;
@@ -1371,7 +1384,11 @@ export async function registerCustomerZeroV2Routes(
 
   server.post<{
     Params: { organizationId: string; toolId: string };
-    Body: { returnPath?: "/" | "/conexiones" | "/chat"; reconnect?: boolean };
+    Body: {
+      returnPath?: "/" | "/conexiones" | "/chat";
+      reconnect?: boolean;
+      channel?: "facebook" | "instagram";
+    };
   }>(
     "/api/customer-zero/:organizationId/connections/:toolId/connect",
     {
@@ -1398,6 +1415,7 @@ export async function registerCustomerZeroV2Routes(
         toolId: string;
       };
       const requestedReturnPath = request.body?.returnPath;
+      const requestedChannel = request.body?.channel;
       const allowedReturnPaths = new Set(["/", "/conexiones", "/chat"]);
       if (requestedReturnPath !== undefined && !allowedReturnPaths.has(requestedReturnPath)) {
         return reply.code(400).send({ error: "Invalid OAuth return context." });
@@ -1561,10 +1579,13 @@ export async function registerCustomerZeroV2Routes(
 
       const externalOAuthTools = new Set<ExternalOAuthProvider>([
         "meta_business",
+        "meta_instagram",
         "ticktick",
       ]);
-      if (externalOAuthTools.has(tool.id as ExternalOAuthProvider)) {
-        const provider = tool.id as ExternalOAuthProvider;
+      if (externalOAuthTools.has(tool.id as ExternalOAuthProvider) || tool.id === "meta_business") {
+        const provider: ExternalOAuthProvider = tool.id === "meta_business" && requestedChannel === "instagram"
+          ? "meta_instagram"
+          : tool.id as ExternalOAuthProvider;
         const missing = externalOAuthMissingCredentials(provider);
         if (missing.length > 0 || !externalOAuthCredentials(provider)) {
           connection.status = "blocked";
@@ -1949,10 +1970,17 @@ export async function registerCustomerZeroV2Routes(
 
       const externalOAuthTools = new Set<ExternalOAuthProvider>([
         "meta_business",
+        "meta_instagram",
         "ticktick",
       ]);
-      if (externalOAuthTools.has(effectiveToolId as ExternalOAuthProvider)) {
-        const provider = effectiveToolId as ExternalOAuthProvider;
+      let provider: ExternalOAuthProvider | null = externalOAuthTools.has(effectiveToolId as ExternalOAuthProvider)
+        ? effectiveToolId as ExternalOAuthProvider
+        : null;
+      if (effectiveToolId === "meta_business" && state) {
+        const binding = await getGoogleOAuthStateStore().get(state);
+        if (binding?.requestedToolId === "meta_instagram") provider = "meta_instagram";
+      }
+      if (provider) {
         const { code, state: callbackState } = (request.body ?? {}) as {
           code?: string;
           state?: string;

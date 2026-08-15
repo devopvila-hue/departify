@@ -9,7 +9,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { AuthConfig } from "@departify/config";
 
-export type ExternalOAuthProvider = "meta_business" | "ticktick";
+export type ExternalOAuthProvider = "meta_business" | "meta_instagram" | "ticktick";
 
 export interface ExternalOAuthTokenRecord {
   readonly organizationId: string;

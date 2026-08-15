@@ -121,6 +121,30 @@ describe("CZ03 — Google OAuth unified handshake (routes)", () => {
     expect(body.connection.status).not.toBe("connected");
   });
 
+  it("Instagram channel uses Instagram Login and the shared validated callback", async () => {
+    process.env.META_APP_ID = "meta-app-test";
+    process.env.META_APP_SECRET = "meta-secret-test";
+    process.env.PUBLIC_BASE_URL = "https://app.departify.app";
+    const org = await startOrg();
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/meta_business/connect`,
+      payload: { channel: "instagram" },
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const authorizationUrl = new URL(body.connection.authorizationUrl);
+    expect(authorizationUrl.origin).toBe("https://www.instagram.com");
+    expect(authorizationUrl.pathname).toBe("/oauth/authorize");
+    expect(authorizationUrl.searchParams.get("scope")).toBe(
+      "instagram_business_basic,instagram_business_content_publish",
+    );
+    expect(authorizationUrl.searchParams.get("redirect_uri")).toBe(
+      "https://app.departify.app/connections/meta_business/callback",
+    );
+    expect(body.connection.status).toBe("connecting");
+  });
+
   it("Meta callback exchanges the code, discovers assets and persists the social grant", async () => {
     process.env.META_APP_ID = "meta-app-test";
     process.env.META_APP_SECRET = "meta-secret-test";
@@ -151,7 +175,7 @@ describe("CZ03 — Google OAuth unified handshake (routes)", () => {
         return new Response(JSON.stringify({
           access_token: "meta-access-token",
           expires_in: 3600,
-          scope: "pages_show_list pages_read_engagement pages_manage_posts instagram_basic instagram_content_publish",
+          scope: "pages_show_list pages_read_engagement pages_manage_posts",
         }), { status: 200 });
       }
       if (url.includes("/me?")) {
@@ -185,8 +209,6 @@ describe("CZ03 — Google OAuth unified handshake (routes)", () => {
           grantedCapabilities: [
             "marketing.social.read",
             "marketing.social.publish",
-            "marketing.social.instagram.read",
-            "marketing.social.instagram.publish",
           ],
         }),
       }));

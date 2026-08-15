@@ -50,6 +50,7 @@ export type OAuthRequestedToolId =
   | "google_drive"
   | "youtube"
   | "meta_business"
+  | "meta_instagram"
   | "ticktick";
 
 /** Durable OAuth state boundary. Async: the durable adapter needs I/O. */

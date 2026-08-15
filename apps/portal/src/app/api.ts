@@ -989,6 +989,7 @@ export const api = {
     toolId: string,
     returnPath?: GoogleOAuthReturnPath,
     reconnect = false,
+    channel?: "facebook" | "instagram",
   ) =>
     postJson<{ connection: ConnectionCard }>(
       `/api/customer-zero/${org}/connections/${toolId}/connect`,
@@ -996,6 +997,7 @@ export const api = {
         ? {
             ...(returnPath ? { returnPath } : {}),
             ...(reconnect ? { reconnect: true } : {}),
+            ...(channel ? { channel } : {}),
           }
         : undefined,
     ),

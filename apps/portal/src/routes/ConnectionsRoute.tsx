@@ -12,6 +12,7 @@ type SurfaceState = ToolConnectionView["state"] | "available";
 type Surface = ToolConnectionView & {
   surfaceId: string;
   connectToolId: string | undefined;
+  oauthChannel?: "facebook" | "instagram";
   capabilityNames: string[];
   unavailableReason: string | undefined;
 };
@@ -78,7 +79,7 @@ export function ConnectionsRoute() {
     setBusy(surface.surfaceId);
     setNotice(null);
     try {
-      const response = await api.connect(organizationId, surface.connectToolId, returnPath, reconnect);
+      const response = await api.connect(organizationId, surface.connectToolId, returnPath, reconnect, surface.oauthChannel);
       const authorizationUrl = response?.connection?.authorizationUrl;
       if (authorizationUrl) {
         rememberGoogleOAuthReturnPath(returnPath);
@@ -306,10 +307,10 @@ export function buildSurfaces(catalog: readonly ToolConnectionView[]): Surface[]
   const meta = normalizedCatalog.find((entry) => entry.toolId === "meta_business");
   if (meta) {
     direct.push(metaSurface(meta, "facebook", "Facebook", "Consulta y prepara publicaciones de tus páginas de Facebook.", ["marketing.social.read", "marketing.social.publish"]));
-    direct.push(metaSurface(meta, "instagram", "Instagram", "Conecta Instagram cuando la cuenta conceda permisos específicos para ese canal.", ["marketing.instagram.read", "marketing.social.instagram.read"]));
+    direct.push(metaSurface(meta, "instagram", "Instagram", "Conecta Instagram cuando la cuenta conceda permisos específicos para ese canal.", ["marketing.social.instagram.read"]));
   } else {
     direct.push(metaSurface(null, "facebook", "Facebook", "Conecta tus páginas de Facebook.", ["marketing.social.read"]));
-    direct.push(metaSurface(null, "instagram", "Instagram", "Conecta tu cuenta de Instagram.", ["marketing.instagram.read"]));
+    direct.push(metaSurface(null, "instagram", "Instagram", "Conecta tu cuenta de Instagram.", ["marketing.social.instagram.read"]));
   }
   return direct.sort(compareSurfaces);
 }
@@ -440,6 +441,7 @@ function metaSurface(source: ToolConnectionView | null, surfaceId: "facebook" | 
     action: connected ? null : "connect",
     capabilityNames: connected ? grants.map(humanCapability) : [],
     connectToolId: "meta_business",
+    oauthChannel: surfaceId,
     unavailableReason: undefined,
   };
 }

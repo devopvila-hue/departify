@@ -545,17 +545,39 @@ async function reconcileMetaConnectionFromDurableToken(
 ): Promise<void> {
   const existing = existingRecords.find((record) => record.toolId === "meta_business");
   const summaries = await getExternalOAuthTokenStore().listForOrg(session.organizationId);
-  const summary = summaries.find((record) => record.provider === "meta_business");
-  if (!summary && !existing) return;
+  const metaSummaries = summaries.filter(
+    (record) => record.provider === "meta_business" || record.provider === "meta_instagram",
+  );
+  if (metaSummaries.length === 0 && !existing) return;
   if (session.state.connections.get("meta_business")?.status === "connecting") return;
 
-  const expiresAt = summary?.expiresAt ? Date.parse(summary.expiresAt) : null;
-  const operational = Boolean(
-    summary?.hasAccessToken &&
-      summary.operationalVerifiedAt &&
-      !summary.operationalProbeError &&
-      (expiresAt === null || Number.isNaN(expiresAt) || expiresAt > Date.now()),
-  );
+  const operationalSummaries = metaSummaries.filter((summary) => {
+    const expiresAt = summary.expiresAt ? Date.parse(summary.expiresAt) : null;
+    return Boolean(
+      summary.hasAccessToken &&
+        summary.operationalVerifiedAt &&
+        !summary.operationalProbeError &&
+        (expiresAt === null || Number.isNaN(expiresAt) || expiresAt > Date.now()),
+    );
+  });
+  const operational = operationalSummaries.length > 0;
+  const grantedCapabilities = [...new Set(metaSummaries.flatMap((summary) => [
+    ...(summary.provider === "meta_business" && summary.scopes.includes("pages_show_list")
+      ? ["marketing.social.read"]
+      : []),
+    ...(summary.provider === "meta_business" && summary.scopes.includes("pages_manage_posts")
+      ? ["marketing.social.publish"]
+      : []),
+    ...(summary.provider === "meta_instagram" && summary.scopes.includes("instagram_business_basic")
+      ? ["marketing.social.instagram.read"]
+      : []),
+    ...(summary.provider === "meta_instagram" && summary.scopes.includes("instagram_business_content_publish")
+      ? ["marketing.social.instagram.publish"]
+      : []),
+  ]))];
+  const latest = [...metaSummaries]
+    .sort((a, b) => Date.parse(b.operationalVerifiedAt ?? "") - Date.parse(a.operationalVerifiedAt ?? ""))[0];
+  const accountLabel = [...new Set(metaSummaries.map((summary) => summary.accountLabel).filter(Boolean))].join(" · ");
   const status: OrganizationToolState["status"] = operational
     ? "connected"
     : "needs_connection";
@@ -570,14 +592,17 @@ async function reconcileMetaConnectionFromDurableToken(
     status,
     configSource: "oauth:meta_business",
     provider: "meta_business",
-    ...(summary?.accountLabel ? { providerAccountRef: summary.accountLabel } : {}),
-    ...(operational && summary?.operationalVerifiedAt
+    ...(accountLabel ? { providerAccountRef: accountLabel } : {}),
+    ...(grantedCapabilities.length > 0 ? { grantedCapabilities } : {}),
+    ...(operational && latest?.operationalVerifiedAt
       ? {
-          verifiedAt: summary.operationalVerifiedAt,
-          lastValidatedAt: summary.operationalVerifiedAt,
+          verifiedAt: latest.operationalVerifiedAt,
+          lastValidatedAt: latest.operationalVerifiedAt,
         }
       : {}),
-    ...(summary?.operationalProbeError ? { lastError: "La conexión de Facebook no está operativa." } : {}),
+    ...(metaSummaries.some((summary) => summary.operationalProbeError)
+      ? { lastError: "La conexión de Meta no está operativa." }
+      : {}),
     health: operational ? "operational" : "down",
     updatedAt: new Date().toISOString(),
   };
@@ -593,9 +618,7 @@ async function reconcileMetaConnectionFromDurableToken(
       buildConnectionStateWithLifecycle(tool, session.state.locale, status, {
         configSource: "oauth:meta_business",
         ...(record.verifiedAt ? { verifiedAt: record.verifiedAt } : {}),
-        ...(record.grantedCapabilities
-          ? { grantedCapabilities: record.grantedCapabilities }
-          : {}),
+        ...(record.grantedCapabilities ? { grantedCapabilities: record.grantedCapabilities } : {}),
       }),
     );
   }

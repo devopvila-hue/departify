@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   completeExternalOAuth,
   externalOAuthMissingCredentials,
+  META_INSTAGRAM_SCOPES,
   META_SOCIAL_SCOPES,
   startExternalOAuth,
 } from "../src/customer-zero/external-oauth.js";
@@ -134,8 +135,6 @@ describe("provider-backed marketing OAuth", () => {
       expect(completed.grantedCapabilities).toEqual([
         "marketing.social.read",
         "marketing.social.publish",
-        "marketing.social.instagram.read",
-        "marketing.social.instagram.publish",
       ]);
       expect(tokenStore.put).toHaveBeenCalledWith(expect.objectContaining({
         organizationId: "org-a",
@@ -144,6 +143,89 @@ describe("provider-backed marketing OAuth", () => {
         accessToken: "meta-access-token",
       }));
       expect(JSON.stringify(tokenStore.put.mock.calls[0])).not.toContain("META_APP_SECRET");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it("creates a separate Instagram Login authorization URL with current business scopes", async () => {
+    process.env.META_APP_ID = "meta-app-test";
+    process.env.META_APP_SECRET = "meta-secret-test";
+    const stateStore = createInMemoryOAuthStateStore();
+    installGoogleOAuthStateStore(stateStore);
+
+    const out = await startExternalOAuth({
+      organizationId: "org-instagram",
+      userId: "user-instagram",
+      provider: "meta_instagram",
+      returnPath: "/conexiones",
+      redirectUri: "https://app.departify.app/connections/meta_business/callback",
+    });
+    const authorizationUrl = new URL(out.authorizationUrl);
+    expect(authorizationUrl.origin).toBe("https://www.instagram.com");
+    expect(authorizationUrl.pathname).toBe("/oauth/authorize");
+    expect(authorizationUrl.searchParams.get("redirect_uri")).toBe(
+      "https://app.departify.app/connections/meta_business/callback",
+    );
+    expect(authorizationUrl.searchParams.get("scope")?.split(",")).toEqual([...META_INSTAGRAM_SCOPES]);
+    expect(authorizationUrl.searchParams.get("scope")).not.toContain("instagram_basic");
+  });
+
+  it("exchanges Instagram Login code and grants only Instagram capabilities", async () => {
+    process.env.META_APP_ID = "meta-app-test";
+    process.env.META_APP_SECRET = "meta-secret-test";
+    installGoogleOAuthStateStore(createInMemoryOAuthStateStore());
+    const tokenStore = {
+      put: vi.fn(),
+      get: vi.fn(),
+      listForOrg: vi.fn(),
+      remove: vi.fn(),
+    };
+    installExternalOAuthTokenStoreForTest(tokenStore);
+    const started = await startExternalOAuth({
+      organizationId: "org-instagram",
+      userId: "user-instagram",
+      provider: "meta_instagram",
+      returnPath: "/conexiones",
+      redirectUri: "https://app.departify.app/connections/meta_business/callback",
+    });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url === "https://api.instagram.com/oauth/access_token") {
+        expect(init?.method).toBe("POST");
+        return new Response(JSON.stringify({
+          access_token: "instagram-short-token",
+          user_id: "ig-1",
+          permissions: [...META_INSTAGRAM_SCOPES].join(","),
+        }), { status: 200 });
+      }
+      if (url.includes("graph.instagram.com/access_token")) {
+        return new Response(JSON.stringify({
+          access_token: "instagram-long-token",
+          expires_in: 5_184_000,
+        }), { status: 200 });
+      }
+      if (url.includes("graph.instagram.com/v25.0/me?")) {
+        return new Response(JSON.stringify({ id: "ig-1", username: "departify" }), { status: 200 });
+      }
+      return realFetch(input, init);
+    }) as typeof fetch;
+    try {
+      const completed = await completeExternalOAuth({
+        organizationId: "org-instagram",
+        userId: "user-instagram",
+        provider: "meta_instagram",
+        code: "instagram-code",
+        state: started.state,
+        redirectUri: "https://app.departify.app/connections/meta_business/callback",
+      });
+      expect(completed.record.provider).toBe("meta_instagram");
+      expect(completed.record.accessToken).toBe("instagram-long-token");
+      expect(completed.grantedCapabilities).toEqual([
+        "marketing.social.instagram.read",
+        "marketing.social.instagram.publish",
+      ]);
     } finally {
       globalThis.fetch = realFetch;
     }
