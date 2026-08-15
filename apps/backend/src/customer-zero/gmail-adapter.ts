@@ -259,8 +259,6 @@ export interface GmailOAuthStartInput {
   readonly clientId: string;
   readonly scopes?: readonly string[];
   readonly requestedToolId?: "gmail" | "google_workspace" | "google_calendar" | "google_drive" | "youtube";
-  /** Ask Google to show the account picker when adding another account. */
-  readonly selectAccount?: boolean;
 }
 
 export interface GmailOAuthStartOutput {
@@ -296,7 +294,7 @@ export async function startGoogleOAuth(
     response_type: "code",
     scope: (input.scopes ?? GMAIL_SCOPES).join(" "),
     access_type: "offline",
-    prompt: input.selectAccount ? "select_account consent" : "consent",
+    prompt: "consent",
     include_granted_scopes: "true",
     state: nonce,
   });

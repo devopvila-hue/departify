@@ -87,14 +87,24 @@ describe("Google OAuth handshake — portal side", () => {
     let connectCount = 0;
     mockFetchSequence([
       () => ({
-        organizationId: "org_moon",
-        connections: [{
-          toolId: "gmail", label: "Gmail", name: "Gmail", capability: "email.read",
-          capabilities: [], category: "Correo", categoryId: "email", logoMark: "G",
-          brandColor: "#ea4335", description: "Correo empresarial.", domains: ["email"],
-          state: "available", hasState: false, humanLabel: "Disponible", action: "prepare",
-        }],
-        cards: [],
+        connections: [],
+        cards: [
+          {
+            id: "gmail",
+            name: "Gmail",
+            category: "Correo",
+            categoryId: "email",
+            logoMark: "G",
+            brandColor: "#ea4335",
+            state: "not_connected",
+            stateLabel: "No conectado",
+            configSource: null,
+            verifiedAt: null,
+            capabilities: [],
+            actionLabel: "Configurar",
+            description: null,
+          },
+        ],
         unmappedTools: [],
       }),
       // /api/customer-zero/org_moon/connections/gmail/connect
@@ -117,9 +127,15 @@ describe("Google OAuth handshake — portal side", () => {
     ]);
     mountAt(<ConnectionsRoute />, "/conexiones");
 
-    fireEvent.click(await screen.findByRole("button", { name: /añadir/i }));
-    fireEvent.click(await screen.findByRole("button", { name: /gmail/i }));
-    fireEvent.click(await screen.findByRole("button", { name: "Conectar" }));
+    // Scope to the Gmail CONNECTION CARD button (the Correo section
+    // also renders provider options with buttons — global queries are
+    // ambiguous).
+    const gmailCard = (await screen.findByText("Gmail", {
+      selector: "strong",
+    })).closest(".dfy-connection-card");
+    const btn = gmailCard?.querySelector("button");
+    if (!btn) throw new Error("gmail card button not found");
+    fireEvent.click(btn);
 
     await waitFor(() => {
       expect(connectCount).toBe(1);
@@ -133,14 +149,24 @@ describe("Google OAuth handshake — portal side", () => {
     let captured: { url: string; method: string } | null = null;
     mockFetchSequence([
       () => ({
-        organizationId: "org_moon",
-        connections: [{
-          toolId: "gmail", label: "Gmail", name: "Gmail", capability: "email.read",
-          capabilities: [], category: "Correo", categoryId: "email", logoMark: "G",
-          brandColor: "#ea4335", description: "Correo empresarial.", domains: ["email"],
-          state: "available", hasState: false, humanLabel: "Disponible", action: "prepare",
-        }],
-        cards: [],
+        connections: [],
+        cards: [
+          {
+            id: "gmail",
+            name: "Gmail",
+            category: "Correo",
+            categoryId: "email",
+            logoMark: "G",
+            brandColor: "#ea4335",
+            state: "not_connected",
+            stateLabel: "No conectado",
+            configSource: null,
+            verifiedAt: null,
+            capabilities: [],
+            actionLabel: "Configurar",
+            description: null,
+          },
+        ],
         unmappedTools: [],
       }),
       (url) => {
@@ -158,9 +184,12 @@ describe("Google OAuth handshake — portal side", () => {
       },
     ]);
     mountAt(<ConnectionsRoute />, "/conexiones");
-    fireEvent.click(await screen.findByRole("button", { name: /añadir/i }));
-    fireEvent.click(await screen.findByRole("button", { name: /gmail/i }));
-    fireEvent.click(await screen.findByRole("button", { name: "Conectar" }));
+    const gmailCard = (await screen.findByText("Gmail", {
+      selector: "strong",
+    })).closest(".dfy-connection-card");
+    const btn = gmailCard?.querySelector("button");
+    if (!btn) throw new Error("gmail card button not found");
+    fireEvent.click(btn);
 
     await waitFor(() => {
       expect(captured).not.toBeNull();
