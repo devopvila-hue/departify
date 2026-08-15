@@ -21,6 +21,12 @@ export interface ConnectorCapabilityDefinition {
 }
 
 export const ACTIVEPIECES_CONNECTOR_CAPABILITIES: Readonly<Record<string, ConnectorCapabilityDefinition>> = {
+  "marketing.social.publish": {
+    id: "marketing.social.publish",
+    providerToolId: "meta_business",
+    sideEffect: true,
+    requiresOAuth: true,
+  },
   "marketing.meta.ads.read": {
     id: "marketing.meta.ads.read",
     providerToolId: "meta_business",
@@ -45,9 +51,13 @@ export function createActivepiecesConnectorRuntime(
   const baseUrl = process.env.ACTIVEPIECES_BASE_URL?.trim() ?? "";
   const webhookSecret = process.env.ACTIVEPIECES_WEBHOOK_SIGNING_SECRET?.trim() ?? "";
   const metaWebhookPath = process.env.ACTIVEPIECES_META_ADS_WEBHOOK_PATH?.trim() ?? "";
+  const socialWebhookPath = process.env.ACTIVEPIECES_META_SOCIAL_PUBLISH_WEBHOOK_PATH?.trim() ?? "";
   const config: ActivepiecesConnectorRuntimeConfig = {
     baseUrl,
     webhookPaths: {
+      ...(socialWebhookPath
+        ? { "marketing.social.publish": socialWebhookPath }
+        : {}),
       ...(metaWebhookPath
         ? {
             "marketing.meta.ads.read": metaWebhookPath,
@@ -146,7 +156,11 @@ export function createConnectorRuntimeCandidates(
   candidates.push({
     provider: "activepieces",
     kind: "activepieces_community",
-    capabilities: ["marketing.meta.ads.read", "marketing.meta.ads.manage"],
+    capabilities: [
+      "marketing.social.publish",
+      "marketing.meta.ads.read",
+      "marketing.meta.ads.manage",
+    ],
     runtime: activepieces,
   });
   return candidates;

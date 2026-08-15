@@ -19,6 +19,7 @@ export const EXTERNAL_OAUTH_PROVIDERS: readonly ExternalOAuthProvider[] = [
 const META_SCOPES = [
   "pages_show_list",
   "pages_read_engagement",
+  "pages_manage_posts",
   "business_management",
   "instagram_basic",
   "instagram_content_publish",
@@ -161,7 +162,9 @@ async function exchangeMetaCode(
     accessToken,
     refreshToken: null,
     expiresAt: expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null,
-    scopes: parseScopes(body.scope, META_SCOPES),
+    // Meta does not always echo the granted scopes. An absent scope response
+    // must not be treated as consent for a write capability.
+    scopes: parseScopes(body.scope, []),
   };
 }
 
@@ -197,16 +200,36 @@ async function exchangeTickTickCode(
   };
 }
 
-async function probeMeta(accessToken: string): Promise<{ label: string; scopes: string[] }> {
+async function probeMeta(accessToken: string): Promise<{ label: string; scopes: string[]; pageCount: number }> {
   const query = new URLSearchParams({ fields: "id,name", access_token: accessToken });
   const response = await fetch(
     `https://graph.facebook.com/${META_API_VERSION}/me?${query.toString()}`,
     { signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS) },
   );
   const body = await readJson(response, "meta_business");
+  let pageCount = 0;
+  try {
+    const pagesQuery = new URLSearchParams({
+      fields: "id,name",
+      limit: "100",
+      access_token: accessToken,
+    });
+    const pagesResponse = await fetch(
+      `https://graph.facebook.com/${META_API_VERSION}/me/accounts?${pagesQuery.toString()}`,
+      { signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS) },
+    );
+    if (pagesResponse.ok) {
+      const pagesBody = await pagesResponse.json() as { data?: unknown };
+      pageCount = Array.isArray(pagesBody.data) ? pagesBody.data.length : 0;
+    }
+  } catch {
+    // The identity probe is still useful for Ads. Organic social remains
+    // unavailable unless the Page probe succeeds with at least one Page.
+  }
   return {
     label: typeof body.name === "string" ? body.name : "Meta Business",
     scopes: [],
+    pageCount,
   };
 }
 
@@ -226,7 +249,7 @@ export async function completeExternalOAuth(input: {
   code: string;
   state: string;
   redirectUri: string;
-}): Promise<{ record: ExternalOAuthTokenRecord; returnPath: string }> {
+}): Promise<{ record: ExternalOAuthTokenRecord; returnPath: string; grantedCapabilities: readonly string[] }> {
   const stateRecord = await getGoogleOAuthStateStore().get(input.state);
   if (!stateRecord || stateRecord.consumed) throw new Error("invalid_state");
   if (
@@ -259,5 +282,18 @@ export async function completeExternalOAuth(input: {
     operationalProbeError: null,
   };
   await getExternalOAuthTokenStore().put(record);
-  return { record, returnPath: stateRecord.returnPath };
+  const pageCount = "pageCount" in probe && typeof probe.pageCount === "number"
+    ? probe.pageCount
+    : 0;
+  const grantedCapabilities = input.provider === "meta_business"
+    ? [
+        ...(pageCount > 0 ? ["marketing.social.read"] : []),
+        ...(pageCount > 0 && exchanged.scopes.includes("pages_manage_posts")
+          ? ["marketing.social.publish"]
+          : []),
+        ...(exchanged.scopes.includes("ads_read") ? ["marketing.meta.ads.read"] : []),
+        ...(exchanged.scopes.includes("ads_management") ? ["marketing.meta.ads.manage"] : []),
+      ]
+    : ["tasks.read", "tasks.write"];
+  return { record, returnPath: stateRecord.returnPath, grantedCapabilities };
 }

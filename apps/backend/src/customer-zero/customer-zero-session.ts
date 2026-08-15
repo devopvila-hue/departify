@@ -132,6 +132,8 @@ export interface CustomerZeroSessionState {
     status: "awaiting_date" | "awaiting_approval" | "creating";
     createdAt: string;
   };
+  /** Pending Facebook Pages publication; retained until approval/cancellation. */
+  pendingFacebookPagesWork?: import("./facebook-pages-publishing.js").PendingFacebookPagesWork;
   /** Last Calendar result confirmed by Google; never populated from prose. */
   lastCalendarOperation?: {
     status: "verified" | "failed" | "ambiguous";

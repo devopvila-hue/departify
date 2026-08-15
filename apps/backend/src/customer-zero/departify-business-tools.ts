@@ -18,6 +18,7 @@ export type DepartifyToolName =
   | "departify.email.reply"
   | "departify.calendar.list"
   | "departify.calendar.create"
+  | "departify.facebook.pages.publish"
   | "departify.drive.search"
   | "departify.drive.read"
   | "departify.tasks.list"
@@ -144,6 +145,20 @@ export const DEPARTIFY_TOOL_DEFINITIONS: readonly DepartifyToolDefinition[] = [
         durationMinutes: { type: "integer", minimum: 5, maximum: 1440 },
         attendees: { type: "array", items: { type: "string" } },
         confirm: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "departify.facebook.pages.publish",
+    description: "Prepare a Facebook Pages publication; explicit CEO approval is required before anything is published.",
+    requiredCapability: "marketing.social.publish",
+    sideEffect: true,
+    inputSchema: {
+      type: "object",
+      required: ["content"],
+      properties: {
+        content: stringProperty("The post text to prepare for the connected Facebook Page"),
       },
       additionalProperties: false,
     },

@@ -8,7 +8,8 @@ import {
 import type { ServerDeps } from "../deps.js";
 import {
   credentialRequiredResult,
-} from "../../customer-zero/activepieces-connector.js";
+  getConnectorCapability,
+  } from "../../customer-zero/activepieces-connector.js";
 import {
   credentialRequiredAdsResult,
   getAdsCapability,
@@ -117,10 +118,13 @@ export async function registerConnectorRuntimeRoutes(
       }
 
       const capability = getAdsCapability(request.body.capability ?? "");
+      const connectorCapability = capability
+        ? null
+        : getConnectorCapability(request.body.capability ?? "");
       const legacyCapability = capability ? null : request.body.capability === "marketing.meta.ads.read" || request.body.capability === "marketing.meta.ads.manage"
         ? request.body.capability
         : null;
-      if (!capability && !legacyCapability) {
+      if (!capability && !connectorCapability && !legacyCapability) {
         return reply.code(404).send({ error: "capability_not_registered" });
       }
       const operation = request.body.operation ?? "prepare";
@@ -130,6 +134,58 @@ export async function registerConnectorRuntimeRoutes(
         return reply.code(403).send({ error: { code: forbiddenInputKey === "organizationId" || forbiddenInputKey === "tenantId" ? "tenant_mismatch" : "credential_or_account_override" } });
       }
       if (!capability) {
+        if (connectorCapability) {
+          const executionRequest: ConnectorExecutionRequest = {
+            requestId: request.id,
+            organizationId,
+            ...(request.authUser?.id ? { userId: request.authUser.id } : {}),
+            capability: connectorCapability.id,
+            operation,
+            input,
+            sideEffect: connectorCapability.sideEffect,
+          };
+          if (operation === "execute") {
+            if (connectorCapability.sideEffect) {
+              const approvalId = typeof input.approvalId === "string" ? input.approvalId : "";
+              const approvals = deps.marketing ? await deps.marketing.listApprovals(organizationId) : [];
+              const approved = approvals.find((approval) => approval.id === approvalId && approval.status === "approved");
+              if (!approved) {
+                return reply.code(409).send({
+                  requestId: request.id,
+                  organizationId,
+                  capability: connectorCapability.id,
+                  operation,
+                  status: "prepared",
+                  error: { code: "approval_required", message: "This social publication needs CEO approval before it can run.", retryable: false },
+                });
+              }
+            }
+            const state = await deps.toolState?.get(organizationId, connectorCapability.providerToolId);
+            if (state?.status !== "connected" || !state.verifiedAt || !state.grantedCapabilities?.includes(connectorCapability.id)) {
+              return reply.code(424).send({
+                requestId: request.id,
+                organizationId,
+                capability: connectorCapability.id,
+                operation,
+                status: "credential_required",
+                error: { code: "credential_required", message: "Facebook Pages must be verified with the requested capability before publishing.", retryable: false },
+              });
+            }
+          }
+          const runtime = selectConnectorRuntime(connectorCapability.id, deps.connectorRuntimes ?? [])?.candidate.runtime ?? deps.connectorRuntime;
+          if (!runtime) {
+            return reply.code(503).send({
+              requestId: request.id,
+              organizationId,
+              capability: connectorCapability.id,
+              operation,
+              status: "not_configured",
+              error: { code: "provider_unavailable", message: "Facebook Pages publishing is not configured.", retryable: false },
+            });
+          }
+          const result = await runtime.execute(executionRequest);
+          return reply.code(result.status === "succeeded" || result.status === "prepared" ? 200 : 502).send(publicConnectorResult(result));
+        }
         const legacy = {
           id: legacyCapability!,
           providerToolId: "meta_business" as const,

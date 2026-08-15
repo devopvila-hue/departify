@@ -63,6 +63,11 @@ import {
 } from "../../customer-zero/connections.js";
 import type { MarketingService } from "../../customer-zero/marketing-service.js";
 import {
+  prepareFacebookPagesPublication,
+  resolvePendingFacebookPagesPublication,
+  type FacebookPagesPublicationDeps,
+} from "../../customer-zero/facebook-pages-publishing.js";
+import {
   isReadyForMarketing,
   isToolDiscoveryComplete,
   noCrmOptionLabel,
@@ -1864,6 +1869,7 @@ export async function registerCustomerZeroV2Routes(
           completeConnection(connection);
           connection.lifecycle = "connected";
           connection.configSource = `oauth:${provider}`;
+          connection.grantedCapabilities = completed.grantedCapabilities;
           connection.verifiedAt = completed.record.operationalVerifiedAt ?? new Date().toISOString();
           connection.connectedAt = connection.verifiedAt;
           delete connection.authorizationUrl;
@@ -2532,6 +2538,7 @@ export async function registerCustomerZeroV2Routes(
           deps.engineRuntimePolicy,
           runtime,
           trace,
+          deps,
         );
         traceStage(trace, "T15_backend_response_finalization", {
           responseStatus: ceoTurnResponseStatus(trace),
@@ -3278,6 +3285,7 @@ export function traceRequestReceived(
 function pendingOperationType(session: CustomerZeroSession): string | null {
   if (session.state.pendingEmailWork) return "email";
   if (session.state.pendingCalendarWork) return "calendar";
+  if (session.state.pendingFacebookPagesWork) return "facebook_pages";
   return null;
 }
 
@@ -3285,7 +3293,8 @@ function pendingOperationIdentity(session: CustomerZeroSession): string | null {
   const email = session.state.pendingEmailWork;
   if (email) return email.id;
   const calendar = session.state.pendingCalendarWork;
-  return calendar ? `calendar:${calendar.createdAt}:${calendar.summary}` : null;
+  if (calendar) return `calendar:${calendar.createdAt}:${calendar.summary}`;
+  return session.state.pendingFacebookPagesWork?.id ?? null;
 }
 
 function normalizePendingOperationMessage(message: string): string {
@@ -3321,6 +3330,9 @@ function pendingDecisionForSession(
     if (isEmailApprovalResponse(message)) return "APPROVE";
     return "OTHER";
   }
+  if (session.state.pendingFacebookPagesWork?.status === "awaiting_approval") {
+    return classifyPendingOperationDecision(message);
+  }
   return null;
 }
 
@@ -3334,6 +3346,7 @@ function shouldBypassRuntimeForPendingOperation(
   if (!nativeBusinessTools && session.state.pendingCalendarWork && isCalendarReadRequest(message)) return true;
   return Boolean(
     !session.state.pendingCalendarWork &&
+    !session.state.pendingFacebookPagesWork &&
     session.state.lastCalendarOperation?.status === "verified" &&
     classifyPendingOperationDecision(message) === "APPROVE",
   );
@@ -3391,7 +3404,7 @@ function newCeoTurnTrace(
     pendingOperationIdHash: pendingOperationIdentity(session)
       ? safeTraceHash(pendingOperationIdentity(session)!)
       : null,
-    pendingStatus: session.state.pendingEmailWork?.status ?? session.state.pendingCalendarWork?.status ?? null,
+    pendingStatus: session.state.pendingEmailWork?.status ?? session.state.pendingCalendarWork?.status ?? session.state.pendingFacebookPagesWork?.status ?? null,
     approvalClassification: null,
     executionReceiptFound: Boolean(session.state.lastExecutionReceipt),
     providerMutationAttempted: false,
@@ -3554,7 +3567,7 @@ export function ceoTurnResponseStatus(trace: CeoTurnTraceState): CeoTurnResponse
 }
 
 function pendingOperationStatus(session: CustomerZeroSession): string | null {
-  return session.state.pendingEmailWork?.status ?? session.state.pendingCalendarWork?.status ?? null;
+  return session.state.pendingEmailWork?.status ?? session.state.pendingCalendarWork?.status ?? session.state.pendingFacebookPagesWork?.status ?? null;
 }
 
 /**
@@ -3733,11 +3746,12 @@ function runtimeCandidate(message: string, session: CustomerZeroSession): boolea
   if (
     session.state.pendingEmailWork ||
     session.state.pendingCalendarWork ||
-    session.state.lastEmailContext
+    session.state.lastEmailContext ||
+    session.state.pendingFacebookPagesWork
   ) {
     return true;
   }
-  return /\b(correo|correos|email|mail|inbox|calendario|calendar|evento|reuni[oó]n|agenda|drive|pdf|archivo|documento|tarea|organiza|organizar|aprobaci[oó]n|resultado|pr[oó]ximos eventos|empresa|negocio|contexto|hazlo|con\s+[a-z0-9._%+-]+@)/i.test(lower);
+  return /\b(correo|correos|email|mail|inbox|calendario|calendar|evento|reuni[oó]n|agenda|drive|pdf|archivo|documento|tarea|organiza|organizar|aprobaci[oó]n|resultado|pr[oó]ximos eventos|empresa|negocio|contexto|facebook|fb|p[aá]gina|publica|publicar|post|hazlo|con\s+[a-z0-9._%+-]+@)/i.test(lower);
 }
 
 /**
@@ -3758,6 +3772,7 @@ function runtimeIntent(name: string): RoutingDecision["intent"] {
   if (name.startsWith("departify.email.")) return "email_action";
   if (name === "departify.calendar.list") return "calendar_read";
   if (name === "departify.calendar.create") return "calendar_create";
+  if (name === "departify.facebook.pages.publish") return "request_approval";
   if (name.startsWith("departify.drive.")) return "drive_query";
   if (name === "departify.tasks.list" || name === "departify.tasks.create") return "direct_response";
   if (name === "departify.approvals.list") return "request_approval";
@@ -3781,7 +3796,11 @@ function shouldUseNativeAgentPath(message: string): boolean {
 }
 
 function nativeMutationRequiresDeterministicGate(message: string): boolean {
-  return isCalendarCreateRequest(message) || isEmailSendRequest(message) || isEmailReplyRequest(message);
+  return isCalendarCreateRequest(message) || isEmailSendRequest(message) || isEmailReplyRequest(message) || isFacebookPagesPublishRequest(message);
+}
+
+function isFacebookPagesPublishRequest(message: string): boolean {
+  return /(?:facebook|fb|p[aá]gina(?:\s+de)?\s+facebook).*?(?:publica|publicar|post|mensaje)|(?:publica|publicar|post).*?(?:facebook|fb|p[aá]gina)/i.test(message);
 }
 
 function runtimeToolsMatchRequest(
@@ -3800,6 +3819,9 @@ function runtimeToolsMatchRequest(
   }
   if (isCalendarCreateRequest(message)) {
     return toolNames.includes("departify.calendar.create");
+  }
+  if (isFacebookPagesPublishRequest(message)) {
+    return toolNames.includes("departify.facebook.pages.publish");
   }
   if (
     session?.state.pendingCalendarWork &&
@@ -4063,6 +4085,20 @@ async function executeRuntimeTool(
       };
     }
 
+    case "departify.facebook.pages.publish": {
+      const outcome = await prepareFacebookPagesPublication({
+        session,
+        ...(deps.marketing ? { marketing: deps.marketing } : {}),
+        content: args.content,
+      });
+      return withReceipt({
+        status: "blocked",
+        operation: call.name,
+        summary: outcome.reply,
+        ...(outcome.approvalId ? { data: { approvalId: outcome.approvalId } } : {}),
+      });
+    }
+
     case "departify.drive.search":
     case "departify.drive.read": {
       const query = text("query") || "PDFs de Departify";
@@ -4147,6 +4183,7 @@ export async function processCeoMessage(
   engineRuntimePolicy?: "strict" | "legacy-fallback",
   runtime?: RuntimeBridgeInput | null,
   trace?: CeoTurnTraceState,
+  deps: ServerDeps = {},
 ): Promise<CeoMessageResult> {
   let conversation: ConversationRecord;
   try {
@@ -4188,6 +4225,35 @@ export async function processCeoMessage(
   // message; the model is never the authority for approval, cancellation, or
   // duplicate prevention.
   if (pendingDecision === "APPROVE" || pendingDecision === "CANCEL") {
+    if (session.state.pendingFacebookPagesWork) {
+      if (trace) trace.providerMutationAttempted = pendingDecision === "APPROVE";
+      const outcome = await resolvePendingFacebookPagesPublication({
+        session,
+        decision: pendingDecision === "APPROVE" ? "approve" : "cancel",
+        deps: {
+          ...(marketing ? { marketing } : {}),
+          ...(deps.connectorRuntime ? { connectorRuntime: deps.connectorRuntime } : {}),
+          ...(deps.connectorRuntimes ? { connectorRuntimes: deps.connectorRuntimes } : {}),
+          ...(runtime?.userId ? { userId: runtime.userId } : {}),
+        } satisfies FacebookPagesPublicationDeps,
+      });
+      if (trace) {
+        trace.executionReceiptFound = Boolean(outcome.execution);
+        trace.providerMutationResult = outcome.status;
+      }
+      return completeDeterministicOperationTurn(
+        session,
+        conversation,
+        message,
+        outcome.reply,
+        "request_approval",
+        outcome.status === "published"
+          ? "success"
+          : outcome.status === "cancelled"
+            ? "cancelled"
+            : "blocked",
+      );
+    }
     if (session.state.pendingCalendarWork) {
       if (trace) {
         trace.providerMutationAttempted = pendingDecision === "APPROVE";
@@ -4428,6 +4494,30 @@ export async function processCeoMessage(
         status: "engine_failed",
       });
     }
+  }
+
+  if (
+    nativeMutationDeferred &&
+    session.state.pendingFacebookPagesWork?.status === "awaiting_approval"
+  ) {
+    const reply = session.state.locale === "en"
+      ? "I prepared the Facebook Pages post. Your explicit approval is required before publishing."
+      : "He preparado la publicación para Facebook Pages. Falta tu aprobación explícita antes de publicar.";
+    if (trace) {
+      trace.nativeResponseTerminal = true;
+      trace.finalResponseSource = "openclaw";
+      trace.providerMutationResult = "prepared";
+    }
+    return completeRuntimeCeoTurn(
+      session,
+      conversation,
+      message,
+      reply,
+      trace?.selectedToolNames ?? [],
+      ["prepared"],
+      null,
+      trace,
+    );
   }
 
   // In native mode a failed OpenClaw turn must not fall through to the legacy

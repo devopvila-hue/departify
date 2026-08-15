@@ -103,6 +103,63 @@ describe("Activepieces connector runtime route", () => {
     });
   });
 
+  it("prepares Facebook Pages through the normalized social capability", async () => {
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/org-a/connector-runtime/execute",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        operation: "prepare",
+        capability: "marketing.social.publish",
+        input: { content: "Un anuncio para la página" },
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      organizationId: "org-a",
+      capability: "marketing.social.publish",
+      status: "prepared",
+    });
+    expect(response.json().provider).toBeUndefined();
+  });
+
+  it("does not execute Facebook Pages without an approval", async () => {
+    toolState.set({
+      organizationId: "org-a",
+      toolId: "meta_business",
+      label: "Facebook Pages",
+      declared: true,
+      status: "connected",
+      grantedCapabilities: ["marketing.social.publish"],
+      verifiedAt: new Date().toISOString(),
+    });
+    const before = runtime.requests.length;
+    const response = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/org-a/connector-runtime/execute",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        operation: "execute",
+        capability: "marketing.social.publish",
+        input: { content: "No publicar todavía" },
+      },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      status: "prepared",
+      error: { code: "approval_required" },
+    });
+    expect(runtime.requests).toHaveLength(before);
+    toolState.set({
+      organizationId: "org-a",
+      toolId: "meta_business",
+      label: "Facebook Pages",
+      declared: true,
+      status: "needs_connection",
+      grantedCapabilities: [],
+    });
+  });
+
   it("probes Activepieces through the authenticated tenant boundary", async () => {
     const response = await server.inject({
       method: "GET",

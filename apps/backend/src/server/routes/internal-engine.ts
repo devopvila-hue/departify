@@ -44,6 +44,7 @@ import {
 } from "../../customer-zero/native-business-tools.js";
 import { MARKETING_ROSTER } from "../../customer-zero/marketing-roster.js";
 import type { CustomerZeroSession } from "../../customer-zero/customer-zero-session.js";
+import { prepareFacebookPagesPublication } from "../../customer-zero/facebook-pages-publishing.js";
 
 const NATIVE_TOOL_NAME = "departify.company.context";
 const MARKETING_DELEGATION_TOOL = "departify.marketing.delegate";
@@ -907,6 +908,18 @@ export async function registerInternalEngineRoutes(
             }
           }
         }
+      } else if (toolName === "departify.facebook.pages.publish") {
+        const outcome = await prepareFacebookPagesPublication({
+          session,
+          ...(deps.marketing ? { marketing: deps.marketing } : {}),
+          content: nativeText(args, "content"),
+        });
+        result = {
+          status: outcome.status === "prepared" ? "success" : "blocked",
+          operation: toolName,
+          summary: outcome.reply,
+          ...(outcome.approvalId ? { data: { approvalId: outcome.approvalId } } : {}),
+        };
       } else if (toolName === "departify.tasks.list") {
         const tasks = await workStoreForRoutes().listTasksForOrg(
           identity.organizationId,

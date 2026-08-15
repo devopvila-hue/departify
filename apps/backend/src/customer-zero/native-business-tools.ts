@@ -10,6 +10,7 @@ export const NATIVE_READ_TOOL_NAMES = [
   "departify.email.list",
   "departify.email.search",
   "departify.calendar.list",
+  "departify.facebook.pages.publish",
   "departify.drive.search",
   "departify.drive.read",
   "departify.tasks.list",
@@ -42,6 +43,7 @@ const REQUIRED_CAPABILITY: Partial<Record<NativeReadToolName, string>> = {
   "departify.approvals.list": "approvals.list",
   "departify.results.list": "results.list",
   "departify.work.deliverable": "work.deliverable",
+  "departify.facebook.pages.publish": "marketing.social.publish",
 };
 
 export function isNativeReadToolName(value: string): value is NativeReadToolName {

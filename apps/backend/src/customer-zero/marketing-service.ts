@@ -388,6 +388,40 @@ export class MarketingService {
     return this.approvalsRepo.list(organizationId, "marketing");
   }
 
+  /** Create a durable, business-language approval for a prepared action. */
+  async requestApproval(input: {
+    organizationId: string;
+    title: string;
+    detail: string;
+    cost?: string;
+    objectiveId?: string;
+    locale: SupportedLocale;
+  }): Promise<ApprovalRequest> {
+    const approval = await this.approvalsRepo.create({
+      organizationId: input.organizationId,
+      departmentId: "marketing",
+      ...(input.objectiveId ? { objectiveId: input.objectiveId } : {}),
+      title: input.title,
+      description: input.detail.slice(0, 400),
+      status: "pending",
+      ...(input.cost ? { cost: input.cost } : {}),
+      requestedBy: this.head.name,
+    });
+    await this.activityRepo.create({
+      organizationId: input.organizationId,
+      departmentId: "marketing",
+      ...(input.objectiveId ? { objectiveId: input.objectiveId } : {}),
+      actor: this.head.name,
+      type: "aprobacion_solicitada",
+      message: t(
+        input.locale,
+        `${this.head.name} solicita tu aprobación para ${approval.title.toLowerCase()}.`,
+        `${this.head.name} requests your approval to ${approval.title.toLowerCase()}.`,
+      ),
+    });
+    return approval;
+  }
+
   async decideApproval(
     organizationId: string,
     approvalId: string,
