@@ -37,8 +37,18 @@ export interface OrganizationToolState {
   readonly status: ToolLifecycleStatus;
   /** Where configuration originates (e.g. "env:mautic"). Never a secret. */
   readonly configSource?: string;
+  /** Provider name is an internal routing reference, never a credential. */
+  readonly provider?: string;
+  /** Safe provider account label/reference; never an access token or secret. */
+  readonly providerAccountRef?: string;
+  /** Effective granted capability/scope summaries, safe to show in diagnostics. */
+  readonly grantedCapabilities?: readonly string[];
+  readonly grantedScopes?: readonly string[];
   readonly verifiedAt?: string;
+  readonly lastValidatedAt?: string;
   readonly health?: ToolHealth;
+  /** Sanitized operational error only; provider response bodies do not belong here. */
+  readonly lastError?: string;
   readonly updatedAt?: string;
 }
 

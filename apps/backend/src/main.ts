@@ -44,6 +44,10 @@ import {
 } from "./customer-zero/supabase-marketing-repositories.js";
 import { MarketingService } from "./customer-zero/marketing-service.js";
 import type { ServerDeps } from "./server/deps.js";
+import {
+  createActivepiecesConnectorRuntime,
+  createConnectorRuntimeCandidates,
+} from "./customer-zero/activepieces-connector.js";
 
 // Load the local environment file when present. The backend does not ship
 // secrets; local development reads them from `.env` at the repo root.
@@ -60,6 +64,16 @@ const config: BackendConfig = loadBackendConfig();
 const deps: ServerDeps = config.publicBaseUrl
   ? { publicBaseUrl: config.publicBaseUrl }
   : {};
+
+// Activepieces is a separate connector runtime. It receives only
+// tenant-bound business inputs; provider credentials remain inside the
+// Activepieces connection/flow and never enter OpenClaw.
+deps.connectorRuntime = createActivepiecesConnectorRuntime((event) => {
+  console.log("[connector-runtime]", JSON.stringify(event));
+});
+deps.connectorRuntimes = createConnectorRuntimeCandidates((event) => {
+  console.log("[connector-runtime]", JSON.stringify(event));
+});
 
 // Supabase auth identity + tenant boundary (resolved first so the Marketing
 // durable repositories can be wired). In production a missing auth config is

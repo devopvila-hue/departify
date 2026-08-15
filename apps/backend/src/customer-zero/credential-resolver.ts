@@ -35,7 +35,16 @@ import {
   type GoogleTokenSummary,
 } from "./google-tokens.js";
 
-export type CredentialProvider = "mautic" | "gmail" | "resend" | "google" | "hostinger";
+export type CredentialProvider =
+  | "mautic"
+  | "gmail"
+  | "resend"
+  | "google"
+  | "hostinger"
+  | "meta_ads"
+  | "tiktok_ads"
+  | "google_ads"
+  | "google_ads_api";
 
 export interface CredentialSource {
   /** Where the credential ultimately comes from. */

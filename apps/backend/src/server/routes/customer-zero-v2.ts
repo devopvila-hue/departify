@@ -132,6 +132,7 @@ import {
 } from "../../customer-zero/run-gmail-presentation.js";
 import {
   CONNECTION_DEFINITIONS,
+  getConnectionDefinition,
   renderConnectionCard,
   listAvailableCapabilitiesForOrg,
   type ConnectionCardView,
@@ -1287,7 +1288,11 @@ export async function registerCustomerZeroV2Routes(
       }
       const returnPath = requestedReturnPath ?? "/conexiones";
       const session = await requireSession(organizationId, deps);
-      const tool = TOOL_CATALOG.find((entry) => entry.id === toolId);
+      // Meta Ads reuses the secured Meta Business OAuth handshake for the
+      // first-party Ads capability. Organic publishing remains separate in
+      // the capability model and runtime.
+      const effectiveToolId = toolId === "meta_ads" ? "meta_business" : toolId;
+      const tool = TOOL_CATALOG.find((entry) => entry.id === effectiveToolId);
       if (!tool) {
         return reply.code(404).send({ error: "Tool not found." });
       }
@@ -7148,6 +7153,8 @@ function toolStateFromConnection(
   session: CustomerZeroSession,
   connection: ConnectionState,
 ): OrganizationToolState {
+  const definition = getConnectionDefinition(connection.toolId);
+  const now = new Date().toISOString();
   return {
     organizationId: session.organizationId,
     toolId: connection.toolId,
@@ -7156,7 +7163,19 @@ function toolStateFromConnection(
     declared: true,
     status: connection.lifecycle ?? "needs_connection",
     ...(connection.configSource ? { configSource: connection.configSource } : {}),
+    ...(connection.toolId === "meta_business" || connection.toolId === "meta_ads"
+      ? { provider: "meta_business" }
+      : connection.toolId === "tiktok_ads"
+        ? { provider: "tiktok_ads" }
+        : connection.toolId === "google_ads"
+          ? { provider: "google_ads_mcp" }
+          : {}),
+    ...(definition?.capabilities.length
+      ? { grantedCapabilities: definition.capabilities.map((capability) => capability.id) }
+      : {}),
     ...(connection.verifiedAt ? { verifiedAt: connection.verifiedAt } : {}),
+    ...(connection.verifiedAt ? { lastValidatedAt: connection.verifiedAt } : {}),
+    ...(connection.blockedReason ? { lastError: connection.blockedReason } : {}),
     ...(connection.lifecycle === "connected"
       ? { health: "operational" as const }
       : connection.lifecycle === "degraded"
@@ -7164,6 +7183,7 @@ function toolStateFromConnection(
         : connection.lifecycle === "unavailable"
           ? { health: "down" as const }
           : {}),
+    updatedAt: now,
   };
 }
 

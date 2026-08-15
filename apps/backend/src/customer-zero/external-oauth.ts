@@ -24,6 +24,7 @@ const META_SCOPES = [
   "instagram_content_publish",
   "ads_read",
   "ads_management",
+  "ads_mcp_management",
 ] as const;
 
 const TICKTICK_SCOPES = ["tasks:read", "tasks:write"] as const;

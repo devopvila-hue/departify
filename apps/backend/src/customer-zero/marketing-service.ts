@@ -947,10 +947,10 @@ export class MarketingService {
  * talks about capabilities in the CEO's language.
  */
 function capabilityHumanLabel(
-  capability: BusinessCapability,
+  capability: string,
   locale: SupportedLocale,
 ): string {
-  const map: Record<BusinessCapability, { es: string; en: string }> = {
+  const map: Partial<Record<BusinessCapability, { es: string; en: string }>> = {
     "crm.contacts.read": {
       es: "consultar los contactos del CRM",
       en: "consult the CRM contacts",
@@ -1080,6 +1080,7 @@ function capabilityHumanLabel(
       en: "create work from inbox",
     },
   };
-  const entry = map[capability];
+  const entry = map[capability as BusinessCapability];
+  if (!entry) return capability.replace(/^marketing\./, "").replace(/\./g, " ");
   return locale === "en" ? entry.en : entry.es;
 }

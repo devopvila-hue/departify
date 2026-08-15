@@ -14,6 +14,7 @@ import { registerConversationRoutes } from "./routes/conversations.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerInternalEngineRoutes } from "./routes/internal-engine.js";
 import { registerMarketingRoutes } from "./routes/marketing-routes.js";
+import { registerConnectorRuntimeRoutes } from "./routes/connector-runtime.js";
 import type { ServerDeps } from "./deps.js";
 
 export async function buildServer(
@@ -59,6 +60,7 @@ export async function buildServer(
   await registerAuthRoutes(server, deps.organizations);
   await registerInternalEngineRoutes(server, deps, config);
   await registerMarketingRoutes(server, deps);
+  await registerConnectorRuntimeRoutes(server, deps);
 
   return server;
 }

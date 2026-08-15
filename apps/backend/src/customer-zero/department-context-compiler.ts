@@ -26,7 +26,6 @@ import type { CustomerZeroSession } from "./customer-zero-session.js";
 import { t } from "./locale.js";
 import {
   listReadyCapabilities,
-  type BusinessCapability,
 } from "./capability-registry.js";
 import { publicCredentialSource } from "./credential-resolver.js";
 import { listDepartmentMemory } from "./department-memory.js";
@@ -114,7 +113,7 @@ export interface ContextDecision {
  * --------------------------------------------------------------------------*/
 
 export interface ContextCapability {
-  readonly id: BusinessCapability;
+  readonly id: string;
   readonly available: boolean;
 }
 

@@ -9,6 +9,7 @@ import type { InboxStore } from "../customer-zero/inbox-domain.js";
 import type { MarketingService } from "../customer-zero/marketing-service.js";
 import type { DepartmentWorkStore } from "../customer-zero/department-work.js";
 import type { DepartmentMemoryStore } from "../customer-zero/department-memory.js";
+import type { ConnectorRuntime, ConnectorRuntimeCandidate } from "@departify/connector-runtime";
 
 /**
  * Server dependencies — Phase P0-A / P-B.
@@ -47,4 +48,8 @@ export interface ServerDeps {
   engineRuntimePolicy?: EngineRuntimePolicy;
   /** Enables the experimental native OpenClaw company.context slice. */
   nativeBusinessTools?: boolean;
+  /** Provider-independent connector execution runtime. */
+  connectorRuntime?: ConnectorRuntime;
+  /** Provider candidates selected by capability and the official-first policy. */
+  connectorRuntimes?: readonly ConnectorRuntimeCandidate[];
 }

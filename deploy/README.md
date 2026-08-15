@@ -1,5 +1,7 @@
 # Deploy
 
-Deployment assets will live here.
+Deployment assets and service-specific runbooks live here.
 
-Sprint 1 intentionally does not define environments, infrastructure, secrets, CI/CD, containers, or deployment targets.
+The Activepieces Connector Runtime PoC deployment is documented in
+[`deploy/activepieces/README.md`](activepieces/README.md). It runs as an
+independent pinned service beside the existing API and engine services.

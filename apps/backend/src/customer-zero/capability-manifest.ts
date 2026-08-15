@@ -7,6 +7,8 @@
  * connection projection says that the provider is operational.
  */
 
+import { ADS_CAPABILITIES, isAdsCapability } from "./ads-capabilities.js";
+
 export type CapabilityAvailability = "available" | "unavailable";
 
 export interface CapabilityConnectionSource {
@@ -54,6 +56,10 @@ function businessConnectionLabel(connection: CapabilityConnectionSource): string
 
 /** The smallest normalized surface required by Customer Zero today. */
 export const RUNTIME_CAPABILITY_RULES: readonly CapabilityRule[] = [
+  ...ADS_CAPABILITIES.map((capability) => ({
+    id: capability.id,
+    sourceCapabilities: [capability.id],
+  })),
   {
     id: "email.business.read",
     sourceCapabilities: ["email.read", "email.thread.read"],
@@ -140,7 +146,7 @@ export function buildRuntimeCapabilityManifest(
         ? {}
         : { reason: rule.unsupported ? ("unsupported" as const) : ("not_connected" as const) }),
     } satisfies RuntimeCapability;
-  });
+  }).filter((capability) => !isAdsCapability(capability.id) || capability.available);
 
   return {
     version: 1,

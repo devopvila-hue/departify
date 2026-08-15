@@ -665,7 +665,7 @@ export class DepartmentWorkExecutor {
   }
 }
 
-function specialistForCapability(capability: BusinessCapability): string {
+function specialistForCapability(capability: string): string {
   if (capability.startsWith("crm.")) return "agent_content_strategist";
   if (capability.startsWith("email.")) return "agent_social_media_manager";
   return "agent_ads_specialist";

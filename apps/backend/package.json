@@ -20,6 +20,7 @@
     "@departify/business-events": "workspace:^",
     "@departify/capability-engine": "workspace:^",
     "@departify/config": "workspace:*",
+    "@departify/connector-runtime": "workspace:*",
     "@departify/departments": "workspace:^",
     "@departify/engine-adapter": "workspace:^",
     "@departify/executive-director": "workspace:^",

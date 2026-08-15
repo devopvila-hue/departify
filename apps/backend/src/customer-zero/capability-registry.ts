@@ -21,6 +21,8 @@ import {
   hasConfiguredCredentials,
   type CredentialProvider,
 } from "./credential-resolver.js";
+import { ADS_CAPABILITIES } from "./ads-capabilities.js";
+import type { AdsBusinessCapability, AdsCapabilityDefinition } from "./ads-capabilities.js";
 
 /**
  * Business capabilities the CEO / Elvira can ask for. Each maps to
@@ -61,10 +63,12 @@ export type BusinessCapability =
   | "drive.create"
   | "inbox.read"
   | "inbox.classify"
-  | "inbox.work.create";
+  | "inbox.work.create"
+  | AdsBusinessCapability;
 
+/** Provider-owned capability ids are validated by the Ads registry at runtime. */
 export interface CapabilityDescriptor {
-  readonly id: BusinessCapability;
+  readonly id: BusinessCapability | AdsBusinessCapability;
   /** Capability name in business language (no provider). */
   readonly name: string;
   readonly nameEs: string;
@@ -81,7 +85,7 @@ export interface CapabilityDescriptor {
  * business capability is delivered by this tool of this provider"
  * lives.
  */
-export const CAPABILITY_REGISTRY: Readonly<Record<BusinessCapability, CapabilityDescriptor>> = {
+export const CAPABILITY_REGISTRY: Readonly<Record<string, CapabilityDescriptor>> = {
   "crm.contacts.read": {
     id: "crm.contacts.read",
     name: "Read CRM contacts",
@@ -352,7 +356,31 @@ export const CAPABILITY_REGISTRY: Readonly<Record<BusinessCapability, Capability
     provider: "google",
     toolIds: ["inbox.work.create"],
   },
+  ...Object.fromEntries(
+    ADS_CAPABILITIES.map((capability) => [
+      capability.id,
+      adsCapabilityDescriptor(capability),
+    ]),
+  ),
 };
+
+function adsCapabilityDescriptor(capability: AdsCapabilityDefinition): CapabilityDescriptor {
+  const provider = capability.platform === "meta"
+    ? "meta_ads"
+    : capability.platform === "tiktok"
+      ? "tiktok_ads"
+      : capability.sideEffect
+        ? "google_ads_api"
+        : "google_ads";
+  return {
+    id: capability.id,
+    name: capability.description,
+    nameEs: capability.description,
+    description: capability.description,
+    provider,
+    toolIds: [capability.id],
+  };
+}
 
 export interface CapabilityAvailability {
   readonly capability: BusinessCapability;
@@ -393,9 +421,9 @@ export function isCapabilityAvailable(
 }
 
 /**
- * Bulk: returns the availability of every registered capability.
- * Useful for Elvira's context block and for the portal's
- * `/capabilities` endpoint.
+ * Bulk: returns the availability of every registered capability. The runtime
+ * manifest applies the additional tenant-scoped filtering needed before this
+ * surface reaches engine context.
  */
 export function listAvailableCapabilities(organizationId: string): readonly CapabilityAvailability[] {
   return (Object.keys(CAPABILITY_REGISTRY) as BusinessCapability[]).map((cap) =>
