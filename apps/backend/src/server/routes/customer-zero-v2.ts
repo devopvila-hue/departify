@@ -7294,7 +7294,7 @@ async function buildCatalogConnectionViews(
                 : definition.descriptionEs ?? "",
             }
           : {}),
-        ...(tool.id === "google_workspace" || tool.id === "meta_business" ? { userVisible: false } : {}),
+        ...(tool.id === "google_workspace" ? { userVisible: false } : {}),
         domains: domainsFor(tool.id),
         state: "available",
         hasState: false,
@@ -7332,7 +7332,7 @@ async function buildCatalogConnectionViews(
         ? { accountLabel: durable.providerAccountRef }
         : {}),
       ...(durable?.configSource ? { configSource: durable.configSource } : {}),
-      ...(tool.id === "google_workspace" || tool.id === "meta_business" ? { userVisible: false } : {}),
+      ...(tool.id === "google_workspace" ? { userVisible: false } : {}),
       domains: domainsFor(tool.id),
       state: consolidatedLifecycle,
       hasState: true,
