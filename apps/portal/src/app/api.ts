@@ -1018,6 +1018,19 @@ export const api = {
       code,
       state,
     }),
+  finishMetaConnect: (org: string, code: string, state: string) =>
+    postJson<
+      { connection: ConnectionCard } & {
+        operational?: boolean;
+        returnPath?: GoogleOAuthReturnPath;
+        grantedScopes?: string[];
+        accountLabel?: string;
+        error?: { code?: string; message?: string };
+      }
+    >(`/api/customer-zero/${org}/connections/meta_business/callback`, {
+      code,
+      state,
+    }),
   configureCorporateEmail: (
     org: string,
     payload: {

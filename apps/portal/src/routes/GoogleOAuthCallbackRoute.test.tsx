@@ -23,6 +23,7 @@ import { useEffect } from "react";
 import { OrgProvider } from "@/app/org-context";
 import { ConnectionsRoute } from "@/routes/ConnectionsRoute";
 import { GoogleOAuthCallbackRoute } from "@/routes/GoogleOAuthCallbackRoute";
+import { MetaOAuthCallbackRoute } from "@/routes/MetaOAuthCallbackRoute";
 
 function mountAt(ui: ReactElement, initialEntry: string) {
   return render(
@@ -168,6 +169,73 @@ describe("Google OAuth handshake — portal side", () => {
       expect(captured!.url).toBe(
         "/api/customer-zero/org_moon/connections/gmail/connect",
       );
+    });
+  });
+
+  it("Meta Social: Facebook Connect starts the provider-specific OAuth redirect", async () => {
+    let capturedUrl = "";
+    mockFetchSequence([
+      () => ({
+        organizationId: "org_moon",
+        connections: [{
+          toolId: "meta_business", label: "Meta Business", name: "Meta Business", capability: "marketing.publishing",
+          capabilities: [], category: "Marketing", categoryId: "marketing", logoMark: "M", brandColor: "#1877f2",
+          description: "Facebook e Instagram.", domains: ["marketing"], state: "available", hasState: false,
+          humanLabel: "Disponible", action: "connect",
+        }],
+        cards: [], unmappedTools: [],
+      }),
+      (url) => {
+        capturedUrl = url;
+        return {
+          organizationId: "org_moon",
+          connection: {
+            toolId: "meta_business",
+            label: "Meta Business",
+            capability: "marketing.publishing",
+            category: "Marketing",
+            status: "connecting",
+            authorizationUrl: "https://www.facebook.com/v23.0/dialog/oauth?client_id=meta-app&redirect_uri=https%3A%2F%2Fapp.departify.app%2Fconnections%2Fmeta_business%2Fcallback&state=nonce-meta",
+          },
+        };
+      },
+    ]);
+    mountAt(<ConnectionsRoute />, "/conexiones");
+    fireEvent.click(await screen.findByRole("button", { name: /\+ añadir/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /facebook/i }));
+    fireEvent.click(await screen.findByRole("button", { name: "Conectar" }));
+
+    await waitFor(() => {
+      expect(capturedUrl).toBe("/api/customer-zero/org_moon/connections/meta_business/connect");
+      expect(window.location.href).toContain("facebook.com/v23.0/dialog/oauth");
+      expect(new URL(window.location.href).searchParams.get("redirect_uri")).toBe(
+        "https://app.departify.app/connections/meta_business/callback",
+      );
+    });
+  });
+
+  it("Meta callback success returns to /conexiones and failure stays business-safe", async () => {
+    const calls = mockFetchSequence([
+      () => ({
+        connection: { status: "connected", toolId: "meta_business" },
+        operational: true,
+        returnPath: "/conexiones",
+      }),
+    ]);
+    mountAt(
+      <Routes>
+        <Route path="/connections/meta_business/callback" element={<MetaOAuthCallbackRoute />} />
+        <Route path="/conexiones" element={<LocationReporter onChange={() => {}} />} />
+      </Routes>,
+      "/connections/meta_business/callback?code=meta-code&state=meta-state",
+    );
+
+    await waitFor(() => {
+      expect(calls[0]).toMatchObject({
+        url: "/api/customer-zero/org_moon/connections/meta_business/callback",
+        method: "POST",
+        body: { code: "meta-code", state: "meta-state" },
+      });
     });
   });
 

@@ -7,6 +7,7 @@ import { ControlPlaneRoute } from "@/routes/ControlPlaneRoute";
 import { DecisionsRoute } from "@/routes/DecisionsRoute";
 import { DepartmentsRoute } from "@/routes/DepartmentsRoute";
 import { GoogleOAuthCallbackRoute } from "@/routes/GoogleOAuthCallbackRoute";
+import { MetaOAuthCallbackRoute } from "@/routes/MetaOAuthCallbackRoute";
 import { InboxRoute } from "@/routes/InboxRoute";
 import { MarketingRoute } from "@/routes/MarketingRoute";
 import { ResultsRoute } from "@/routes/ResultsRoute";
@@ -57,6 +58,11 @@ export const router = createBrowserRouter([
   {
     path: "/connections/google/callback",
     element: <GoogleOAuthCallbackRoute />,
+    errorElement: <RouteErrorFallback />,
+  },
+  {
+    path: "/connections/meta_business/callback",
+    element: <MetaOAuthCallbackRoute />,
     errorElement: <RouteErrorFallback />,
   },
   {

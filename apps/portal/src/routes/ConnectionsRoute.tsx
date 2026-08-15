@@ -85,7 +85,13 @@ export function ConnectionsRoute() {
         window.location.href = authorizationUrl;
         return;
       }
+      setNotice(
+        response?.connection?.blockedReason
+          ?? "No hemos podido iniciar esta conexión. Vuelve a intentarlo en unos minutos.",
+      );
       await load();
+    } catch {
+      setNotice("No hemos podido iniciar esta conexión. Vuelve a intentarlo en unos minutos.");
     } finally {
       setBusy(null);
     }
@@ -472,6 +478,8 @@ function humanCapability(capability: string): string {
     "drive.search": "Buscar documentos",
     "marketing.social.read": "Consultar canales sociales",
     "marketing.social.publish": "Preparar publicaciones",
+    "marketing.social.instagram.read": "Consultar Instagram",
+    "marketing.social.instagram.publish": "Preparar publicaciones de Instagram",
   };
   return labels[capability] ?? capability.replace(/^[^.]+./, "").replace(/[._]/g, " ");
 }

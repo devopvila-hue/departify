@@ -16,16 +16,12 @@ export const EXTERNAL_OAUTH_PROVIDERS: readonly ExternalOAuthProvider[] = [
   "ticktick",
 ];
 
-const META_SCOPES = [
+export const META_SOCIAL_SCOPES = [
   "pages_show_list",
   "pages_read_engagement",
   "pages_manage_posts",
-  "business_management",
   "instagram_basic",
   "instagram_content_publish",
-  "ads_read",
-  "ads_management",
-  "ads_mcp_management",
 ] as const;
 
 const TICKTICK_SCOPES = ["tasks:read", "tasks:write"] as const;
@@ -83,7 +79,7 @@ function providerConfig(provider: ExternalOAuthProvider, redirectUri: string) {
     return {
       authorizationEndpoint: `https://www.facebook.com/${META_API_VERSION}/dialog/oauth`,
       tokenEndpoint: `https://graph.facebook.com/${META_API_VERSION}/oauth/access_token`,
-      scopes: META_SCOPES,
+      scopes: META_SOCIAL_SCOPES,
       redirectUri,
     };
   }
@@ -217,36 +213,74 @@ async function exchangeTickTickCode(
   };
 }
 
-async function probeMeta(accessToken: string): Promise<{ label: string; scopes: string[]; pageCount: number }> {
+interface MetaSocialAsset {
+  readonly id: string;
+  readonly name: string;
+  readonly username?: string;
+}
+
+interface MetaProbe {
+  readonly label: string;
+  readonly scopes: string[];
+  readonly facebookPages: readonly MetaSocialAsset[];
+  readonly instagramAccounts: readonly MetaSocialAsset[];
+}
+
+function safeMetaAsset(value: unknown): MetaSocialAsset | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  const name = typeof record.name === "string" ? record.name.trim() : "";
+  if (!id || !name) return null;
+  const username = typeof record.username === "string" ? record.username.trim() : "";
+  return username ? { id, name, username } : { id, name };
+}
+
+async function probeMeta(accessToken: string): Promise<MetaProbe> {
   const query = new URLSearchParams({ fields: "id,name", access_token: accessToken });
   const response = await fetch(
     `https://graph.facebook.com/${META_API_VERSION}/me?${query.toString()}`,
     { signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS) },
   );
   const body = await readJson(response, "meta_business");
-  let pageCount = 0;
-  try {
-    const pagesQuery = new URLSearchParams({
-      fields: "id,name",
-      limit: "100",
-      access_token: accessToken,
-    });
-    const pagesResponse = await fetch(
-      `https://graph.facebook.com/${META_API_VERSION}/me/accounts?${pagesQuery.toString()}`,
-      { signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS) },
-    );
-    if (pagesResponse.ok) {
-      const pagesBody = await pagesResponse.json() as { data?: unknown };
-      pageCount = Array.isArray(pagesBody.data) ? pagesBody.data.length : 0;
+  const pagesQuery = new URLSearchParams({
+    fields: "id,name,instagram_business_account{id,name,username}",
+    limit: "100",
+    access_token: accessToken,
+  });
+  const pagesResponse = await fetch(
+    `https://graph.facebook.com/${META_API_VERSION}/me/accounts?${pagesQuery.toString()}`,
+    { signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS) },
+  );
+  const pagesBody = await readJson(pagesResponse, "meta_business") as { data?: unknown };
+  const facebookPages: MetaSocialAsset[] = [];
+  const instagramAccounts: MetaSocialAsset[] = [];
+  if (Array.isArray(pagesBody.data)) {
+    for (const entry of pagesBody.data) {
+      const page = safeMetaAsset(entry);
+      if (!page) continue;
+      facebookPages.push(page);
+      const instagram = entry && typeof entry === "object" && !Array.isArray(entry)
+        ? safeMetaAsset((entry as Record<string, unknown>).instagram_business_account)
+        : null;
+      if (instagram) instagramAccounts.push(instagram);
     }
-  } catch {
-    // The identity probe is still useful for Ads. Organic social remains
-    // unavailable unless the Page probe succeeds with at least one Page.
   }
+  if (facebookPages.length === 0 && instagramAccounts.length === 0) {
+    throw new Error("META_BUSINESS_NO_SOCIAL_ASSETS");
+  }
+  const identityLabel = typeof body.name === "string" ? body.name.trim() : "";
+  const assetLabel = [
+    facebookPages[0]?.name,
+    instagramAccounts[0]?.username
+      ? `@${instagramAccounts[0].username}`
+      : instagramAccounts[0]?.name,
+  ].filter(Boolean).join(" · ");
   return {
-    label: typeof body.name === "string" ? body.name : "Meta Business",
+    label: assetLabel || identityLabel || "Meta Social",
     scopes: [],
-    pageCount,
+    facebookPages,
+    instagramAccounts,
   };
 }
 
@@ -283,9 +317,10 @@ export async function completeExternalOAuth(input: {
   const exchanged = input.provider === "meta_business"
     ? await exchangeMetaCode(input.code, credentials, input.redirectUri)
     : await exchangeTickTickCode(input.code, credentials, input.redirectUri);
-  const probe = input.provider === "meta_business"
+  const metaProbe = input.provider === "meta_business"
     ? await probeMeta(exchanged.accessToken)
-    : await probeTickTick(exchanged.accessToken);
+    : null;
+  const probe = metaProbe ?? await probeTickTick(exchanged.accessToken);
   const record: ExternalOAuthTokenRecord = {
     organizationId: input.organizationId,
     userId: input.userId,
@@ -299,17 +334,16 @@ export async function completeExternalOAuth(input: {
     operationalProbeError: null,
   };
   await getExternalOAuthTokenStore().put(record);
-  const pageCount = "pageCount" in probe && typeof probe.pageCount === "number"
-    ? probe.pageCount
-    : 0;
-  const grantedCapabilities = input.provider === "meta_business"
+  const grantedCapabilities = metaProbe
     ? [
-        ...(pageCount > 0 ? ["marketing.social.read"] : []),
-        ...(pageCount > 0 && exchanged.scopes.includes("pages_manage_posts")
+        ...(metaProbe.facebookPages.length > 0 ? ["marketing.social.read"] : []),
+        ...(metaProbe.facebookPages.length > 0 && exchanged.scopes.includes("pages_manage_posts")
           ? ["marketing.social.publish"]
           : []),
-        ...(exchanged.scopes.includes("ads_read") ? ["marketing.meta.ads.read"] : []),
-        ...(exchanged.scopes.includes("ads_management") ? ["marketing.meta.ads.manage"] : []),
+        ...(metaProbe.instagramAccounts.length > 0 ? ["marketing.social.instagram.read"] : []),
+        ...(metaProbe.instagramAccounts.length > 0 && exchanged.scopes.includes("instagram_content_publish")
+          ? ["marketing.social.instagram.publish"]
+          : []),
       ]
     : ["tasks.read", "tasks.write"];
   return { record, returnPath: stateRecord.returnPath, grantedCapabilities };

@@ -8,6 +8,14 @@ import {
   gmailTokenStore,
   gmailOAuthStateStore,
 } from "../src/customer-zero/gmail-adapter.js";
+import {
+  createInMemoryOAuthStateStore,
+  installGoogleOAuthStateStore,
+} from "../src/customer-zero/oauth-state.js";
+import {
+  installExternalOAuthTokenStoreForTest,
+  type ExternalOAuthTokenStore,
+} from "../src/customer-zero/external-oauth-tokens.js";
 import { resetCustomerZeroSessionsForTest } from "../src/customer-zero/customer-zero-session.js";
 
 /**
@@ -41,6 +49,8 @@ describe("CZ03 — Google OAuth unified handshake (routes)", () => {
     delete process.env.MICROSOFT_OAUTH_CLIENT_ID;
     delete process.env.MICROSOFT_OAUTH_CLIENT_SECRET;
     delete process.env.PUBLIC_BASE_URL;
+    installGoogleOAuthStateStore(null);
+    installExternalOAuthTokenStoreForTest(null);
   });
 
   function authedInject(options: InjectOptions) {
@@ -109,6 +119,82 @@ describe("CZ03 — Google OAuth unified handshake (routes)", () => {
     expect(body.connection.oauthState).toBeTruthy();
     expect(body.connection.lifecycle).toBe("needs_connection");
     expect(body.connection.status).not.toBe("connected");
+  });
+
+  it("Meta callback exchanges the code, discovers assets and persists the social grant", async () => {
+    process.env.META_APP_ID = "meta-app-test";
+    process.env.META_APP_SECRET = "meta-secret-test";
+    process.env.PUBLIC_BASE_URL = "https://app.departify.app";
+    installGoogleOAuthStateStore(createInMemoryOAuthStateStore());
+    const tokenPut = vi.fn(async () => {});
+    const tokenStore: ExternalOAuthTokenStore = {
+      put: tokenPut,
+      get: vi.fn(async () => null),
+      listForOrg: vi.fn(async () => []),
+      remove: vi.fn(async () => {}),
+    };
+    installExternalOAuthTokenStoreForTest(tokenStore);
+    const org = await startOrg();
+    const connect = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/meta_business/connect`,
+    });
+    const state = connect.json().connection.oauthState as string;
+    expect(state).toBeTruthy();
+
+    const realFetch = globalThis.fetch;
+    let tokenRedirectUri = "";
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/oauth/access_token")) {
+        tokenRedirectUri = new URL(url).searchParams.get("redirect_uri") ?? "";
+        return new Response(JSON.stringify({
+          access_token: "meta-access-token",
+          expires_in: 3600,
+          scope: "pages_show_list pages_read_engagement pages_manage_posts instagram_basic instagram_content_publish",
+        }), { status: 200 });
+      }
+      if (url.includes("/me?")) {
+        return new Response(JSON.stringify({ id: "founder", name: "Founder" }), { status: 200 });
+      }
+      if (url.includes("/me/accounts?")) {
+        return new Response(JSON.stringify({
+          data: [{
+            id: "page-1",
+            name: "Departify Page",
+            instagram_business_account: { id: "ig-1", name: "Departify Instagram", username: "departify" },
+          }],
+        }), { status: 200 });
+      }
+      return realFetch(input, init);
+    }) as typeof fetch;
+    try {
+      const callback = await authedInject({
+        method: "POST",
+        url: `/api/customer-zero/${org}/connections/meta_business/callback`,
+        payload: { code: "provider-code", state },
+      });
+      expect(callback.statusCode).toBe(200);
+      expect(tokenRedirectUri).toBe("https://app.departify.app/connections/meta_business/callback");
+      expect(callback.json()).toEqual(expect.objectContaining({
+        operational: true,
+        accountLabel: "Departify Page · @departify",
+        connection: expect.objectContaining({
+          status: "connected",
+          lifecycle: "connected",
+          grantedCapabilities: [
+            "marketing.social.read",
+            "marketing.social.publish",
+            "marketing.social.instagram.read",
+            "marketing.social.instagram.publish",
+          ],
+        }),
+      }));
+      expect(tokenPut).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(tokenPut.mock.calls[0])).not.toContain("meta-secret-test");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   it("connect with credentials returns a Google authorization URL with a state nonce", async () => {

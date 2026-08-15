@@ -88,6 +88,14 @@ export const RUNTIME_CAPABILITY_RULES: readonly CapabilityRule[] = [
     id: "marketing.social.publish",
     sourceCapabilities: ["marketing.social.publish"],
   },
+  {
+    id: "marketing.social.instagram.read",
+    sourceCapabilities: ["marketing.social.instagram.read"],
+  },
+  {
+    id: "marketing.social.instagram.publish",
+    sourceCapabilities: ["marketing.social.instagram.publish"],
+  },
   { id: "calendar.list", sourceCapabilities: ["calendar.read"] },
   { id: "calendar.create", sourceCapabilities: ["calendar.create"] },
   { id: "drive.search", sourceCapabilities: ["drive.search"] },
