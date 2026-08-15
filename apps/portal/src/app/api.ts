@@ -43,8 +43,17 @@ export type ToolDomain =
 export interface ToolConnectionView {
   toolId: string;
   label: string;
+  name: string;
   capability: string;
+  capabilities?: string[];
   category: string;
+  categoryId: "crm" | "email" | "calendar" | "documents" | "marketing" | "team" | "other";
+  logoMark: string;
+  brandColor: string;
+  description?: string;
+  accountLabel?: string;
+  configSource?: string;
+  userVisible?: boolean;
   /** Business domains this tool belongs to (primary first). */
   domains: ToolDomain[];
   /** "available" when the organization has no state for the tool. */
@@ -871,6 +880,7 @@ export const api = {
   status: (org: string) => getJson<CompanyStatus>(`/api/customer-zero/${org}`),
   connections: (org: string) =>
     getJson<{
+      organizationId: string;
       connections: ToolConnectionView[];
       cards: ConnectionCardView[];
       unmappedTools: string[];
@@ -974,11 +984,28 @@ export const api = {
     postJson<{ connection: ToolConnectionView }>(
       `/api/customer-zero/${org}/connections/${toolId}/declare`,
     ),
-  connect: (org: string, toolId: string, returnPath?: GoogleOAuthReturnPath) =>
+  connect: (
+    org: string,
+    toolId: string,
+    returnPath?: GoogleOAuthReturnPath,
+    reconnect = false,
+  ) =>
     postJson<{ connection: ConnectionCard }>(
       `/api/customer-zero/${org}/connections/${toolId}/connect`,
-      returnPath ? { returnPath } : undefined,
+      returnPath || reconnect
+        ? {
+            ...(returnPath ? { returnPath } : {}),
+            ...(reconnect ? { reconnect: true } : {}),
+          }
+        : undefined,
     ),
+  disconnect: (org: string, toolId: string) =>
+    postJson<{
+      organizationId: string;
+      toolId: string;
+      state: "needs_connection";
+      providerRevoked: boolean;
+    }>(`/api/customer-zero/${org}/connections/${toolId}/disconnect`, {}),
   finishGoogleConnect: (org: string, code: string, state: string) =>
     postJson<
       { connection: ConnectionCard } & {

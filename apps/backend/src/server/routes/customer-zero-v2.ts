@@ -177,9 +177,13 @@ import {
   externalOAuthCredentials,
   externalOAuthMissingCredentials,
   externalOAuthRedirectUri,
+  revokeExternalProviderAccess,
   startExternalOAuth,
 } from "../../customer-zero/external-oauth.js";
-import type { ExternalOAuthProvider } from "../../customer-zero/external-oauth-tokens.js";
+import {
+  getExternalOAuthTokenStore,
+  type ExternalOAuthProvider,
+} from "../../customer-zero/external-oauth-tokens.js";
 import {
   createPendingEmailWork,
   extractRecipient,
@@ -212,6 +216,7 @@ import {
   getGoogleTokenStore,
   hasOperationalGoogleCapability,
   hasGoogleCapability,
+  revokeGoogleConnection,
   type GoogleCapability,
   type GoogleTokenProvider,
 } from "../../customer-zero/google-tokens.js";
@@ -856,6 +861,107 @@ export async function registerCustomerZeroV2Routes(
     },
   );
 
+  // Real disconnect: revoke provider access when supported, always remove
+  // Departify's durable credential, and reset every projection sharing it.
+  server.post<{
+    Params: { organizationId: string; toolId: string };
+  }>(
+    "/api/customer-zero/:organizationId/connections/:toolId/disconnect",
+    async (request, reply) => {
+      const { organizationId, toolId } = request.params;
+      const session = await requireSession(organizationId, deps);
+      const userId = request.authUser?.id ?? organizationId;
+      const googleToolIds = new Set([
+        "gmail",
+        "google_workspace",
+        "google_calendar",
+        "google_drive",
+        "youtube",
+      ]);
+
+      if (googleToolIds.has(toolId)) {
+        const result = await revokeGoogleConnection(organizationId, userId);
+        if (!result.found) {
+          return reply.code(409).send({
+            error: {
+              code: "connection_not_found",
+              message: "No hay una cuenta de Google conectada para desconectar.",
+            },
+          });
+        }
+        for (const id of googleToolIds) {
+          const tool = TOOL_CATALOG.find((entry) => entry.id === id);
+          if (!tool) continue;
+          await persistToolState(session, {
+            organizationId,
+            toolId: id,
+            label: tool.label,
+            capability: tool.capability,
+            declared: true,
+            status: "needs_connection",
+            configSource: "oauth:google",
+            grantedCapabilities: [],
+            updatedAt: new Date().toISOString(),
+          });
+        }
+        return {
+          organizationId,
+          toolId,
+          state: "needs_connection" as const,
+          providerRevoked: result.providerRevoked,
+        };
+      }
+
+      const externalProvider: ExternalOAuthProvider | null =
+        toolId === "meta_business" || toolId === "meta_ads" || toolId === "facebook" || toolId === "instagram"
+          ? "meta_business"
+          : toolId === "ticktick"
+            ? "ticktick"
+            : null;
+      if (!externalProvider) {
+        return reply.code(409).send({
+          error: {
+            code: "disconnect_not_supported",
+            message: "Esta conexión no se puede desconectar desde el portal.",
+          },
+        });
+      }
+      const tokenStore = getExternalOAuthTokenStore();
+      const token = await tokenStore.get(organizationId, userId, externalProvider);
+      if (!token) {
+        return reply.code(409).send({
+          error: {
+            code: "connection_not_found",
+            message: "No hay una cuenta conectada para desconectar.",
+          },
+        });
+      }
+      const providerRevoked = await revokeExternalProviderAccess(token);
+      await tokenStore.remove(organizationId, userId, externalProvider);
+      for (const id of new Set([externalProvider, "meta_ads"])) {
+        const tool = TOOL_CATALOG.find((entry) => entry.id === id);
+        if (!tool) continue;
+        await persistToolState(session, {
+          organizationId,
+          toolId: id,
+          label: tool.label,
+          capability: tool.capability,
+          declared: true,
+          status: "needs_connection",
+          configSource: `oauth:${externalProvider}`,
+          grantedCapabilities: [],
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      return {
+        organizationId,
+        toolId,
+        state: "needs_connection" as const,
+        providerRevoked,
+      };
+    },
+  );
+
   // Customer Zero 01 — capabilities available to this organization.
   server.get<{
     Params: { organizationId: string };
@@ -1265,7 +1371,7 @@ export async function registerCustomerZeroV2Routes(
 
   server.post<{
     Params: { organizationId: string; toolId: string };
-    Body: { returnPath?: "/" | "/conexiones" | "/chat" };
+    Body: { returnPath?: "/" | "/conexiones" | "/chat"; reconnect?: boolean };
   }>(
     "/api/customer-zero/:organizationId/connections/:toolId/connect",
     {
@@ -1438,6 +1544,7 @@ export async function registerCustomerZeroV2Routes(
           redirectUri: googleOAuthRedirectUri(deps.publicBaseUrl),
           clientId: clientId as string,
           scopes,
+          selectAccount: request.body?.reconnect === true,
         });
         connection.status = "connecting";
         connection.authorizationUrl = out.authorizationUrl;
@@ -2798,9 +2905,14 @@ function buildHostingerCatalogView(
   return {
     toolId: "hostinger_email",
     label: locale === "en" ? "Business email" : "Correo empresarial",
+    name: locale === "en" ? "Business email" : "Correo empresarial",
     capability: "email.read",
     capabilities: status.capabilities,
     category: locale === "en" ? "Email" : "Correo",
+    categoryId: "email",
+    logoMark: "@",
+    brandColor: "#673de6",
+    description: locale === "en" ? "Your business mailbox." : "Tu buzón de empresa.",
     domains: ["email"],
     state: connected ? "connected" : configured ? "degraded" : "available",
     hasState: configured,
@@ -3622,6 +3734,7 @@ async function buildRuntimeBridge(
     toolId: connection.toolId,
     label: businessSafeConnectionLabel(connection.toolId, connection.label),
     state: connection.state,
+    ...(connection.userVisible === false ? { userVisible: false } : {}),
     ...(connection.capabilities ? { capabilities: connection.capabilities.map((capability) => capability) } : {}),
     ...(connection.toolId === "gmail"
       ? {
@@ -7102,10 +7215,22 @@ function publicBaseUrl(): string {
 export interface ToolConnectionView {
   readonly toolId: string;
   readonly label: string;
+  /** User-facing identity, sourced from the canonical connection definition. */
+  readonly name: string;
   readonly capability: string;
   /** Capabilities exposed by the verified connection, when known. */
   readonly capabilities?: readonly string[];
   readonly category: string;
+  readonly categoryId: string;
+  readonly logoMark: string;
+  readonly brandColor: string;
+  readonly description?: string;
+  /** Safe account label only; never a token or provider credential. */
+  readonly accountLabel?: string;
+  /** Internal lifecycle source; never rendered as primary UI copy. */
+  readonly configSource?: string;
+  /** Technical catalog entries can stay canonical without duplicating UI tiles. */
+  readonly userVisible?: boolean;
   /** Business domains this tool belongs to (primary first). */
   readonly domains: readonly ToolDomain[];
   /** "available" when the org has no state for the tool. */
@@ -7155,9 +7280,21 @@ async function buildCatalogConnectionViews(
       return {
         toolId: tool.id,
         label: tool.label,
+        name: definition?.name ?? tool.label,
         capability: tool.capability,
         ...(definition ? { capabilities: catalogCapabilities } : {}),
         category,
+        categoryId: definition?.category ?? "other",
+        logoMark: definition?.logoMark ?? tool.label.slice(0, 1),
+        brandColor: definition?.brandColor ?? "#6b7280",
+        ...(definition
+          ? {
+              description: locale === "en"
+                ? definition.descriptionEn ?? ""
+                : definition.descriptionEs ?? "",
+            }
+          : {}),
+        ...(tool.id === "google_workspace" || tool.id === "meta_business" ? { userVisible: false } : {}),
         domains: domainsFor(tool.id),
         state: "available",
         hasState: false,
@@ -7177,9 +7314,25 @@ async function buildCatalogConnectionViews(
     return {
       toolId: tool.id,
       label: tool.label,
+      name: definition?.name ?? tool.label,
       capability: tool.capability,
       ...(definition ? { capabilities: connectedCapabilities } : {}),
       category,
+      categoryId: definition?.category ?? "other",
+      logoMark: definition?.logoMark ?? tool.label.slice(0, 1),
+      brandColor: definition?.brandColor ?? "#6b7280",
+      ...(definition
+        ? {
+            description: locale === "en"
+              ? definition.descriptionEn ?? ""
+              : definition.descriptionEs ?? "",
+          }
+        : {}),
+      ...(durable?.providerAccountRef
+        ? { accountLabel: durable.providerAccountRef }
+        : {}),
+      ...(durable?.configSource ? { configSource: durable.configSource } : {}),
+      ...(tool.id === "google_workspace" || tool.id === "meta_business" ? { userVisible: false } : {}),
       domains: domainsFor(tool.id),
       state: consolidatedLifecycle,
       hasState: true,
@@ -7205,7 +7358,20 @@ export async function buildCanonicalConnectionViews(
   } else {
     catalog.push(hostingerView);
   }
-  return catalog;
+  const googleIdentity = (await getGoogleTokenStore().listForOrg(session.organizationId))[0];
+  if (!googleIdentity) return catalog;
+  const googleToolIds = new Set(["gmail", "google_calendar", "google_drive", "google_workspace", "youtube"]);
+  return catalog.map((entry) =>
+    googleToolIds.has(entry.toolId)
+      ? {
+          ...entry,
+          accountLabel: googleIdentity.email,
+          ...(entry.verifiedAt || !googleIdentity.operationalVerifiedAt
+            ? {}
+            : { verifiedAt: googleIdentity.operationalVerifiedAt }),
+        }
+      : entry,
+  );
 }
 
 /** Test support: clears the operational-state cache between cases. */

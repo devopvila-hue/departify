@@ -1,45 +1,43 @@
-/**
- * Customer Zero 01 — /conexiones 5-state consistency.
- *
- * Verified Mautic → "Conectado" + "Conectado mediante configuración
- * del sistema" + Comprobar acción.
- * Not connected → "No conectado" + CTA "Activar".
- * Needs attention → "Necesita atención" + "Revisar conexión".
- */
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ReactElement } from "react";
 
 import { OrgProvider } from "@/app/org-context";
 import { ConnectionsRoute } from "@/routes/ConnectionsRoute";
+import type { ToolConnectionView } from "@/app/api";
 
 function mount(ui: ReactElement) {
-  return render(
-    <MemoryRouter>
-      <OrgProvider>{ui}</OrgProvider>
-    </MemoryRouter>,
-  );
+  return render(<MemoryRouter><OrgProvider>{ui}</OrgProvider></MemoryRouter>);
 }
 
-function mockFetch(handler: (url: string) => unknown) {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn((url: string) =>
-      Promise.resolve({
-        ok: true,
-        status: 200,
-        json: async () => handler(url),
-      } as Response),
-    ),
-  );
+function base(over: Partial<ToolConnectionView> = {}): ToolConnectionView {
+  return {
+    toolId: "gmail",
+    label: "Gmail",
+    name: "Gmail",
+    capability: "email.read",
+    capabilities: ["email.read"],
+    category: "Correo",
+    categoryId: "email",
+    logoMark: "G",
+    brandColor: "#ea4335",
+    description: "Correo empresarial.",
+    domains: ["email"],
+    state: "available",
+    hasState: false,
+    humanLabel: "Disponible",
+    action: "prepare",
+    ...over,
+  };
 }
 
-describe("ConnectionsRoute — 5-state cards", () => {
+function payload(connections: ToolConnectionView[]) {
+  return { organizationId: "org_moon", connections, cards: [], unmappedTools: [] };
+}
+
+describe("ConnectionsRoute — lifecycle", () => {
   beforeEach(() => {
-    window.localStorage.setItem(
-      "departify_customer_zero",
-      JSON.stringify({ organizationId: "org_moon" }),
-    );
+    window.localStorage.setItem("departify_customer_zero", JSON.stringify({ organizationId: "org_moon" }));
   });
 
   afterEach(() => {
@@ -47,125 +45,65 @@ describe("ConnectionsRoute — 5-state cards", () => {
     window.localStorage.clear();
   });
 
-  it("verified CONNECTED Mautic shows 'Conectado' + config-source + check action", async () => {
-    mockFetch(() => ({
-      connections: [],
-      cards: [
-        {
-          id: "mautic",
-          name: "Mautic",
-          category: "CRM y automatización",
-          categoryId: "crm",
-          logoMark: "M",
-          brandColor: "#f36f21",
-          state: "connected",
-          stateLabel: "Conectado",
-          configSource: "env:mautic",
-          verifiedAt: "2026-08-09T00:00:00.000Z",
-          capabilities: [],
-          actionLabel: "Comprobar conexión",
-          description: null,
-        },
-      ],
-      unmappedTools: [],
-    }));
+  it("renders connected tools and keeps available tools in Add", async () => {
+    vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => url.includes("/connections") ? payload([
+        base({ toolId: "gmail", state: "connected", hasState: true, action: null, accountLabel: "founder@departify.app" }),
+        base({ toolId: "google_ads", name: "Google Ads", label: "Google Ads", category: "Marketing", categoryId: "marketing" }),
+      ]) : {},
+    } as Response)));
     mount(<ConnectionsRoute />);
 
-    expect(await screen.findByText("Conectado")).toBeInTheDocument();
-    expect(
-      await screen.findByText(/Conectado mediante configuración del sistema/i),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByRole("button", { name: /comprobar conexión/i }),
-    ).toBeInTheDocument();
+    expect(await screen.findByText("Gmail")).toBeInTheDocument();
+    expect(screen.getByText("Conectado")).toBeInTheDocument();
+    expect(screen.queryByText("Google Ads")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /\+ añadir/i }));
+    expect(await screen.findByRole("button", { name: /google ads/i })).toBeInTheDocument();
   });
 
-  it("NEEDS_ATTENTION Mautic shows 'Necesita atención' + 'Revisar conexión'", async () => {
-    mockFetch(() => ({
-      connections: [],
-      cards: [
-        {
-          id: "mautic",
-          name: "Mautic",
-          category: "CRM y automatización",
-          categoryId: "crm",
-          logoMark: "M",
-          brandColor: "#f36f21",
-          state: "needs_attention",
-          stateLabel: "Necesita atención",
-          configSource: null,
-          verifiedAt: null,
-          capabilities: [],
-          actionLabel: "Revisar conexión",
-          description: null,
-        },
-      ],
-      unmappedTools: [],
-    }));
+  it("supports search, manage and accessible disconnect confirmation", async () => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => init?.method === "POST"
+        ? { organizationId: "org_moon", toolId: "gmail", state: "needs_connection", providerRevoked: true }
+        : payload([base({ state: "connected", hasState: true, action: null })]),
+    } as Response));
+    vi.stubGlobal("fetch", fetchMock);
     mount(<ConnectionsRoute />);
 
-    expect(await screen.findByText("Necesita atención")).toBeInTheDocument();
-    expect(
-      await screen.findByRole("button", { name: /revisar conexión/i }),
-    ).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /gmail, conectado/i }));
+    expect(await screen.findByRole("dialog", { name: "Gmail" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Desconectar" }));
+    expect(await screen.findByRole("dialog", { name: /¿desconectar gmail/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(screen.queryByRole("dialog", { name: /¿desconectar gmail/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /gmail, conectado/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Desconectar" }));
+    const confirmDialog = await screen.findByRole("dialog", { name: /¿desconectar gmail/i });
+    fireEvent.click(within(confirmDialog).getByRole("button", { name: "Desconectar" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/connections/gmail/disconnect"),
+      expect.objectContaining({ method: "POST" }),
+    ));
   });
 
-  it("NOT_CONNECTED Gmail shows 'No conectado' + 'Activar' (env source present)", async () => {
-    mockFetch(() => ({
-      connections: [],
-      cards: [
-        {
-          id: "gmail",
-          name: "Gmail",
-          category: "Correo",
-          categoryId: "email",
-          logoMark: "G",
-          brandColor: "#ea4335",
-          state: "not_connected",
-          stateLabel: "No conectado",
-          configSource: null,
-          verifiedAt: null,
-          capabilities: [],
-          actionLabel: "Configurar",
-          description: null,
-        },
-      ],
-      unmappedTools: [],
-    }));
+  it("keeps Facebook, Instagram and Meta Ads separate", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => payload([
+        base({ toolId: "meta_business", name: "Meta Business", label: "Meta Business", state: "connected", hasState: true, capabilities: ["marketing.social.read"] }),
+        base({ toolId: "meta_ads", name: "Meta Ads", label: "Meta Ads", category: "Marketing", categoryId: "marketing", capabilities: [] }),
+      ]),
+    } as Response)));
     mount(<ConnectionsRoute />);
-
-    expect(await screen.findByText("No conectado")).toBeInTheDocument();
-    expect(
-      screen.getAllByRole("button", { name: /configurar/i }).length,
-    ).toBeGreaterThanOrEqual(1);
-  });
-
-  it("renders a genuinely operational Hostinger business email card", async () => {
-    mockFetch(() => ({
-      connections: [],
-      cards: [
-        {
-          id: "hostinger_email",
-          name: "Correo empresarial",
-          category: "Correo",
-          categoryId: "email",
-          logoMark: "H",
-          brandColor: "#673de6",
-          state: "connected",
-          stateLabel: "Conectado",
-          configSource: null,
-          verifiedAt: "2026-08-11T00:00:00.000Z",
-          capabilities: [],
-          actionLabel: "Comprobar conexión",
-          description: "Hostinger Email · Tu buzón de empresa.",
-        },
-      ],
-      unmappedTools: [],
-    }));
-    mount(<ConnectionsRoute />);
-
-    expect(await screen.findByText("Correo empresarial")).toBeInTheDocument();
-    expect(await screen.findByText(/Hostinger Email/)).toBeInTheDocument();
-    expect(await screen.findByText("Conectado")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /\+ añadir/i }));
+    expect(await screen.findByRole("button", { name: /facebook/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /instagram/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /meta ads/i })).toBeInTheDocument();
+    expect(screen.queryByText("Meta Business")).not.toBeInTheDocument();
   });
 });

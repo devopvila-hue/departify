@@ -638,6 +638,22 @@ async function reconcileGoogleConnectionsFromDurableTokens(
         Boolean(summary.operationalVerifiedAt) &&
         hasOperationalGoogleCapability(summary, capability),
     );
+    const matchingSummary = summaries.find((summary) =>
+      summary.hasRefreshToken &&
+      Boolean(summary.operationalVerifiedAt) &&
+      hasOperationalGoogleCapability(summary, capability),
+    );
+    const grantedCapabilities = operational
+      ? (matchingSummary?.operationalCapabilities ?? []).filter((candidate) =>
+          toolId === "gmail"
+            ? candidate.startsWith("email.")
+            : toolId === "google_calendar"
+              ? candidate.startsWith("calendar.")
+              : toolId === "google_workspace" || toolId === "google_drive"
+                ? candidate.startsWith("drive.")
+                : candidate.startsWith("youtube."),
+        )
+      : [];
     const status: OrganizationToolState["status"] = operational
       ? "connected"
       : "needs_connection";
@@ -653,12 +669,14 @@ async function reconcileGoogleConnectionsFromDurableTokens(
       configSource: "oauth:google",
       ...(operational
         ? (() => {
-            const verifiedAt = summaries.find((s) =>
-              hasOperationalGoogleCapability(s, capability),
-            )?.operationalVerifiedAt;
+            const verifiedAt = matchingSummary?.operationalVerifiedAt;
             return verifiedAt ? { verifiedAt } : {};
           })()
         : {}),
+      ...(matchingSummary?.email
+        ? { providerAccountRef: matchingSummary.email }
+        : {}),
+      grantedCapabilities,
       health: operational ? "operational" : "down",
     };
     try {

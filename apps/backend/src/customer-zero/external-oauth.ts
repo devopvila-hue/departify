@@ -30,6 +30,23 @@ const META_SCOPES = [
 
 const TICKTICK_SCOPES = ["tasks:read", "tasks:write"] as const;
 
+/** Provider-side revoke for Meta; local deletion remains authoritative if it fails. */
+export async function revokeExternalProviderAccess(
+  record: Pick<ExternalOAuthTokenRecord, "provider" | "accessToken">,
+): Promise<boolean> {
+  if (record.provider !== "meta_business" || !record.accessToken) return false;
+  try {
+    const response = await fetch(`https://graph.facebook.com/${META_API_VERSION}/me/permissions`, {
+      method: "DELETE",
+      headers: { authorization: `Bearer ${record.accessToken}` },
+      signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export function externalOAuthCredentials(provider: ExternalOAuthProvider): {
   clientId: string;
   clientSecret: string;
