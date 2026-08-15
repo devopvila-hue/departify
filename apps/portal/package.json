@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "deploy:production": "netlify deploy --prod --context production --site cd712ed4-a699-4dd7-abfc-6e6e13b31aed",
     "preview": "vite preview",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "lint": "eslint .",
