@@ -214,6 +214,7 @@ import type { ServerDeps } from "../deps.js";
 import type { EngineAdapter } from "@departify/engine-adapter";
 import {
   buildRuntimeCapabilityManifest,
+  businessSafeConnectionLabel,
   type RuntimeCapabilityManifest,
 } from "../../customer-zero/capability-manifest.js";
 import {
@@ -3588,7 +3589,7 @@ async function buildRuntimeBridge(
     : googleSummaries;
   const runtimeConnections = connections.map((connection) => ({
     toolId: connection.toolId,
-    label: connection.label,
+    label: businessSafeConnectionLabel(connection.toolId, connection.label),
     state: connection.state,
     ...(connection.capabilities ? { capabilities: connection.capabilities.map((capability) => capability) } : {}),
     ...(connection.toolId === "gmail"
@@ -3637,7 +3638,7 @@ async function buildRuntimeBridge(
     capabilities,
     connections: connections.map((connection) => ({
       toolId: connection.toolId,
-      label: connection.label,
+      label: businessSafeConnectionLabel(connection.toolId, connection.label),
       state: connection.state,
     })),
     tasks,

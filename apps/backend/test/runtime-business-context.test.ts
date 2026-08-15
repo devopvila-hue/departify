@@ -162,6 +162,30 @@ describe("Engine 02 — Runtime Business Context + Capability Bridge", () => {
     })).toEqual({ allowed: false, reason: "capability_unavailable" });
   });
 
+  it("projects a connected Facebook Pages capability into the runtime manifest", () => {
+    const manifest = buildRuntimeCapabilityManifest([
+      {
+        toolId: "meta_business",
+        label: "Meta Business",
+        state: "connected",
+        capabilities: ["marketing.social.read", "marketing.social.publish"],
+      },
+    ]);
+
+    expect(isRuntimeCapabilityAvailable(manifest, "marketing.social.read")).toBe(true);
+    expect(isRuntimeCapabilityAvailable(manifest, "marketing.social.publish")).toBe(true);
+    expect(manifest.connectedTools).toEqual([
+      {
+        toolId: "meta_business",
+        label: "Facebook Pages",
+        capabilities: ["marketing.social.read", "marketing.social.publish"],
+      },
+    ]);
+    expect(manifest.capabilities.find((entry) => entry.id === "marketing.social.publish")?.providers)
+      .toEqual(["Facebook Pages"]);
+    expect(manifest.capabilities.some((entry) => entry.id.startsWith("marketing.meta.ads."))).toBe(false);
+  });
+
   it("rejects a tenant override even when the model supplies the current tenant id", () => {
     const { manifest } = runtimeContext("org_runtime_auth");
     const result = authorizeDepartifyToolCall({

@@ -42,6 +42,16 @@ interface CapabilityRule {
   readonly unsupported?: boolean;
 }
 
+/** Keep provider-facing catalog labels out of the CEO's runtime vocabulary. */
+export function businessSafeConnectionLabel(toolId: string, label: string): string {
+  if (toolId === "meta_business") return "Facebook Pages";
+  return label;
+}
+
+function businessConnectionLabel(connection: CapabilityConnectionSource): string {
+  return businessSafeConnectionLabel(connection.toolId, connection.label);
+}
+
 /** The smallest normalized surface required by Customer Zero today. */
 export const RUNTIME_CAPABILITY_RULES: readonly CapabilityRule[] = [
   {
@@ -59,6 +69,14 @@ export const RUNTIME_CAPABILITY_RULES: readonly CapabilityRule[] = [
   {
     id: "email.business.reply",
     sourceCapabilities: ["email.reply", "email.send.personal"],
+  },
+  {
+    id: "marketing.social.read",
+    sourceCapabilities: ["marketing.social.read"],
+  },
+  {
+    id: "marketing.social.publish",
+    sourceCapabilities: ["marketing.social.publish"],
   },
   { id: "calendar.list", sourceCapabilities: ["calendar.read"] },
   { id: "calendar.create", sourceCapabilities: ["calendar.create"] },
@@ -92,7 +110,7 @@ export function buildRuntimeCapabilityManifest(
     .filter((connection) => connection.state === "connected")
     .map((connection) => ({
       toolId: connection.toolId,
-      label: connection.label,
+      label: businessConnectionLabel(connection),
       capabilities: [...sourceCapabilities(connection)],
     }));
 
@@ -110,7 +128,7 @@ export function buildRuntimeCapabilityManifest(
       if (connection.state !== "connected") continue;
       const actual = sourceCapabilities(connection);
       if (rule.sourceCapabilities.some((candidate) => actual.includes(candidate))) {
-        providers.add(connection.label);
+        providers.add(businessConnectionLabel(connection));
       }
     }
     const available = providers.size > 0;

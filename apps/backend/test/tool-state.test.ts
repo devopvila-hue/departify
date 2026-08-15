@@ -33,6 +33,10 @@ import {
   refineDeclaredStatus,
   type OrganizationToolState,
 } from "../src/customer-zero/tool-state.js";
+import {
+  installExternalOAuthTokenStoreForTest,
+  type ExternalOAuthTokenSummary,
+} from "../src/customer-zero/external-oauth-tokens.js";
 
 const MAUTIC_TOOL = TOOL_CATALOG.find((tool) => tool.id === "mautic")!;
 const GMAIL_TOOL = TOOL_CATALOG.find((tool) => tool.id === "gmail")!;
@@ -71,6 +75,7 @@ function setOrDelete(key: string, value: string | undefined) {
 
 afterEach(() => {
   resetCustomerZeroSessionsForTest();
+  installExternalOAuthTokenStoreForTest(null);
   delete process.env.MAUTIC_BASE_URL;
   delete process.env.MAUTIC_CLIENT_ID;
   delete process.env.MAUTIC_CLIENT_SECRET;
@@ -183,6 +188,78 @@ describe("E. restart/session recreation restores persisted connection state", ()
     expect(connection?.lifecycle).toBe("connected");
     expect(connection?.verifiedAt).toBe("2026-08-09T00:00:00.000Z");
     expect(connection?.status).toBe("connected");
+  });
+
+  it("replaces a stale in-memory connection when durable state changes", async () => {
+    const store = new InMemoryToolStateStore();
+    const session = getOrCreateCustomerZeroSession("org_fresh_state", { toolState: store });
+
+    await store.upsert({
+      organizationId: "org_fresh_state",
+      toolId: "mautic",
+      label: "Mautic",
+      capability: "crm.contacts",
+      declared: true,
+      status: "connected",
+      verifiedAt: "2026-08-09T00:00:00.000Z",
+      health: "operational",
+    });
+    await hydrateSessionToolState(session);
+    expect(session.state.connections.get("mautic")?.lifecycle).toBe("connected");
+
+    await store.upsert({
+      organizationId: "org_fresh_state",
+      toolId: "mautic",
+      label: "Mautic",
+      capability: "crm.contacts",
+      declared: true,
+      status: "needs_connection",
+      health: "down",
+    });
+    await hydrateSessionToolState(session);
+
+    expect(session.state.connections.get("mautic")?.lifecycle).toBe("needs_connection");
+    expect(session.state.connections.get("mautic")?.status).toBe("not_connected");
+  });
+
+  it("drops Meta capabilities when the durable OAuth token expires", async () => {
+    let summary: ExternalOAuthTokenSummary = {
+      organizationId: "org_meta_freshness",
+      userId: "user_meta",
+      provider: "meta_business",
+      hasAccessToken: true,
+      hasRefreshToken: false,
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      scopes: ["pages_read_engagement"],
+      accountLabel: "Facebook Pages",
+      operationalVerifiedAt: new Date().toISOString(),
+      operationalProbeError: null,
+    };
+    installExternalOAuthTokenStoreForTest({
+      put: async () => {},
+      get: async () => null,
+      listForOrg: async () => [summary],
+      remove: async () => {},
+    });
+
+    const store = new InMemoryToolStateStore();
+    const session = getOrCreateCustomerZeroSession("org_meta_freshness", { toolState: store });
+    await store.upsert({
+      organizationId: "org_meta_freshness",
+      toolId: "meta_business",
+      label: "Meta Business",
+      declared: true,
+      status: "connected",
+      configSource: "oauth:meta_business",
+      health: "operational",
+    });
+
+    await hydrateSessionToolState(session);
+    expect(session.state.connections.get("meta_business")?.lifecycle).toBe("connected");
+
+    summary = { ...summary, expiresAt: new Date(Date.now() - 1_000).toISOString() };
+    await hydrateSessionToolState(session);
+    expect(session.state.connections.get("meta_business")?.lifecycle).toBe("needs_connection");
   });
 });
 

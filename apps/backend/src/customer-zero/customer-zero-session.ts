@@ -95,6 +95,7 @@ import {
   hasOperationalGoogleCapability,
   type GoogleCapability,
 } from "./google-tokens.js";
+import { getExternalOAuthTokenStore } from "./external-oauth-tokens.js";
 
 const ONBOARDING_DIRECTOR_AGENT_ID = "agent_marketing_director";
 const ONBOARDING_EMPLOYEE_AGENT_ID = "agent_content_strategist";
@@ -501,8 +502,12 @@ export async function hydrateSessionToolState(
   }
 
   for (const record of records) {
-    if (session.state.connections.has(record.toolId)) continue;
     const tool = TOOL_CATALOG.find((entry) => entry.id === record.toolId);
+    // Durable state is authoritative. Replace an existing projection on every
+    // hydration so disconnects, failed probes, and reauth results are visible
+    // on the very next chat turn. An in-flight OAuth handshake is the one
+    // intentional exception: its transient state lives only until the callback.
+    if (session.state.connections.get(record.toolId)?.status === "connecting") continue;
     const connection = tool
       ? buildConnectionStateWithLifecycle(tool, session.state.locale, record.status, {
           ...(record.configSource ? { configSource: record.configSource } : {}),
@@ -520,6 +525,72 @@ export async function hydrateSessionToolState(
   // capability answers perfectly aligned with the durable Google token
   // store — no more "Connected in chat but Not Connected in card".
   await reconcileGoogleConnectionsFromDurableTokens(session, records);
+  await reconcileMetaConnectionFromDurableToken(session, records);
+}
+
+/**
+ * Meta Business OAuth is the durable auth evidence for Facebook Pages and
+ * Meta Ads. Activepieces is an execution adapter only; it cannot promote a
+ * tenant to CONNECTED. A missing, expired, or failed Meta token therefore
+ * removes the connected projection and forces reauthorization.
+ */
+async function reconcileMetaConnectionFromDurableToken(
+  session: CustomerZeroSession,
+  existingRecords: OrganizationToolState[],
+): Promise<void> {
+  const existing = existingRecords.find((record) => record.toolId === "meta_business");
+  const summaries = await getExternalOAuthTokenStore().listForOrg(session.organizationId);
+  const summary = summaries.find((record) => record.provider === "meta_business");
+  if (!summary && !existing) return;
+  if (session.state.connections.get("meta_business")?.status === "connecting") return;
+
+  const expiresAt = summary?.expiresAt ? Date.parse(summary.expiresAt) : null;
+  const operational = Boolean(
+    summary?.hasAccessToken &&
+      summary.operationalVerifiedAt &&
+      !summary.operationalProbeError &&
+      (expiresAt === null || Number.isNaN(expiresAt) || expiresAt > Date.now()),
+  );
+  const status: OrganizationToolState["status"] = operational
+    ? "connected"
+    : "needs_connection";
+  const tool = TOOL_CATALOG.find((entry) => entry.id === "meta_business");
+  const record: OrganizationToolState = {
+    ...(existing ?? {
+      organizationId: session.organizationId,
+      toolId: "meta_business",
+      label: tool?.label ?? "Meta Business",
+      declared: true,
+    }),
+    status,
+    configSource: "oauth:meta_business",
+    provider: "meta_business",
+    ...(summary?.accountLabel ? { providerAccountRef: summary.accountLabel } : {}),
+    ...(operational && summary?.operationalVerifiedAt
+      ? {
+          verifiedAt: summary.operationalVerifiedAt,
+          lastValidatedAt: summary.operationalVerifiedAt,
+        }
+      : {}),
+    ...(summary?.operationalProbeError ? { lastError: "La conexión de Facebook no está operativa." } : {}),
+    health: operational ? "operational" : "down",
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    await session.toolState.upsert(record);
+  } catch {
+    // The in-memory projection still reflects the token evidence for this
+    // request; the next request retries the durable reconciliation.
+  }
+  if (tool) {
+    session.state.connections.set(
+      "meta_business",
+      buildConnectionStateWithLifecycle(tool, session.state.locale, status, {
+        configSource: "oauth:meta_business",
+        ...(record.verifiedAt ? { verifiedAt: record.verifiedAt } : {}),
+      }),
+    );
+  }
 }
 
 /**
