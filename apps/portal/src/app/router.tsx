@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate } from "react-router-dom";
+import { createBrowserRouter, Navigate, useNavigate } from "react-router-dom";
 
 import { ChatRoute } from "@/routes/ChatRoute";
 import { CompanyRoute } from "@/routes/CompanyRoute";
@@ -14,6 +14,19 @@ import { RootRoute } from "@/routes/RootRoute";
 import { SettingsRoute } from "@/routes/SettingsRoute";
 import { ShellGate } from "@/components/ShellGate";
 import { TasksRoute } from "@/routes/TasksRoute";
+
+export function RouteErrorFallback() {
+  const navigate = useNavigate();
+  return (
+    <main className="dfy-page" role="alert">
+      <h1>No hemos podido abrir esta sección</h1>
+      <p>Ha ocurrido un problema inesperado. Puedes volver al portal y continuar desde allí.</p>
+      <button type="button" className="dfy-button" onClick={() => navigate("/conexiones", { replace: true })}>
+        Volver a Conexiones
+      </button>
+    </main>
+  );
+}
 
 /**
  * Departify information architecture.
@@ -34,7 +47,7 @@ import { TasksRoute } from "@/routes/TasksRoute";
  */
 
 export const router = createBrowserRouter([
-  { path: "/", element: <RootRoute /> },
+  { path: "/", element: <RootRoute />, errorElement: <RouteErrorFallback /> },
   // P0 — the Google OAuth callback MUST be able to complete the
   // server-side exchange regardless of the shell gate. It is registered
   // OUTSIDE ShellGate so no auth/org/overview gate can redirect the
@@ -44,9 +57,11 @@ export const router = createBrowserRouter([
   {
     path: "/connections/google/callback",
     element: <GoogleOAuthCallbackRoute />,
+    errorElement: <RouteErrorFallback />,
   },
   {
     element: <ShellGate />,
+    errorElement: <RouteErrorFallback />,
     children: [
       { path: "/inicio", element: <ControlPlaneRoute /> },
       { path: "/chat", element: <ChatRoute /> },
@@ -62,5 +77,5 @@ export const router = createBrowserRouter([
       { path: "/decisiones", element: <DecisionsRoute /> },
     ],
   },
-  { path: "*", element: <Navigate to="/" replace /> },
+  { path: "*", element: <Navigate to="/" replace />, errorElement: <RouteErrorFallback /> },
 ]);

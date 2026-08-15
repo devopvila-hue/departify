@@ -290,11 +290,14 @@ function ManageDialog(props: {
   );
 }
 
-function buildSurfaces(catalog: readonly ToolConnectionView[]): Surface[] {
-  const direct = catalog
+export function buildSurfaces(catalog: readonly ToolConnectionView[]): Surface[] {
+  const normalizedCatalog = catalog
+    .map((entry) => normalizeConnectionView(entry))
+    .filter((entry): entry is ToolConnectionView => entry !== null);
+  const direct = normalizedCatalog
     .filter((entry) => entry.userVisible !== false && entry.toolId !== "meta_business" && SURFACE_CATALOG_IDS.has(entry.toolId))
     .map((entry) => surfaceFrom(entry));
-  const meta = catalog.find((entry) => entry.toolId === "meta_business");
+  const meta = normalizedCatalog.find((entry) => entry.toolId === "meta_business");
   if (meta) {
     direct.push(metaSurface(meta, "facebook", "Facebook", "Consulta y prepara publicaciones de tus páginas de Facebook.", ["marketing.social.read", "marketing.social.publish"]));
     direct.push(metaSurface(meta, "instagram", "Instagram", "Conecta Instagram cuando la cuenta conceda permisos específicos para ese canal.", ["marketing.instagram.read", "marketing.social.instagram.read"]));
@@ -302,7 +305,97 @@ function buildSurfaces(catalog: readonly ToolConnectionView[]): Surface[] {
     direct.push(metaSurface(null, "facebook", "Facebook", "Conecta tus páginas de Facebook.", ["marketing.social.read"]));
     direct.push(metaSurface(null, "instagram", "Instagram", "Conecta tu cuenta de Instagram.", ["marketing.instagram.read"]));
   }
-  return direct.sort((a, b) => CATEGORY_ORDER.indexOf(a.categoryId) - CATEGORY_ORDER.indexOf(b.categoryId) || a.name.localeCompare(b.name));
+  return direct.sort(compareSurfaces);
+}
+
+const CONNECTION_STATES = new Set<SurfaceState>([
+  "available",
+  "selected",
+  "needs_connection",
+  "configured",
+  "connected",
+  "degraded",
+  "unavailable",
+]);
+
+function textValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+/**
+ * The API is a runtime boundary, not a TypeScript guarantee. Older or
+ * partially populated catalog projections may omit optional identity fields.
+ * Prefer canonical name/label metadata and use the stable tool id only as a
+ * last-resort technical identity; never let malformed metadata reach sorting.
+ */
+function normalizeConnectionView(entry: unknown): ToolConnectionView | null {
+  if (!entry || typeof entry !== "object") return null;
+  const raw = entry as Record<string, unknown>;
+  const toolId = textValue(raw.toolId);
+  if (!toolId) return null;
+
+  const label = textValue(raw.label) ?? textValue(raw.name) ?? toolId;
+  const name = textValue(raw.name) ?? label;
+  const categoryId = CATEGORY_ORDER.includes(raw.categoryId as typeof CATEGORY_ORDER[number])
+    ? raw.categoryId as ToolConnectionView["categoryId"]
+    : "other";
+  const state = CONNECTION_STATES.has(raw.state as SurfaceState)
+    ? raw.state as ToolConnectionView["state"]
+    : "available";
+  const capabilities = Array.isArray(raw.capabilities)
+    ? raw.capabilities.filter((value): value is string => typeof value === "string")
+    : [];
+  const validDomains = new Set<ToolConnectionView["domains"][number]>([
+    "crm",
+    "email",
+    "calendar",
+    "documents",
+    "marketing",
+    "team",
+  ]);
+  const domains = Array.isArray(raw.domains)
+    ? raw.domains.filter((value): value is ToolConnectionView["domains"][number] => typeof value === "string" && validDomains.has(value as ToolConnectionView["domains"][number]))
+    : [];
+  const description = textValue(raw.description);
+  const accountLabel = textValue(raw.accountLabel);
+  const configSource = textValue(raw.configSource);
+  const verifiedAt = textValue(raw.verifiedAt);
+  const blockedReason = textValue(raw.blockedReason);
+
+  return {
+    toolId,
+    label,
+    name,
+    capability: textValue(raw.capability) ?? "unknown",
+    capabilities,
+    category: textValue(raw.category) ?? "Otros",
+    categoryId,
+    logoMark: textValue(raw.logoMark) ?? label.slice(0, 1),
+    brandColor: textValue(raw.brandColor) ?? "#6b7280",
+    ...(description ? { description } : {}),
+    ...(accountLabel ? { accountLabel } : {}),
+    ...(configSource ? { configSource } : {}),
+    ...(raw.userVisible === false ? { userVisible: false } : {}),
+    domains,
+    state,
+    hasState: raw.hasState === true,
+    humanLabel: textValue(raw.humanLabel) ?? "Disponible",
+    action: raw.action === "prepare" || raw.action === "connect" || raw.action === "verify" || raw.action === "retry"
+      ? raw.action
+      : null,
+    ...(verifiedAt ? { verifiedAt } : {}),
+    ...(blockedReason ? { blockedReason } : {}),
+  };
+}
+
+function compareSurfaces(a: Surface, b: Surface): number {
+  const categoryA = CATEGORY_ORDER.indexOf(a.categoryId);
+  const categoryB = CATEGORY_ORDER.indexOf(b.categoryId);
+  const categoryOrderA = categoryA < 0 ? CATEGORY_ORDER.length : categoryA;
+  const categoryOrderB = categoryB < 0 ? CATEGORY_ORDER.length : categoryB;
+  return categoryOrderA - categoryOrderB
+    || a.name.localeCompare(b.name, "es")
+    || a.surfaceId.localeCompare(b.surfaceId, "en");
 }
 
 function surfaceFrom(entry: ToolConnectionView): Surface {
