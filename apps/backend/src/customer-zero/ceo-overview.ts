@@ -155,12 +155,14 @@ export function buildCompanyOperatingState(input: {
   readonly marketing: DepartmentStatusView | null;
   readonly marketingApprovals: readonly ApprovalRequest[];
 }): CompanyOperatingState {
+  const userVisibleConnection = (connection: OperationalConnectionView) =>
+    connection.toolId !== "google_workspace" && connection.toolId !== "meta_business";
   const employeeLabels = new Map(MARKETING_ROSTER.map((employee) => [employee.id, employee.label]));
   const activeTasks = input.tasks.filter((task) =>
     task.status === "queued" || task.status === "running" || task.status === "waiting_approval",
   );
   const connectedTools = input.connections
-    .filter((connection) => connection.state === "connected")
+    .filter((connection) => connection.state === "connected" && userVisibleConnection(connection))
     .map((connection) => ({
       toolId: connection.toolId,
       label: connection.label,
@@ -371,12 +373,14 @@ export function buildCeoOverview(session: CustomerZeroSession): CeoOverview {
     decisions,
     activity,
     results,
-    connections: [...session.state.connections.values()].map((connection) => ({
+    connections: [...session.state.connections.values()]
+      .filter((connection) => connection.toolId !== "google_workspace" && connection.toolId !== "meta_business")
+      .map((connection) => ({
       toolId: connection.toolId,
       label: connection.label,
       status: connection.status,
       category: connection.category,
-    })),
+      })),
     working: items.filter(
       (item) => item.status === "pending" || item.status === "running",
     ).length,

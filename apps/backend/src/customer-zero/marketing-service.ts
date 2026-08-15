@@ -809,6 +809,7 @@ export class MarketingService {
         toolId: record.toolId,
         label: businessSafeConnectionLabel(record.toolId, record.label),
         state: record.status,
+        ...(record.toolId === "google_workspace" ? { userVisible: false } : {}),
         capabilities: record.grantedCapabilities ?? [],
       })),
     );

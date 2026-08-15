@@ -17,6 +17,7 @@ export interface CapabilityConnectionSource {
   readonly state: string;
   /** Capabilities verified by the connection probe, when known. */
   readonly capabilities?: readonly string[];
+  readonly userVisible?: boolean;
 }
 
 export interface RuntimeCapability {
@@ -51,6 +52,10 @@ export function businessSafeConnectionLabel(toolId: string, label: string): stri
 
 function businessConnectionLabel(connection: CapabilityConnectionSource): string {
   return businessSafeConnectionLabel(connection.toolId, connection.label);
+}
+
+function isUserVisibleConnection(connection: CapabilityConnectionSource): boolean {
+  return connection.userVisible !== false;
 }
 
 /** The smallest normalized surface required by Customer Zero today. */
@@ -112,7 +117,7 @@ export function buildRuntimeCapabilityManifest(
   generatedAt = new Date().toISOString(),
 ): RuntimeCapabilityManifest {
   const connectedTools = connections
-    .filter((connection) => connection.state === "connected")
+    .filter((connection) => connection.state === "connected" && isUserVisibleConnection(connection))
     .map((connection) => ({
       tool: businessConnectionLabel(connection),
       capabilities: [...sourceCapabilities(connection)],

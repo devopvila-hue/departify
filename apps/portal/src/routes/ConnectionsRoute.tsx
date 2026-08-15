@@ -1,501 +1,456 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 
-import { api, rememberGoogleOAuthReturnPath, type ConnectionCardView, type ToolConnectionView } from "@/app/api";
+import {
+  api,
+  rememberGoogleOAuthReturnPath,
+  type ToolConnectionView,
+} from "@/app/api";
 import { useOrg } from "@/app/org-context";
-import { Badge, Card, EmptyState } from "@/components/primitives";
+import { EmptyState } from "@/components/primitives";
 
-/**
- * Conexiones — Customer Zero 01.
- *
- * Capability-first surface. Five business-language states:
- *   No conectado · Conectando · Conectado · Necesita atención · Error
- *
- * Official brand marks on every card (no fake logos, no remote
- * assets). The "configSource" indicator surfaces "Conectado mediante
- * configuración del sistema" when the connection comes from
- * environment variables (the Customer Zero bootstrap path).
- *
- * The detail view lists the capabilities Elvira can use today and
- * the actions available to the CEO. No raw credentials ever appear
- * in this UI.
- */
+type SurfaceState = "connected" | "available" | "attention";
 
-const DOMAIN_ORDER = ["crm", "email", "calendar", "documents", "marketing", "team", "other"];
-
-interface ConnectionsPayload {
-  organizationId: string;
-  connections: ToolConnectionView[];
-  cards: ConnectionCardView[];
-  unmappedTools: string[];
-  google?: {
-    connected: boolean;
-    email: string | null;
-    displayName: string | null;
-    capabilities: {
-      email: "connected" | "activate" | "needs_attention";
-      calendar: "connected" | "activate" | "needs_attention";
-      drive: "connected" | "activate" | "needs_attention";
-    };
-  } | null;
+interface SurfaceConnection {
+  id: string;
+  sourceToolId: string;
+  name: string;
+  categoryId: ToolConnectionView["categoryId"];
+  description: string;
+  state: SurfaceState;
+  action: ToolConnectionView["action"];
+  capabilities: string[];
+  accountLabel?: string | undefined;
+  verifiedAt?: string | undefined;
+  blockedReason?: string | undefined;
+  brandColor: string;
 }
+
+const SURFACE_IDS = [
+  "mautic",
+  "hostinger_email",
+  "gmail",
+  "google_calendar",
+  "google_drive",
+  "google_analytics",
+  "google_ads",
+  "facebook",
+  "instagram",
+  "meta_ads",
+  "tiktok_ads",
+] as const;
+
+const CONNECTABLE_IDS = new Set([
+  "mautic",
+  "gmail",
+  "google_calendar",
+  "google_drive",
+  "meta_ads",
+  "facebook",
+  "instagram",
+]);
+
+const CATEGORY_LABELS: Record<string, string> = {
+  crm: "CRM",
+  email: "Correo",
+  calendar: "Calendario",
+  documents: "Documentos",
+  marketing: "Marketing",
+  team: "Equipo",
+  other: "Otros",
+};
+
+const CAPABILITY_LABELS: Record<string, string> = {
+  "email.read": "Leer correos",
+  "email.search": "Buscar en el correo",
+  "email.send": "Preparar y enviar correos",
+  "email.send.personal": "Enviar correos autorizados",
+  "calendar.read": "Consultar el calendario",
+  "calendar.create": "Crear eventos",
+  "drive.read": "Leer documentos",
+  "drive.search": "Buscar documentos",
+  "crm.contacts.read": "Consultar contactos",
+  "marketing.social.read": "Consultar publicaciones y páginas",
+  "marketing.social.publish": "Publicar contenido aprobado",
+  "marketing.ads.read": "Consultar campañas publicitarias",
+  "marketing.ads.analyze": "Analizar campañas publicitarias",
+};
 
 export function ConnectionsRoute() {
   const { organizationId } = useOrg();
   const location = useLocation();
-  const [cards, setCards] = useState<ConnectionCardView[]>([]);
+  const [connections, setConnections] = useState<ToolConnectionView[]>([]);
   const [unmapped, setUnmapped] = useState<string[]>([]);
-  const [google, setGoogle] = useState<ConnectionsPayload["google"]>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [search, setSearch] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!organizationId) return;
-    const data = (await api.connections(organizationId)) as ConnectionsPayload | null;
-    if (data) {
-      setCards(data.cards ?? []);
-      setUnmapped(data.unmappedTools ?? []);
-      setGoogle(data.google ?? null);
+    const data = await api.connections(organizationId);
+    if (!data) {
+      setError("No hemos podido cargar tus conexiones. Vuelve a intentarlo.");
+      return;
     }
+    setConnections(data.connections ?? []);
+    setUnmapped(data.unmappedTools ?? []);
   }, [organizationId]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  async function runAction(card: ConnectionCardView) {
-    if (!organizationId) return;
-    setBusy(card.id);
+  const surfaces = useMemo(
+    () => buildSurfaceConnections(connections),
+    [connections],
+  );
+  const connected = surfaces.filter((item) => item.state === "connected");
+  const selected = selectedId ? surfaces.find((item) => item.id === selectedId) ?? null : null;
+  const catalog = surfaces.filter((item) => item.state !== "connected");
+  const filteredCatalog = catalog.filter((item) => {
+    const haystack = `${item.name} ${item.description} ${CATEGORY_LABELS[item.categoryId]}`.toLowerCase();
+    return haystack.includes(search.trim().toLowerCase());
+  });
+
+  function openManage(item: SurfaceConnection) {
+    setCatalogOpen(false);
+    setSearch("");
+    setError(null);
+    setNotice(null);
+    setSelectedId(item.id);
+  }
+
+  async function startConnect(item: SurfaceConnection, reconnect = false) {
+    if (!organizationId || busy) return;
+    if (!CONNECTABLE_IDS.has(item.id) && item.sourceToolId === item.id) {
+      setError("Esta conexión todavía no está disponible para tu empresa.");
+      return;
+    }
+    setBusy(item.id);
+    setError(null);
+    setNotice(null);
+    const returnPath = new URLSearchParams(location.search).get("return") === "chat"
+      ? "/chat"
+      : "/conexiones";
     try {
-      // Customer Zero 03 — the card action starts the REAL OAuth handshake.
-      // api.connect returns the provider authorization URL; the browser is
-      // redirected to Google. After the user authorizes, Google redirects
-      // back to the portal callback which completes the handshake server-side.
-      const returnPath = new URLSearchParams(location.search).get("return") === "chat"
-        ? "/chat"
-        : "/conexiones";
-      const out = await api.connect(organizationId, card.id, returnPath);
-      const authorizationUrl = out?.connection?.authorizationUrl;
-      if (authorizationUrl) {
+      const out = await api.connect(organizationId, item.sourceToolId, returnPath, reconnect);
+      const connection = out?.connection as (ToolConnectionView & {
+        authorizationUrl?: string;
+        blockedReason?: string;
+        status?: string;
+      }) | undefined;
+      if (connection?.authorizationUrl) {
         rememberGoogleOAuthReturnPath(returnPath);
-        window.location.href = authorizationUrl;
+        window.location.href = connection.authorizationUrl;
         return;
       }
-      // Non-OAuth tools fall back to a read-only verification.
-      await api.testConnection(organizationId, card.id);
+      if (connection?.status === "blocked" || connection?.blockedReason) {
+        setError("No se ha podido iniciar esta conexión. Estamos revisando su configuración.");
+      } else {
+        setNotice("Hemos actualizado el estado de la conexión.");
+        await load();
+      }
+    } catch {
+      setError("No se ha podido iniciar esta conexión. Vuelve a intentarlo.");
     } finally {
       setBusy(null);
-      await load();
     }
   }
 
-  // P0 — group by backend-provided `categoryId` so the portal never
-  // maintains a duplicate, incomplete, locale-coupled tool-to-domain map.
-  // The backend is the single source of truth for connection identity.
-  const groups = DOMAIN_ORDER.map((domain) => ({
-    domain,
-    label: DOMAIN_LABELS[domain] ?? domain,
-    tools: cards.filter((card) => card.categoryId === domain),
-  })).filter((group) => group.tools.length > 0);
+  async function checkConnection(item: SurfaceConnection) {
+    if (!organizationId || busy) return;
+    setBusy(item.id);
+    setError(null);
+    try {
+      const result = await api.testConnection(organizationId, item.sourceToolId);
+      if (!result || result.state !== "connected") {
+        setError("La conexión necesita atención. Puedes volver a comprobarla más tarde.");
+      } else {
+        setNotice("Conexión comprobada correctamente.");
+        await load();
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function disconnect(item: SurfaceConnection) {
+    if (!organizationId || busy) return;
+    if (!window.confirm(`¿Desconectar ${item.name}? Elvira dejará de usar esta cuenta.`)) return;
+    setBusy(item.id);
+    setError(null);
+    try {
+      const result = await api.disconnect(organizationId, item.sourceToolId);
+      if (!result || result.state !== "needs_connection") {
+        setError("No hemos podido desconectar esta cuenta. Vuelve a intentarlo.");
+        return;
+      }
+      setSelectedId(null);
+      setNotice("Cuenta desconectada. Elvira ya no puede usarla.");
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  }
 
   return (
-    <div className="dfy-page">
-      <section className="dfy-hero">
-        <p className="dfy-eyebrow">Conexiones</p>
-        <h1>Las herramientas de tu empresa</h1>
-        <p className="dfy-hero__lead">
-          Elvira solo puede usar las herramientas que tu empresa tiene autorizadas. Cuando
-          una conexión está lista, puede trabajar con datos reales sin pedirte credenciales.
-        </p>
-      </section>
+    <div className="dfy-page dfy-connections-page">
+      <header className="dfy-connections-heading">
+        <div>
+          <h1>Conexiones</h1>
+          <p>Conecta las herramientas que ya utiliza tu empresa.</p>
+        </div>
+        <div className="dfy-connections-heading__actions">
+          <span className="dfy-connections-count"><strong>{connected.length}</strong> conectadas</span>
+          <button type="button" className="dfy-button" onClick={() => setCatalogOpen(true)}>
+            + Añadir
+          </button>
+        </div>
+      </header>
 
-      {groups.length === 0 ? (
-        <Card>
-          <EmptyState
-            title="Sin herramientas todavía"
-            description="El catálogo se está preparando. Vuelve en un momento."
-          />
-        </Card>
+      {error && <p className="dfy-alert" role="alert">{error}</p>}
+      {notice && <p className="dfy-connections-notice" role="status">{notice}</p>}
+
+      {connected.length === 0 ? (
+        <EmptyState title="No hay conexiones disponibles" description="Vuelve a intentarlo en unos minutos." />
       ) : (
-        groups.map((group) => (
-          <section key={group.domain} className="dfy-catalog-group">
-            <h2 className="dfy-catalog-group__title">{group.label}</h2>
-            <div className="dfy-grid">
-              {group.tools.map((card) => (
-                <ConnectionCardItem
-                  key={card.id}
-                  card={card}
-                  busy={busy === card.id}
-                  onAction={() => void runAction(card)}
-                />
-              ))}
-            </div>
-          </section>
-        ))
+        <div className="dfy-connections-grid" aria-label="Herramientas conectadas">
+          {connected.map((item) => (
+            <ConnectionTile key={item.id} item={item} onClick={() => openManage(item)} />
+          ))}
+        </div>
       )}
 
-      {google && (
-        <GoogleIdentitySection
-          google={google}
-          onActivate={(capability) => {
-            const toolId = capability === "calendar" ? "google_calendar" : capability === "drive" ? "google_drive" : "gmail";
-            const card = cards.find((candidate) => candidate.id === toolId);
-            if (card) void runAction(card);
-          }}
+      {unmapped.length > 0 && (
+        <p className="dfy-muted dfy-muted--small">Otras herramientas detectadas: {unmapped.join(", ")}</p>
+      )}
+
+      {catalogOpen && (
+        <CatalogDialog
+          items={filteredCatalog}
+          search={search}
+          onSearch={setSearch}
+          onClose={() => { setCatalogOpen(false); setSearch(""); }}
+          onSelect={openManage}
         />
       )}
 
-      {/* Customer Zero Email P0 — the Correo capability, provider-first.
-          The CEO sees ONE capability with providers, never "Sincronizar
-          Gmail" as the product itself. */}
-      <EmailConnectionSection
-        org={organizationId}
-        gmailCard={cards.find((c) => c.id === "gmail") ?? null}
-        onConnectGoogle={() => {
-          const gmail = cards.find((c) => c.id === "gmail");
-          if (gmail) void runAction(gmail);
-        }}
-      />
-
-      {unmapped.length > 0 && (
-        <Card title="También utilizáis estas herramientas">
-          <p className="dfy-muted">{unmapped.join(", ")}</p>
-          <p className="dfy-muted dfy-muted--small">
-            Tu equipo lo tiene en cuenta. Si alguna es razonablemente integrable
-            la añadiremos al catálogo.
-          </p>
-        </Card>
+      {selected && (
+        <ManageDialog
+          item={selected}
+          busy={busy === selected.id}
+          onClose={() => setSelectedId(null)}
+          onConnect={(reconnect) => void startConnect(selected, reconnect)}
+          onCheck={() => void checkConnection(selected)}
+          onDisconnect={() => void disconnect(selected)}
+        />
       )}
     </div>
   );
 }
 
-function GoogleIdentitySection(props: {
-  google: NonNullable<ConnectionsPayload["google"]>;
-  onActivate: (capability: "email" | "calendar" | "drive") => void;
-}) {
-  const { google } = props;
-  const label = (capability: "email" | "calendar" | "drive") => {
-    const state = google.capabilities[capability];
-    if (state === "connected") return "✓ Disponible";
-    if (state === "needs_attention") return "Revisar conexión";
-    return capability === "calendar" ? "Dar acceso a Calendar" : capability === "drive" ? "Dar acceso a Drive" : "Dar acceso a Correo";
-  };
-  return (
-    <Card title="Google">
-      <p className="dfy-muted">{google.email ? `Conectado como: ${google.email}` : "Cuenta de Google conectada"}</p>
-      <div className="dfy-connection-card__actions">
-        {(["email", "calendar", "drive"] as const).map((capability) => {
-          const state = google.capabilities[capability];
-          return state === "connected" ? (
-            <Badge key={capability} tone="success">{label(capability)}</Badge>
-          ) : (
-            <button key={capability} type="button" className="dfy-button dfy-button--small" onClick={() => props.onActivate(capability)}>
-              {label(capability)}
-            </button>
-          );
-        })}
-      </div>
-    </Card>
-  );
-}
-
-function ConnectionCardItem(props: {
-  card: ConnectionCardView;
-  busy: boolean;
-  onAction: () => void;
-}) {
-  const { card, busy, onAction } = props;
-  return (
-    <Card>
-      <div className="dfy-connection-card">
-        <div
-          className="dfy-connection-card__logo"
-          style={{ background: card.brandColor }}
-          aria-hidden="true"
-        >
-          <span>{card.logoMark}</span>
-        </div>
-        <div className="dfy-connection-card__head">
-          <strong>{card.name}</strong>
-          <Badge tone={toneFor(card.state)}>
-            <span className={`dfy-dot dfy-dot--${card.state}`} aria-hidden="true" />{" "}
-            {card.stateLabel}
-          </Badge>
-        </div>
-        <p className="dfy-muted dfy-muted--small">{card.category}</p>
-        {card.description && (
-          <p className="dfy-muted dfy-muted--small">{card.description}</p>
-        )}
-
-        {card.state === "connected" && card.configSource && (
-          <p className="dfy-muted dfy-muted--small dfy-connection-card__config">
-            Conectado mediante configuración del sistema
-          </p>
-        )}
-
-        <div className="dfy-connection-card__actions">
-          {card.actionLabel && (
-            <button
-              type="button"
-              className="dfy-button dfy-button--small"
-              disabled={busy}
-              onClick={onAction}
-            >
-              {busy ? "Comprobando…" : card.actionLabel}
-            </button>
-          )}
-        </div>
-
-        {card.verifiedAt && card.state === "connected" && (
-          <p className="dfy-muted dfy-muted--small">
-            Verificado por última vez: {fecha(card.verifiedAt)}
-          </p>
-        )}
-      </div>
-    </Card>
-  );
-}
-
-const DOMAIN_LABELS: Record<string, string> = {
-  crm: "CRM y automatización",
-  email: "Correo",
-  calendar: "Calendario",
-  documents: "Documentos",
-  marketing: "Marketing y publicidad",
-  team: "Equipo",
-  other: "Otras herramientas",
-};
-
-function toneFor(state: ConnectionCardView["state"]): "neutral" | "success" | "warning" | "danger" {
-  switch (state) {
-    case "connected":
-      return "success";
-    case "needs_attention":
-      return "warning";
-    case "error":
-      return "danger";
-    case "connecting":
-    case "not_connected":
-    default:
-      return "neutral";
-  }
-}
-
-function fecha(iso: string): string {
-  try {
-    return new Date(iso).toLocaleDateString("es-ES");
-  } catch {
-    return iso;
-  }
-}
-
-/* ----------------------------------------------------------------------------
- * Customer Zero Email P0 — the Correo capability section.
- *
- * The CEO sees ONE capability ("Correo") with three provider options:
- * Google, Microsoft (honestly unavailable), and "Otro correo de empresa"
- * (IMAP + SMTP). Providers are infrastructure, never the product label.
- * --------------------------------------------------------------------------*/
-
-interface EmailConnectionSectionProps {
-  org: string | null;
-  gmailCard: ConnectionCardView | null;
-  onConnectGoogle: () => void;
-}
-
-function EmailConnectionSection(props: EmailConnectionSectionProps) {
-  const [corporateOpen, setCorporateOpen] = useState(false);
-  const [corporateBusy, setCorporateBusy] = useState(false);
-  const [corporateStatus, setCorporateStatus] = useState<{
-    ok: boolean;
-    message: string;
-  } | null>(null);
-
-  const gmailConnected = props.gmailCard?.state === "connected";
-
-  async function configureCorporate(form: HTMLFormElement) {
-    if (!props.org) return;
-    setCorporateBusy(true);
-    setCorporateStatus(null);
-    const data = new FormData(form);
-    const displayName = String(data.get("displayName") ?? "").trim();
-    const payload: {
-      email: string;
-      username: string;
-      password: string;
-      imapHost: string;
-      imapPort: number;
-      imapSecure: boolean;
-      smtpHost: string;
-      smtpPort: number;
-      smtpSecure: boolean;
-      displayName?: string;
-    } = {
-      email: String(data.get("email") ?? "").trim(),
-      username: String(data.get("username") ?? "").trim(),
-      password: String(data.get("password") ?? ""),
-      imapHost: String(data.get("imapHost") ?? "").trim(),
-      imapPort: Number(data.get("imapPort") ?? 993),
-      imapSecure: true,
-      smtpHost: String(data.get("smtpHost") ?? "").trim(),
-      smtpPort: Number(data.get("smtpPort") ?? 587),
-      smtpSecure: true,
-    };
-    if (displayName) payload.displayName = displayName;
-    try {
-      const out = await api.configureCorporateEmail(props.org, payload);
-      if (!out) {
-        setCorporateStatus({
-          ok: false,
-          message:
-            "No hemos podido contactar con Departify. Vuelve a intentarlo en unos minutos.",
-        });
-        return;
-      }
-      if (out.operational) {
-        setCorporateStatus({
-          ok: true,
-          message: `Correo conectado (${out.email}). Departify ya puede leer tu bandeja y enviar correos.`,
-        });
-      } else {
-        const detail = out.probe.error
-          ? ` (${out.probe.error.slice(0, 160)})`
-          : "";
-        setCorporateStatus({
-          ok: false,
-          message: `No se ha podido verificar la cuenta:${detail} Revisa servidor, puerto y contraseña de aplicación.`,
-        });
-      }
-    } finally {
-      setCorporateBusy(false);
+function buildSurfaceConnections(canonical: ToolConnectionView[]): SurfaceConnection[] {
+  const byId = new Map(canonical.map((item) => [item.toolId, item]));
+  return SURFACE_IDS.map((id) => {
+    const source = id === "facebook" || id === "instagram" ? byId.get("meta_business") : byId.get(id);
+    if (id === "facebook" || id === "instagram") {
+      const socialCapabilities = source?.capabilities ?? [];
+      const socialConnected = source?.state === "connected" && (
+        id === "facebook"
+          ? socialCapabilities.includes("marketing.social.read")
+          : socialCapabilities.some((capability) => capability.includes("instagram"))
+      );
+      return {
+        id,
+        sourceToolId: "meta_business",
+        name: id === "facebook" ? "Facebook" : "Instagram",
+        categoryId: "marketing",
+        description: id === "facebook" ? "Páginas y publicaciones de tu empresa." : "Contenido de la cuenta de Instagram.",
+        state: socialConnected ? "connected" : source?.blockedReason ? "attention" : "available",
+        action: source?.action ?? null,
+        capabilities: socialConnected ? socialCapabilities : [],
+        accountLabel: source?.accountLabel,
+        verifiedAt: source?.verifiedAt,
+        blockedReason: source?.blockedReason,
+        brandColor: id === "facebook" ? "#1877f2" : "#d62976",
+      };
     }
-  }
+    if (!source) return fallbackSurface(id);
+    return {
+      id,
+      sourceToolId: id,
+      name: source.name,
+      categoryId: source.categoryId,
+      description: source.description ?? "Conecta esta herramienta para trabajar con datos reales.",
+      state: businessState(source),
+      action: source.action,
+      capabilities: source.capabilities ? [...source.capabilities] : [],
+      accountLabel: source.accountLabel,
+      verifiedAt: source.verifiedAt,
+      blockedReason: source.blockedReason,
+      brandColor: source.brandColor,
+    };
+  });
+}
+
+function fallbackSurface(id: string): SurfaceConnection {
+  const names: Record<string, string> = {
+    google_analytics: "Google Analytics",
+    google_ads: "Google Ads",
+    meta_ads: "Meta Ads",
+    tiktok_ads: "TikTok Ads",
+  };
+  return {
+    id,
+    sourceToolId: id,
+    name: names[id] ?? id,
+    categoryId: "marketing",
+    description: "Disponible cuando la conexión esté habilitada.",
+    state: "available",
+    action: null,
+    capabilities: [],
+    brandColor: "#5b6b7f",
+  };
+}
+
+function businessState(source: ToolConnectionView): SurfaceState {
+  if (source.state === "connected") return "connected";
+  if (source.state === "degraded" || source.state === "unavailable" || source.blockedReason) return "attention";
+  return "available";
+}
+
+function ConnectionTile(props: { item: SurfaceConnection; onClick: () => void }) {
+  return (
+    <button type="button" className="dfy-connection-tile" onClick={props.onClick}>
+      <ConnectionLogo id={props.item.id} color={props.item.brandColor} />
+      <span className="dfy-connection-tile__body">
+        <strong>{props.item.name}</strong>
+        <span className="dfy-connection-tile__status"><StatusDot state={props.item.state} />{statusLabel(props.item.state)}</span>
+      </span>
+      <span className="dfy-connection-tile__arrow" aria-hidden="true">›</span>
+    </button>
+  );
+}
+
+function CatalogDialog(props: {
+  items: SurfaceConnection[];
+  search: string;
+  onSearch: (value: string) => void;
+  onClose: () => void;
+  onSelect: (item: SurfaceConnection) => void;
+}) {
+  return (
+    <div className="dfy-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}>
+      <section className="dfy-modal" role="dialog" aria-modal="true" aria-labelledby="connection-catalog-title">
+        <div className="dfy-modal__head">
+          <div><h2 id="connection-catalog-title">Añadir una conexión</h2><p>Elige una herramienta compatible con tu empresa.</p></div>
+          <button type="button" className="dfy-icon-button" aria-label="Cerrar catálogo" onClick={props.onClose}>×</button>
+        </div>
+        <input
+          className="dfy-modal__search"
+          type="search"
+          value={props.search}
+          onChange={(event) => props.onSearch(event.target.value)}
+          placeholder="Buscar herramienta"
+          aria-label="Buscar herramienta"
+          autoFocus
+        />
+        <div className="dfy-catalog-list">
+          {props.items.length === 0 ? <p className="dfy-muted">No encontramos esa herramienta.</p> : props.items.map((item) => (
+            <button type="button" className="dfy-catalog-option" key={item.id} onClick={() => props.onSelect(item)}>
+              <ConnectionLogo id={item.id} color={item.brandColor} small />
+              <span><strong>{item.name}</strong><small>{CATEGORY_LABELS[item.categoryId]} · {statusLabel(item.state)}</small></span>
+              <span aria-hidden="true">›</span>
+            </button>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ManageDialog(props: {
+  item: SurfaceConnection;
+  busy: boolean;
+  onClose: () => void;
+  onConnect: (reconnect: boolean) => void;
+  onCheck: () => void;
+  onDisconnect: () => void;
+}) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => { closeRef.current?.focus(); }, []);
+  const canConnect = CONNECTABLE_IDS.has(props.item.id) || props.item.sourceToolId !== props.item.id;
+  const canCheck = props.item.id === "mautic" || props.item.id === "hostinger_email";
+  const canDisconnect = props.item.state === "connected" && ["gmail", "google_calendar", "google_drive", "mautic", "hostinger_email", "facebook", "instagram", "meta_ads"].includes(props.item.id);
+  const capabilities = props.item.capabilities
+    .map((capability) => CAPABILITY_LABELS[capability] ?? null)
+    .filter((label): label is string => Boolean(label));
 
   return (
-    <section className="dfy-catalog-group" data-testid="email-capability-section">
-      <h2 className="dfy-catalog-group__title">Correo</h2>
-      <p className="dfy-muted dfy-muted--small">
-        Conecta el correo que utiliza tu empresa para que Departify pueda leer,
-        buscar, preparar y enviar emails cuando lo necesites.
-      </p>
-      <div className="dfy-grid">
-        <Card>
-          <div className="dfy-email-option">
-            <div>
-              <strong>Google / Gmail</strong>
-              <p className="dfy-muted dfy-muted--small">
-                {gmailConnected
-                  ? "Conectado y operativo."
-                  : "Conecta la cuenta de Gmail de tu empresa."}
-              </p>
-            </div>
-            {gmailConnected ? (
-              <Badge tone="success">Conectado</Badge>
-            ) : (
-              <button
-                type="button"
-                className="dfy-button dfy-button--small"
-                onClick={props.onConnectGoogle}
-              >
-                Conectar
-              </button>
-            )}
-          </div>
-        </Card>
-
-        <Card>
-          <div className="dfy-email-option">
-            <div>
-              <strong>Microsoft 365 / Outlook</strong>
-              <p className="dfy-muted dfy-muted--small">
-                Próximamente.
-              </p>
-            </div>
-            <Badge tone="neutral">Próximamente</Badge>
-          </div>
-        </Card>
-
-        <Card>
-          <div className="dfy-email-option">
-            <div>
-              <strong>Otro correo de empresa</strong>
-              <p className="dfy-muted dfy-muted--small">
-                {corporateOpen
-                  ? "Configura tu cuenta IMAP + SMTP."
-                  : "Correo corporativo con tu propio servidor (IMAP para leer, SMTP para enviar)."}
-              </p>
-            </div>
-            <button
-              type="button"
-              className="dfy-button dfy-button--ghost dfy-button--small"
-              onClick={() => setCorporateOpen((v) => !v)}
-            >
-              {corporateOpen ? "Cerrar" : "Configurar"}
-            </button>
-          </div>
-          {corporateOpen && (
-            <form
-              className="dfy-email-form"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void configureCorporate(event.currentTarget);
-              }}
-            >
-              <label>
-                Correo
-                <input name="email" type="email" required placeholder="ceo@tuempresa.com" />
-              </label>
-              <label>
-                Usuario
-                <input name="username" required placeholder="ceo@tuempresa.com" />
-              </label>
-              <label>
-                Contraseña de aplicación
-                <input name="password" type="password" required autoComplete="new-password" />
-              </label>
-              <label>
-                Servidor IMAP
-                <input name="imapHost" required placeholder="imap.tuempresa.com" />
-              </label>
-              <label>
-                Puerto IMAP
-                <input name="imapPort" type="number" defaultValue={993} />
-              </label>
-              <label>
-                Servidor SMTP
-                <input name="smtpHost" required placeholder="smtp.tuempresa.com" />
-              </label>
-              <label>
-                Puerto SMTP
-                <input name="smtpPort" type="number" defaultValue={587} />
-              </label>
-              <label>
-                Nombre visible (opcional)
-                <input name="displayName" placeholder="CEO" />
-              </label>
-              <button
-                type="submit"
-                className="dfy-button dfy-button--small"
-                disabled={corporateBusy}
-              >
-                {corporateBusy ? "Comprobando…" : "Conectar y verificar"}
-              </button>
-              {corporateStatus && (
-                <p
-                  className={
-                    corporateStatus.ok
-                      ? "dfy-muted dfy-email-status--ok"
-                      : "dfy-alert"
-                  }
-                  role={corporateStatus.ok ? "status" : "alert"}
-                >
-                  {corporateStatus.message}
-                </p>
-              )}
-            </form>
+    <div className="dfy-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}>
+      <section className="dfy-drawer" role="dialog" aria-modal="true" aria-labelledby="connection-manage-title">
+        <div className="dfy-modal__head">
+          <div className="dfy-drawer__identity"><ConnectionLogo id={props.item.id} color={props.item.brandColor} /><div><h2 id="connection-manage-title">{props.item.name}</h2><p><StatusDot state={props.item.state} /> {statusLabel(props.item.state)}</p></div></div>
+          <button ref={closeRef} type="button" className="dfy-icon-button" aria-label="Cerrar gestión" onClick={props.onClose}>×</button>
+        </div>
+        {props.item.accountLabel && <p className="dfy-drawer__account">Cuenta: <strong>{props.item.accountLabel}</strong></p>}
+        {props.item.description && <p className="dfy-muted">{props.item.description}</p>}
+        {props.item.state === "connected" && capabilities.length > 0 && (
+          <div className="dfy-drawer__section"><h3>Elvira puede</h3><ul>{capabilities.map((capability) => <li key={capability}>{capability}</li>)}</ul></div>
+        )}
+        {props.item.verifiedAt && <p className="dfy-muted dfy-muted--small">Última comprobación: {formatDate(props.item.verifiedAt)}</p>}
+        {props.item.blockedReason && <p className="dfy-alert">{friendlyBlockReason(props.item.blockedReason)}</p>}
+        {props.item.state !== "connected" && (
+          <div className="dfy-drawer__section"><p className="dfy-muted">Esta herramienta aparecerá aquí cuando la conexión esté lista para usarse.</p></div>
+        )}
+        <div className="dfy-drawer__actions">
+          {props.item.state === "connected" && ["gmail", "google_calendar", "google_drive"].includes(props.item.id) && (
+            <button type="button" className="dfy-button" disabled={props.busy} onClick={() => props.onConnect(true)}>Conectar otra cuenta</button>
           )}
-        </Card>
-      </div>
-    </section>
+          {props.item.state !== "connected" && canConnect && (
+            <button type="button" className="dfy-button" disabled={props.busy || Boolean(props.item.blockedReason)} onClick={() => props.onConnect(false)}>
+              {props.busy ? "Conectando…" : "Conectar"}
+            </button>
+          )}
+          {canCheck && props.item.state === "connected" && <button type="button" className="dfy-button dfy-button--ghost" disabled={props.busy} onClick={props.onCheck}>Comprobar conexión</button>}
+          {canDisconnect && <button type="button" className="dfy-button dfy-button--danger" disabled={props.busy} onClick={props.onDisconnect}>Desconectar</button>}
+          {!canConnect && props.item.state !== "connected" && <p className="dfy-muted dfy-muted--small">Esta conexión estará disponible próximamente.</p>}
+        </div>
+      </section>
+    </div>
   );
+}
+
+function StatusDot(props: { state: SurfaceState }) {
+  return <span className={`dfy-status-dot dfy-status-dot--${props.state}`} aria-hidden="true" />;
+}
+
+function statusLabel(state: SurfaceState): string {
+  return state === "connected" ? "Conectado" : state === "attention" ? "Necesita atención" : "Disponible";
+}
+
+function friendlyBlockReason(reason: string): string {
+  if (/credencial|credential|configur/i.test(reason)) return "Esta conexión necesita configuración de Departify antes de poder activarse.";
+  return "Esta conexión necesita atención antes de poder usarse.";
+}
+
+function formatDate(iso: string): string {
+  try { return new Date(iso).toLocaleDateString("es-ES"); } catch { return iso; }
+}
+
+function ConnectionLogo(props: { id: string; color: string; small?: boolean }) {
+  const size = props.small ? 32 : 42;
+  const common = { width: size, height: size, viewBox: "0 0 42 42", role: "img" as const, "aria-label": `${props.id} logo` };
+  if (props.id === "gmail") return <svg {...common}><rect width="42" height="42" rx="11" fill="#fff" /><path d="M8 12v19h5V18l8 6 8-6v13h5V12l-5 4-8 6-8-6-5-4Z" fill="#ea4335" /><path d="M8 12l13 10 13-10" fill="none" stroke="#4285f4" strokeWidth="3" /></svg>;
+  if (props.id === "google_calendar") return <svg {...common}><rect x="7" y="8" width="28" height="27" rx="5" fill="#4285f4" /><path d="M12 17h18v13H12z" fill="#fff" /><path d="M12 12h18v6H12z" fill="#34a853" /><text x="21" y="28" textAnchor="middle" fontSize="12" fontWeight="700" fill="#4285f4">31</text></svg>;
+  if (props.id === "google_drive") return <svg {...common}><path d="M16 7h10l10 18H26L16 7Z" fill="#0f9d58" /><path d="M16 7 6 25h10l10-18H16Z" fill="#fbbc04" /><path d="M6 25h20l5 10H11L6 25Z" fill="#4285f4" /></svg>;
+  if (props.id === "google_analytics") return <svg {...common}><path d="M12 33V20a3 3 0 1 1 6 0v13h-6Zm9 0V11a3 3 0 1 1 6 0v22h-6Zm9 0V7a3 3 0 1 1 6 0v26h-6Z" fill="#f9ab00" /></svg>;
+  if (props.id === "google_ads") return <svg {...common}><path d="M15 8a6 6 0 0 1 8 2l10 17a5 5 0 1 1-9 5L14 15a5 5 0 0 1 1-7Z" fill="#34a853" /><circle cx="12" cy="30" r="6" fill="#fbbc04" /></svg>;
+  if (props.id === "facebook") return <svg {...common}><circle cx="21" cy="21" r="16" fill="#1877f2" /><path d="M23 36V23h4l1-5h-5v-3c0-1.5 1-2.5 3-2.5h2V8c-1-.2-2-.3-3-.3-4 0-6.5 2.4-6.5 6.7V18h-4v5h4v13h4.5Z" fill="#fff" /></svg>;
+  if (props.id === "instagram") return <svg {...common}><rect x="7" y="7" width="28" height="28" rx="8" fill="url(#ig)" /><defs><linearGradient id="ig" x1="8" y1="34" x2="34" y2="8"><stop stopColor="#feda75" /><stop offset=".45" stopColor="#d62976" /><stop offset="1" stopColor="#4f5bd5" /></linearGradient></defs><circle cx="21" cy="21" r="7" fill="none" stroke="#fff" strokeWidth="2.5" /><circle cx="29" cy="13" r="1.8" fill="#fff" /></svg>;
+  if (props.id === "tiktok_ads") return <svg {...common}><rect x="8" y="6" width="26" height="30" rx="7" fill="#111" /><path d="M22 12v13a4 4 0 1 1-4-4" fill="none" stroke="#25f4ee" strokeWidth="3" /><path d="M24 11c1 3 3 4 6 4" fill="none" stroke="#fe2c55" strokeWidth="3" /></svg>;
+  return <span className="dfy-connection-logo-fallback" style={{ background: props.color }}>{props.id === "hostinger_email" ? "@" : props.id === "mautic" ? "M" : "•"}</span>;
 }

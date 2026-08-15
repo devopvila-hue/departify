@@ -168,6 +168,41 @@ export function getGoogleTokenStore(): GoogleTokenStore {
   return installedStore;
 }
 
+/**
+ * Revokes the provider credential when Google accepts the request, then
+ * always removes the tenant's durable credential locally. The local delete
+ * is deliberate even when Google has already revoked the token or is
+ * temporarily unavailable: Departify must stop treating the connection as
+ * usable immediately after the user confirms Disconnect.
+ */
+export async function revokeGoogleConnection(
+  organizationId: string,
+  userId: string,
+): Promise<{ found: boolean; providerRevoked: boolean }> {
+  const store = getGoogleTokenStore();
+  const record = await store.get(organizationId, userId);
+  if (!record) return { found: false, providerRevoked: false };
+
+  let providerRevoked = false;
+  const token = record.refreshToken || record.accessToken;
+  if (token) {
+    try {
+      const response = await fetch("https://oauth2.googleapis.com/revoke", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ token }).toString(),
+        signal: AbortSignal.timeout(10_000),
+      });
+      providerRevoked = response.ok;
+    } catch {
+      // The local credential is still removed in the finally path below.
+    }
+  }
+
+  await store.remove(organizationId, userId);
+  return { found: true, providerRevoked };
+}
+
 /* ----------------------------------------------------------------------------
  * In-memory implementation.
  *
