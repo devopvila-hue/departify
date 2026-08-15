@@ -833,6 +833,11 @@ export async function registerCustomerZeroV2Routes(
         declared: true,
         status: resolution.success ? "connected" : resolution.code === "auth" ? "degraded" : "needs_connection",
         ...(resolution.available ? { configSource: "env:mautic" as const } : {}),
+        grantedCapabilities: resolution.success
+          ? CONNECTION_DEFINITIONS.find((definition) => definition.id === "mautic")?.capabilities.map(
+              (capability) => capability.id,
+            ) ?? []
+          : [],
         ...(resolution.success ? { verifiedAt: now } : current?.verifiedAt ? { verifiedAt: current.verifiedAt } : {}),
         health: resolution.success ? "operational" : "down",
         updatedAt: now,
@@ -3199,6 +3204,12 @@ interface CeoTurnTraceState {
   pendingOperationType: string | null;
   activeDepartment: string | null;
   capabilityIds: string[];
+  capabilityReadiness: {
+    id: string;
+    available: boolean;
+    providers: string[];
+    reason?: string;
+  }[];
   exposedToolNames: string[];
   selectedToolNames: string[];
   toolCallCount: number;
@@ -3370,6 +3381,7 @@ function newCeoTurnTrace(
     pendingOperationType: pendingOperationType(session),
     activeDepartment: session.state.marketingTeam ? "marketing" : null,
     capabilityIds: [],
+    capabilityReadiness: [],
     exposedToolNames: [],
     selectedToolNames: [],
     toolCallCount: 0,
@@ -3438,6 +3450,7 @@ export function emitCeoTurnTrace(
     pendingOperationType: pendingOperationType(session),
     activeDepartment: delegatedDepartment ?? trace.activeDepartment,
     capabilityIds: trace.capabilityIds,
+    capabilityReadiness: trace.capabilityReadiness,
     toolNames: trace.exposedToolNames,
     availableNativeTools: trace.exposedToolNames,
     selectedToolNames: trace.selectedToolNames,
@@ -3636,6 +3649,12 @@ async function buildRuntimeBridge(
   trace.capabilityIds = capabilities.capabilities
     .filter((capability) => capability.available)
     .map((capability) => capability.id);
+  trace.capabilityReadiness = capabilities.capabilities.map((capability) => ({
+    id: capability.id,
+    available: capability.available,
+    providers: [...capability.providers],
+    ...(capability.reason ? { reason: capability.reason } : {}),
+  }));
   trace.exposedToolNames = [...exposedToolNames];
   const context = compileRuntimeBusinessContext({
     session,
@@ -7026,6 +7045,11 @@ async function buildCatalogConnectionViews(
   const durableByTool = new Map(durableStates.map((state) => [state.toolId, state]));
   return TOOL_CATALOG.map((tool) => {
     const durable = durableByTool.get(tool.id);
+    const definition = CONNECTION_DEFINITIONS.find((entry) => entry.id === tool.id);
+    const catalogCapabilities = definition?.capabilities.map((entry) => entry.id) ?? [];
+    const connectedCapabilities = durable
+      ? [...(durable.grantedCapabilities ?? [])]
+      : catalogCapabilities;
     const connection = durable
       ? {
           toolId: durable.toolId,
@@ -7038,12 +7062,11 @@ async function buildCatalogConnectionViews(
       : undefined;
     const category = locale === "en" ? tool.categoryEn : tool.categoryEs;
     if (!connection) {
-      const definition = CONNECTION_DEFINITIONS.find((entry) => entry.id === tool.id);
       return {
         toolId: tool.id,
         label: tool.label,
         capability: tool.capability,
-        ...(definition ? { capabilities: definition.capabilities.map((entry) => entry.id) } : {}),
+        ...(definition ? { capabilities: catalogCapabilities } : {}),
         category,
         domains: domainsFor(tool.id),
         state: "available",
@@ -7065,12 +7088,7 @@ async function buildCatalogConnectionViews(
       toolId: tool.id,
       label: tool.label,
       capability: tool.capability,
-      ...(() => {
-        const definition = CONNECTION_DEFINITIONS.find((entry) => entry.id === tool.id);
-        return definition
-          ? { capabilities: definition.capabilities.map((entry) => entry.id) }
-          : {};
-      })(),
+      ...(definition ? { capabilities: connectedCapabilities } : {}),
       category,
       domains: domainsFor(tool.id),
       state: consolidatedLifecycle,
@@ -7155,6 +7173,10 @@ function toolStateFromConnection(
 ): OrganizationToolState {
   const definition = getConnectionDefinition(connection.toolId);
   const now = new Date().toISOString();
+  const grantedCapabilities = connection.grantedCapabilities
+    ?? (connection.lifecycle === "connected"
+      ? definition?.capabilities.map((capability) => capability.id)
+      : undefined);
   return {
     organizationId: session.organizationId,
     toolId: connection.toolId,
@@ -7170,9 +7192,7 @@ function toolStateFromConnection(
         : connection.toolId === "google_ads"
           ? { provider: "google_ads_mcp" }
           : {}),
-    ...(definition?.capabilities.length
-      ? { grantedCapabilities: definition.capabilities.map((capability) => capability.id) }
-      : {}),
+    grantedCapabilities: [...(grantedCapabilities ?? [])],
     ...(connection.verifiedAt ? { verifiedAt: connection.verifiedAt } : {}),
     ...(connection.verifiedAt ? { lastValidatedAt: connection.verifiedAt } : {}),
     ...(connection.blockedReason ? { lastError: connection.blockedReason } : {}),

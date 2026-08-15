@@ -176,14 +176,36 @@ describe("Engine 02 — Runtime Business Context + Capability Bridge", () => {
     expect(isRuntimeCapabilityAvailable(manifest, "marketing.social.publish")).toBe(true);
     expect(manifest.connectedTools).toEqual([
       {
-        toolId: "meta_business",
-        label: "Facebook Pages",
+        tool: "Facebook Pages",
         capabilities: ["marketing.social.read", "marketing.social.publish"],
       },
     ]);
     expect(manifest.capabilities.find((entry) => entry.id === "marketing.social.publish")?.providers)
       .toEqual(["Facebook Pages"]);
     expect(manifest.capabilities.some((entry) => entry.id.startsWith("marketing.meta.ads."))).toBe(false);
+
+    const session = getOrCreateCustomerZeroSession("org_runtime_facebook_safe");
+    const context = compileRuntimeBusinessContext({
+      session,
+      capabilities: manifest,
+      connections: [{ toolId: "meta_business", label: "Facebook Pages", state: "connected" }],
+      tasks: [],
+      results: [],
+      approvals: [],
+    });
+    const rendered = renderRuntimeBusinessContextForEngine(context, "[]");
+    expect(rendered).toContain("Facebook Pages");
+    expect(rendered).not.toContain("meta_business");
+    expect(rendered).not.toContain('"toolId"');
+    expect(rendered).not.toMatch(/Activepieces|ConnectorRuntime|OpenClaw|MCP|access_token|refresh_token/i);
+  });
+
+  it("distinguishes a connected tool from an unverified capability", () => {
+    const manifest = buildRuntimeCapabilityManifest([
+      { toolId: "meta_business", label: "Facebook Pages", state: "connected" },
+    ]);
+    expect(manifest.capabilities.find((entry) => entry.id === "marketing.social.publish"))
+      .toMatchObject({ available: false, reason: "not_verified" });
   });
 
   it("rejects a tenant override even when the model supplies the current tenant id", () => {

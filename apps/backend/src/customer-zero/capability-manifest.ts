@@ -31,8 +31,7 @@ export interface RuntimeCapabilityManifest {
   readonly generatedAt: string;
   readonly capabilities: readonly RuntimeCapability[];
   readonly connectedTools: readonly {
-    toolId: string;
-    label: string;
+    readonly tool: string;
     capabilities: readonly string[];
   }[];
 }
@@ -115,8 +114,7 @@ export function buildRuntimeCapabilityManifest(
   const connectedTools = connections
     .filter((connection) => connection.state === "connected")
     .map((connection) => ({
-      toolId: connection.toolId,
-      label: businessConnectionLabel(connection),
+      tool: businessConnectionLabel(connection),
       capabilities: [...sourceCapabilities(connection)],
     }));
 
@@ -138,13 +136,22 @@ export function buildRuntimeCapabilityManifest(
       }
     }
     const available = providers.size > 0;
+    const hasConnectedSource = connections.some(
+      (connection) => connection.state === "connected",
+    );
     return {
       id: rule.id,
       available,
       providers: [...providers],
       ...(available
         ? {}
-        : { reason: rule.unsupported ? ("unsupported" as const) : ("not_connected" as const) }),
+        : {
+            reason: rule.unsupported
+              ? ("unsupported" as const)
+              : hasConnectedSource
+                ? ("not_verified" as const)
+                : ("not_connected" as const),
+          }),
     } satisfies RuntimeCapability;
   }).filter((capability) => !isAdsCapability(capability.id) || capability.available);
 

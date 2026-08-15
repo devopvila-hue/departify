@@ -785,7 +785,8 @@ export class MarketingService {
       toolId: connection.toolId,
       label: connection.label,
       state: connection.lifecycle ?? connection.status,
-      capabilities: [connection.capability],
+      capabilities: connection.grantedCapabilities
+        ?? (connection.capability ? [connection.capability] : []),
     }));
     const runtimeCapabilities = buildRuntimeCapabilityManifest(runtimeConnections);
     const runtimeContext = compileRuntimeBusinessContext({

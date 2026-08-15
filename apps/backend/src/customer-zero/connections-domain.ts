@@ -535,7 +535,12 @@ export function listAvailableCapabilitiesForOrg(
     for (const cap of def.capabilities) {
       const slot = map.get(cap.id) ?? { available: false, providers: new Set<string>() };
       const orgState = states.find((s) => s.toolId === def.id);
-      if (orgState && lifecycleToFiveState(orgState.status) === "connected") {
+      const capabilityGranted = orgState?.grantedCapabilities?.includes(cap.id) ?? false;
+      if (
+        orgState &&
+        lifecycleToFiveState(orgState.status) === "connected" &&
+        capabilityGranted
+      ) {
         slot.available = true;
         slot.providers.add(def.name);
       }

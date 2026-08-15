@@ -568,6 +568,7 @@ describe("Connections domain", () => {
         label: "Mautic",
         declared: true,
         status: "connected",
+        grantedCapabilities: ["crm.contacts.read"],
       },
     ]);
     const mautic = caps.find((c) => c.capability === "crm.contacts.read");
@@ -575,6 +576,19 @@ describe("Connections domain", () => {
     const hubspot = caps.find((c) => c.capability === "crm.contacts.read");
     expect(mautic?.providers).toContain("Mautic");
     void hubspot;
+  });
+
+  it("does not advertise a connected tool's catalog capabilities before verification grants them", () => {
+    const caps = listAvailableCapabilitiesForOrg([
+      {
+        organizationId: "org_x",
+        toolId: "mautic",
+        label: "Mautic",
+        declared: true,
+        status: "connected",
+      },
+    ]);
+    expect(caps.find((c) => c.capability === "crm.contacts.read")?.available).toBe(false);
   });
 
   it("38 catalog contains all major connectors with capability descriptors", () => {

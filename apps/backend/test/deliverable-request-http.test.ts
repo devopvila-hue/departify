@@ -184,6 +184,7 @@ describe("P0 deliverable request HTTP boundary", () => {
       declared: true,
       status: "connected",
       configSource: "env:mautic",
+      grantedCapabilities: ["crm.contacts.read", "crm.contacts.list", "crm.contacts.summary"],
       verifiedAt: new Date().toISOString(),
       health: "operational",
     });

@@ -512,6 +512,9 @@ export async function hydrateSessionToolState(
       ? buildConnectionStateWithLifecycle(tool, session.state.locale, record.status, {
           ...(record.configSource ? { configSource: record.configSource } : {}),
           ...(record.verifiedAt ? { verifiedAt: record.verifiedAt } : {}),
+          ...(record.grantedCapabilities
+            ? { grantedCapabilities: record.grantedCapabilities }
+            : {}),
         })
       : buildFallbackConnection(record);
     session.state.connections.set(record.toolId, connection);
@@ -588,6 +591,9 @@ async function reconcileMetaConnectionFromDurableToken(
       buildConnectionStateWithLifecycle(tool, session.state.locale, status, {
         configSource: "oauth:meta_business",
         ...(record.verifiedAt ? { verifiedAt: record.verifiedAt } : {}),
+        ...(record.grantedCapabilities
+          ? { grantedCapabilities: record.grantedCapabilities }
+          : {}),
       }),
     );
   }

@@ -502,6 +502,8 @@ export interface ConnectionState {
   configSource?: string;
   /** When the connector was last successfully verified. */
   verifiedAt?: string;
+  /** Safe capability ids certified by the connection probe. */
+  grantedCapabilities?: readonly string[];
 }
 
 /** Builds a ConnectionState carrying the authoritative lifecycle. */
@@ -509,13 +511,18 @@ export function buildConnectionStateWithLifecycle(
   tool: ToolDescriptor,
   locale: SupportedLocale,
   lifecycle: ToolLifecycleStatus,
-  extra?: { configSource?: string; verifiedAt?: string },
+  extra?: {
+    configSource?: string;
+    verifiedAt?: string;
+    grantedCapabilities?: readonly string[];
+  },
 ): ConnectionState {
   const state = buildConnectionState(tool, locale);
   state.lifecycle = lifecycle;
   state.status = lifecycleToConnectionStatus(lifecycle);
   if (extra?.configSource) state.configSource = extra.configSource;
   if (extra?.verifiedAt) state.verifiedAt = extra.verifiedAt;
+  if (extra?.grantedCapabilities) state.grantedCapabilities = [...extra.grantedCapabilities];
   if (lifecycle === "degraded" || lifecycle === "unavailable") {
     state.blockedReason = t(
       locale,
