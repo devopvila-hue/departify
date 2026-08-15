@@ -180,6 +180,7 @@ try {
           approvals: new SupabaseMarketingApprovalRepository(supabaseAuthConfig),
           ...(deps.companyDna ? { companyDna: deps.companyDna } : {}),
           ...(deps.workStore ? { workStore: deps.workStore } : {}),
+          ...(deps.toolState ? { toolState: deps.toolState } : {}),
         })
       : new MarketingService({
           engine: deps.engine,

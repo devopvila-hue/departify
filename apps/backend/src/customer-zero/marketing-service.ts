@@ -48,12 +48,7 @@ import {
   InMemoryMarketingObjectiveRepository,
 } from "./in-memory-marketing-repositories.js";
 import { t, type SupportedLocale } from "./locale.js";
-import {
-  listReadyCapabilities,
-  listAvailableCapabilities,
-  type BusinessCapability,
-} from "./capability-registry.js";
-import { publicCredentialSource } from "./credential-resolver.js";
+import type { ToolStateStore } from "./tool-state.js";
 import {
   compileDepartmentContext,
   renderCompiledContextForEngine,
@@ -61,7 +56,11 @@ import {
   renderRuntimeBusinessContextForEngine,
   type CompiledDepartmentContext,
 } from "./department-context-compiler.js";
-import { buildRuntimeCapabilityManifest } from "./capability-manifest.js";
+import {
+  buildRuntimeCapabilityManifest,
+  businessSafeConnectionLabel,
+  type RuntimeCapabilityManifest,
+} from "./capability-manifest.js";
 import type { CustomerZeroSession } from "./customer-zero-session.js";
 import type {
   DepartmentResult,
@@ -127,6 +126,8 @@ export interface MarketingServiceOptions {
   readonly companyDna?: CompanyDnaStore;
   /** Durable work source used to project real specialist activity. */
   readonly workStore?: DepartmentWorkStore;
+  /** Canonical organization-scoped connection and capability state. */
+  readonly toolState?: ToolStateStore;
 }
 
 /**
@@ -145,6 +146,7 @@ export class MarketingService {
   private readonly approvalsRepo: MarketingApprovalRepository;
   private readonly companyDna: CompanyDnaStore | null;
   private readonly workStore: DepartmentWorkStore | null;
+  private readonly toolState: ToolStateStore | null;
   /** Engine session id per organization (maps to OpenClaw persistent session). */
   private readonly engineSessionIds = new Map<string, string>();
 
@@ -161,6 +163,7 @@ export class MarketingService {
       options.approvals ?? new InMemoryMarketingApprovalRepository();
     this.companyDna = options.companyDna ?? null;
     this.workStore = options.workStore ?? null;
+    this.toolState = options.toolState ?? null;
   }
 
   /* ------------------------- CEO conversation ------------------------- */
@@ -177,11 +180,12 @@ export class MarketingService {
     const businessContext = this.reportRepository
       ? buildBusinessContext(input.organizationId, this.reportRepository)
       : null;
+    const runtimeCapabilities = await this.runtimeCapabilityManifest(input.organizationId);
     const contextBlock = this.buildElviraContext(
       input.locale,
       businessContext,
       active,
-      input.organizationId,
+      runtimeCapabilities,
     );
 
     // 2. Ensure an engine session for (org, marketing) — real multi-turn memory.
@@ -720,7 +724,7 @@ export class MarketingService {
     locale: SupportedLocale,
     businessContext: string | null,
     objective: BusinessObjective | null,
-    organizationId: string,
+    runtimeCapabilities: RuntimeCapabilityManifest,
   ): string {
     const language = locale === "en" ? "English" : "Spanish (español)";
     const lines: string[] = [
@@ -734,14 +738,12 @@ export class MarketingService {
     // the ONLY capability-aware block in Elvira's system context. She
     // never receives raw credentials, only business-language capability
     // names like "crm.contacts.read" (translated to the active locale).
-    const readyCapabilities = listReadyCapabilities(organizationId);
-    const unavailable = listAvailableCapabilities(organizationId).filter(
-      (c) => !c.available,
+    const readyCapabilities = runtimeCapabilities.capabilities.filter(
+      (capability) => capability.available,
     );
-    const mauticSource = publicCredentialSource({
-      organizationId,
-      provider: "mautic",
-    });
+    const unavailable = runtimeCapabilities.capabilities.filter(
+      (capability) => !capability.available,
+    );
     lines.push("", "CAPACIDADES DISPONIBLES (capacidades de negocio, no nombres técnicos):");
     if (readyCapabilities.length === 0) {
       lines.push(
@@ -750,20 +752,13 @@ export class MarketingService {
           : "- Ninguna. Si el CEO pide datos del CRM, explica con educación que falta acceso y ofrece conectarlo.",
       );
     } else {
-      const names = readyCapabilities.map((c) => capabilityHumanLabel(c, locale));
+      const names = readyCapabilities.map((c) => capabilityHumanLabel(c.id, locale));
       lines.push(`- ${names.join(" · ")}`);
-      if (mauticSource.available) {
-        lines.push(
-          locale === "en"
-            ? `- CRM access is configured at the system level. You can use it without asking the CEO for credentials.`
-            : `- El acceso al CRM está configurado a nivel de sistema. Puedes usarlo sin pedir credenciales al CEO.`,
-        );
-      }
     }
     if (unavailable.length > 0) {
       const missing = unavailable
-        .filter((c) => c.reason === "credentials_missing")
-        .map((c) => capabilityHumanLabel(c.capability, locale));
+        .filter((c) => c.reason === "not_connected")
+        .map((c) => capabilityHumanLabel(c.id, locale));
       if (missing.length > 0) {
         lines.push(
           "",
@@ -773,6 +768,16 @@ export class MarketingService {
           `- ${missing.join(" · ")}`,
         );
       }
+    }
+
+    if (runtimeCapabilities.connectedTools.length > 0) {
+      lines.push(
+        "",
+        locale === "en" ? "CONNECTED BUSINESS TOOLS:" : "HERRAMIENTAS DE NEGOCIO CONECTADAS:",
+        ...runtimeCapabilities.connectedTools.map((tool) =>
+          `- ${tool.tool}`,
+        ),
+      );
     }
 
     if (businessContext) {
@@ -791,6 +796,22 @@ export class MarketingService {
       );
     }
     return lines.join("\n");
+  }
+
+  private async runtimeCapabilityManifest(
+    organizationId: string,
+  ): Promise<RuntimeCapabilityManifest> {
+    const records = this.toolState
+      ? await this.toolState.listForOrg(organizationId)
+      : [];
+    return buildRuntimeCapabilityManifest(
+      records.map((record) => ({
+        toolId: record.toolId,
+        label: businessSafeConnectionLabel(record.toolId, record.label),
+        state: record.status,
+        capabilities: record.grantedCapabilities ?? [],
+      })),
+    );
   }
 
   /**
@@ -985,7 +1006,7 @@ function capabilityHumanLabel(
   capability: string,
   locale: SupportedLocale,
 ): string {
-  const map: Partial<Record<BusinessCapability, { es: string; en: string }>> = {
+  const map: Record<string, { es: string; en: string }> = {
     "crm.contacts.read": {
       es: "consultar los contactos del CRM",
       en: "consult the CRM contacts",
@@ -1114,8 +1135,16 @@ function capabilityHumanLabel(
       es: "crear trabajo desde el inbox",
       en: "create work from inbox",
     },
+    "marketing.social.read": {
+      es: "consultar información de Facebook Pages",
+      en: "read Facebook Pages information",
+    },
+    "marketing.social.publish": {
+      es: "preparar una publicación para Facebook Pages",
+      en: "prepare a Facebook Pages post",
+    },
   };
-  const entry = map[capability as BusinessCapability];
+  const entry = map[capability];
   if (!entry) return capability.replace(/^marketing\./, "").replace(/\./g, " ");
   return locale === "en" ? entry.en : entry.es;
 }

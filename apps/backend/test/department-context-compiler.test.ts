@@ -347,42 +347,89 @@ describe("Post-sync functional — CEO questions answered with context", () => {
   });
 
   it("F2 '¿Qué deberíamos hacer ahora?' compiles DNA + objective + capabilities + heartbeat", () => {
-    process.env["MAUTIC_BASE_URL"] = "https://mautic.test";
-    process.env["MAUTIC_CLIENT_ID"] = "client";
-    process.env["MAUTIC_CLIENT_SECRET"] = "secret";
-    try {
-      const session = makeSession({
-        onboarding: completeOnboarding(),
-        discoveryTranscript: richDiscovery(),
-        marketingWork: {
-          goal: "Acelerar el pipeline MQL→SQL",
-          summary: "Plan trimestral",
-          items: [
-            {
-              id: "obj_1",
-              kind: "analysis",
-              title: "Reducir CAC 25%",
-              description: "Acelerar MQL→SQL y reducir CAC",
-              status: "running",
-            },
-          ],
-        },
-        connections: new Map(),
-      });
-      const ctx = compileDepartmentContext(session);
-      const text = renderCompiledContextForEngine(ctx);
-      // Real company DNA + objective + capabilities + heartbeat are
-      // all present, so the answer is grounded in evidence.
-      expect(text).toContain("Acme Cloud SL");
-      expect(text).toContain("MQL");
-      expect(text).toContain("Reducir CAC 25%");
-      expect(text).toContain("crm.contacts.read");
-      expect(text).toContain("HEARTBEAT");
-    } finally {
-      delete process.env["MAUTIC_BASE_URL"];
-      delete process.env["MAUTIC_CLIENT_ID"];
-      delete process.env["MAUTIC_CLIENT_SECRET"];
-    }
+    const session = makeSession({
+      onboarding: completeOnboarding(),
+      discoveryTranscript: richDiscovery(),
+      marketingWork: {
+        goal: "Acelerar el pipeline MQL→SQL",
+        summary: "Plan trimestral",
+        items: [
+          {
+            id: "obj_1",
+            kind: "analysis",
+            title: "Reducir CAC 25%",
+            description: "Acelerar MQL→SQL y reducir CAC",
+            status: "running",
+          },
+        ],
+      },
+      connections: new Map([
+        ["mautic", {
+          toolId: "mautic",
+          label: "Mautic",
+          capability: "CRM",
+          category: "crm",
+          status: "connected",
+          lifecycle: "connected",
+          verifiedAt: "2026-01-01T00:00:00.000Z",
+          grantedCapabilities: ["crm.contacts.read"],
+        }],
+      ]),
+    });
+    const ctx = compileDepartmentContext(session);
+    const text = renderCompiledContextForEngine(ctx);
+    // Real company DNA + objective + tenant grant + heartbeat are all
+    // present, so the answer is grounded in current evidence.
+    expect(text).toContain("Acme Cloud SL");
+    expect(text).toContain("MQL");
+    expect(text).toContain("Reducir CAC 25%");
+    expect(text).toContain("crm.contacts.read");
+    expect(text).toContain("HEARTBEAT");
+  });
+});
+
+describe("Context safety — canonical tenant projection", () => {
+  it("exposes Facebook Pages only from a connected durable grant", () => {
+    const session = makeSession({
+      connections: new Map([
+        ["meta_business", {
+          toolId: "meta_business",
+          label: "Meta Business",
+          capability: "Marketing",
+          category: "marketing",
+          status: "connected",
+          lifecycle: "connected",
+          verifiedAt: "2026-01-01T00:00:00.000Z",
+          grantedCapabilities: ["marketing.social.read", "marketing.social.publish"],
+        }],
+      ]),
+    });
+    const context = compileDepartmentContext(session);
+    const rendered = renderCompiledContextForEngine(context);
+    expect(context.capabilities.map((capability) => capability.id)).toEqual([
+      "marketing.social.read",
+      "marketing.social.publish",
+    ]);
+    expect(rendered).toContain("Facebook Pages: connected");
+    expect(rendered).not.toContain("meta_business");
+    expect(JSON.stringify(context)).not.toContain("configSource");
+  });
+
+  it("does not infer a grant from a connected-looking record without capability evidence", () => {
+    const session = makeSession({
+      connections: new Map([
+        ["meta_business", {
+          toolId: "meta_business",
+          label: "Meta Business",
+          capability: "Marketing",
+          category: "marketing",
+          status: "connected",
+          lifecycle: "connected",
+        }],
+      ]),
+    });
+    const context = compileDepartmentContext(session);
+    expect(context.capabilities).toEqual([]);
   });
 });
 

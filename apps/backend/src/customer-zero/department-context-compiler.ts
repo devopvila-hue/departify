@@ -24,10 +24,6 @@
 import type { SupportedLocale } from "./locale.js";
 import type { CustomerZeroSession } from "./customer-zero-session.js";
 import { t } from "./locale.js";
-import {
-  listReadyCapabilities,
-} from "./capability-registry.js";
-import { publicCredentialSource } from "./credential-resolver.js";
 import { listDepartmentMemory } from "./department-memory.js";
 import type { CompanyDnaRecord } from "./company-dna.js";
 import type { DepartmentResult, DepartmentTask } from "./department-work.js";
@@ -37,7 +33,10 @@ import type {
   DepartmentActivity,
 } from "./marketing-domain.js";
 import { MARKETING_ROSTER } from "./marketing-roster.js";
-import type { RuntimeCapabilityManifest } from "./capability-manifest.js";
+import {
+  businessSafeConnectionLabel,
+  type RuntimeCapabilityManifest,
+} from "./capability-manifest.js";
 
 /* ----------------------------------------------------------------------------
  * 1. Elvira identity + instructions (immutable per org).
@@ -118,11 +117,8 @@ export interface ContextCapability {
 }
 
 export interface ContextConnection {
-  readonly provider: string;
   readonly label: string;
   readonly state: "connected" | "needs_attention" | "error" | "not_connected";
-  readonly configSource?: string;
-  readonly verifiedAt?: string;
 }
 
 /* ----------------------------------------------------------------------------
@@ -397,39 +393,39 @@ export function compileDepartmentContext(
   }
 
   // ── 8. Capabilities ────────────────────────────────────────────
-  const ready = listReadyCapabilities(session.organizationId);
-  const capabilities: ContextCapability[] = ready.map((c) => ({
-    id: c,
+  // The session's hydrated connection state is the canonical tenant
+  // projection. Environment configuration is never evidence that a tenant
+  // has an operational or granted capability.
+  const grantedCapabilities = new Set<string>();
+  for (const conn of session.state.connections.values()) {
+    const lifecycle = conn.lifecycle;
+    const connected = lifecycle === "connected" ||
+      (lifecycle === undefined && conn.status === "connected");
+    if (!connected) continue;
+    for (const capability of conn.grantedCapabilities ?? []) {
+      grantedCapabilities.add(capability);
+    }
+  }
+  const capabilities: ContextCapability[] = [...grantedCapabilities].map((id) => ({
+    id,
     available: true,
   }));
 
   // ── 9. Connections ─────────────────────────────────────────────
   const connections: ContextConnection[] = [];
-  for (const [provider, conn] of session.state.connections.entries()) {
-    const state = conn.status === "connected"
+  for (const conn of session.state.connections.values()) {
+    const lifecycle = conn.lifecycle;
+    const state = lifecycle === "connected" ||
+      (lifecycle === undefined && conn.status === "connected")
       ? "connected"
-      : conn.status === "blocked"
-        ? "needs_attention"
-        : "not_connected";
-    const source = publicCredentialSource({
-      organizationId: session.organizationId,
-      // P0 — both ternary branches were "mautic" so every non-Mautic
-      // provider was silently coerced into the Mautic credential
-      // lookup. Gmail's configSource is now reported honestly.
-      // Narrow to the known set so downstream typed providers stay safe.
-      provider:
-        provider === "mautic" ||
-        provider === "gmail" ||
-        provider === "resend" ||
-        provider === "google"
-          ? provider
-          : "mautic",
-    });
+      : lifecycle === "unavailable"
+        ? "error"
+        : lifecycle === "degraded" || conn.status === "blocked"
+          ? "needs_attention"
+          : "not_connected";
     connections.push({
-      provider,
-      label: conn.label ?? provider,
+      label: businessSafeConnectionLabel(conn.toolId, conn.label),
       state,
-      ...(source.label !== `${provider}:missing` ? { configSource: source.label } : {}),
     });
   }
 
