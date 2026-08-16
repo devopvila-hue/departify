@@ -16,6 +16,7 @@ export function DepartmentDashboardRoute(props: { departmentId: "marketing" | "s
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [autoProvisioned, setAutoProvisioned] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -27,9 +28,19 @@ export function DepartmentDashboardRoute(props: { departmentId: "marketing" | "s
       api.calendar(organizationId, { departmentId: props.departmentId }),
     ]);
     if (dashboardData) {
-      setDashboards(dashboardData.dashboards);
-      setSelectedId((current) => current && dashboardData.dashboards.some((item) => item.id === current) ? current : dashboardData.dashboards[0]?.id ?? null);
-      setCount(dashboardData.dashboardCount);
+      let nextDashboards = dashboardData.dashboards;
+      let nextCount = dashboardData.dashboardCount;
+      if (nextDashboards.length === 0 && nextCount < dashboardData.dashboardLimit && !autoProvisioned) {
+        setAutoProvisioned(true);
+        const created = await api.createDashboard(organizationId, props.departmentId, props.departmentId);
+        if (created?.dashboard) {
+          nextDashboards = [created.dashboard];
+          nextCount = created.dashboardCount;
+        }
+      }
+      setDashboards(nextDashboards);
+      setSelectedId((current) => current && nextDashboards.some((item) => item.id === current) ? current : nextDashboards[0]?.id ?? null);
+      setCount(nextCount);
       setLimit(dashboardData.dashboardLimit);
     }
     if (workData) {
@@ -38,7 +49,7 @@ export function DepartmentDashboardRoute(props: { departmentId: "marketing" | "s
     }
     if (calendarData) setCalendar(calendarData.entries);
     setLoading(false);
-  }, [organizationId, props.departmentId]);
+  }, [autoProvisioned, organizationId, props.departmentId]);
 
   useEffect(() => { void load(); }, [load]);
 
