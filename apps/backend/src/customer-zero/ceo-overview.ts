@@ -225,6 +225,7 @@ export function buildCompanyOperatingState(input: {
   const marketingCapabilities = input.marketing?.capabilities ?? projectDepartmentCapabilities("marketing", input.connections).map(({ id, label, description, state }) => ({ id, label, description, state }));
   const seo = input.seo;
   const seoTasks = (seo?.tasks ?? []).filter((task) => task.departmentId === "seo");
+  const seoWorkingNow = seoTasks.some((task) => task.status === "running") ? 1 : 0;
   const marketingStatus = marketingTasks.length > 0
     ? marketingTasks.some((task) => task.status === "waiting_approval")
       ? "esperando_aprobacion"
@@ -259,7 +260,7 @@ export function buildCompanyOperatingState(input: {
         role: "Responsable de SEO",
       },
       employees: [],
-      employeesWorkingNow: seoTasks.some((task) => task.status === "running") ? 1 : 0,
+      employeesWorkingNow: seoWorkingNow,
       capabilities: seo.capabilities,
       tools: [],
       toolsConnected: 0,
@@ -324,7 +325,7 @@ export function buildCompanyOperatingState(input: {
     summary: {
       digitalEmployees: marketingEmployees.length,
       operationalCapabilities: marketingCapabilities.length + (seo?.capabilities.length ?? 0),
-      workingNow: workingEmployeeCount,
+      workingNow: workingEmployeeCount + seoWorkingNow,
       connectedTools: connectedTools.length,
       pendingApprovals,
       activeObjective,

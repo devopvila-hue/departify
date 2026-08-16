@@ -137,8 +137,8 @@ export function ControlPlaneRoute() {
     );
   }
 
-  const department = company.departments[0];
-  if (!department) {
+  const departments = company.departments;
+  if (departments.length === 0) {
     return (
       <div className="dfy-page">
         <section className="dfy-hero">
@@ -149,7 +149,17 @@ export function ControlPlaneRoute() {
       </div>
     );
   }
-  const departmentCapabilities = department.capabilities ?? [];
+  const capabilityDepartmentName = (capabilityId: string): string | null => {
+    const owner = departments.find((item) =>
+      item.capabilities?.some((capability) => capability.id === capabilityId),
+    );
+    return owner?.name ?? null;
+  };
+
+  const departmentPath = (departmentId: string): string =>
+    departmentId === "seo" ? "/seo" : "/marketing";
+  const companyCapabilities = company.capabilities?.filter(Boolean)
+    ?? departments.flatMap((item) => item.capabilities ?? []).filter(Boolean);
 
   return (
     <div className="dfy-page dfy-control-plane">
@@ -186,7 +196,7 @@ export function ControlPlaneRoute() {
         </div>
       </section>
 
-      {/* Org chart: CEO → department head */}
+      {/* Company structure: CEO → every active department */}
       <section className="dfy-org" aria-label="Organigrama">
         <div className="dfy-org__ceo">
           <div className="dfy-org__ceo-avatar" aria-hidden="true">D</div>
@@ -198,8 +208,9 @@ export function ControlPlaneRoute() {
 
         <div className="dfy-org__connector" aria-hidden="true" />
 
-        <div className="dfy-org__department">
-          <article className="dfy-card dfy-department-card">
+        <div className="dfy-org__departments">
+          {departments.map((department) => (
+          <article className="dfy-card dfy-department-card" key={department.id}>
             <header className="dfy-department-card__head">
               <div className="dfy-head">
                 <span className="dfy-head__avatar" aria-hidden="true">
@@ -244,19 +255,20 @@ export function ControlPlaneRoute() {
               <button
                 type="button"
                 className="dfy-button"
-                onClick={() => navigate("/marketing")}
+                onClick={() => navigate(departmentPath(department.id))}
               >
-                Ver Marketing
+                Ver {department.name}
               </button>
               <button
                 type="button"
                 className="dfy-button dfy-button--ghost"
                 onClick={() => navigate("/chat")}
               >
-                Hablar con Elvira
+                Hablar con {department.head.name}
               </button>
             </div>
           </article>
+          ))}
         </div>
       </section>
 
@@ -267,8 +279,8 @@ export function ControlPlaneRoute() {
       )}
 
       <div className="dfy-grid">
-        {/* Digital employees */}
-        <Card title="Empleados digitales">
+        {/* Real team members from the operating projection */}
+        <Card title="Equipo">
           {(company.employees.length ?? 0) === 0 ? (
             <EmptyState title="Sin empleados" description="El equipo se está formando." />
           ) : (
@@ -298,17 +310,24 @@ export function ControlPlaneRoute() {
             </ul>
           )}
           <p className="dfy-muted dfy-muted--small">
-            Cada empleado digital tiene una especialidad. Pulsa una tarjeta para
-            ver qué está haciendo.
+            Cada persona del equipo tiene una especialidad. Pulsa una tarjeta
+            para ver qué está haciendo.
           </p>
         </Card>
 
         <Card title="Capacidades del equipo">
           <ul className="dfy-list">
-            {departmentCapabilities.map((capability) => (
-              <li key={`${department.id}-${capability.id}`}>
+            {companyCapabilities.map((capability) => (
+              <li key={capability.id}>
                 <span>
-                  <strong>{capability.label}</strong>
+                  <strong>
+                    {capabilityDepartmentName(capability.id) && (
+                      <span className="dfy-capability__department">
+                        {capabilityDepartmentName(capability.id)} · {" "}
+                      </span>
+                    )}
+                    {capability.label}
+                  </strong>
                   <span className="dfy-muted dfy-muted--small">{capability.description}</span>
                 </span>
                 <Badge tone={capability.state === "disponible" ? "success" : capability.state === "necesita_conexion" ? "warning" : "neutral"}>

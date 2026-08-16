@@ -175,6 +175,51 @@ describe("ENGINE 04 — Control Plane", () => {
     expect(await screen.findByText("CEO")).toBeInTheDocument();
   });
 
+  it("projects every active department from the overview", async () => {
+    const seoHead = {
+      departmentId: "seo",
+      department: "SEO",
+      name: "Responsable de SEO",
+      initials: "SEO",
+      role: "Responsable de SEO",
+    };
+    const seoDepartment = {
+      id: "seo",
+      name: "SEO",
+      status: "disponible",
+      head: seoHead,
+      employees: [],
+      employeesWorkingNow: 0,
+      capabilities: [{
+        id: "seo.audit",
+        label: "Auditoría técnica",
+        description: "Revisa los problemas verificables de tu web.",
+        state: "disponible" as const,
+      }],
+      tools: [],
+      toolsConnected: 0,
+      activeObjective: null,
+    };
+    const multiDepartmentOverview = {
+      ...companyOverview,
+      company: {
+        ...companyOverview.company,
+        departments: [...companyOverview.company.departments, seoDepartment],
+        capabilities: seoDepartment.capabilities,
+      },
+    };
+    vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => url.includes("/overview") ? multiDepartmentOverview : departmentStatus,
+    } as Response)));
+    mount(<ControlPlaneRoute />);
+
+    await waitFor(() => expect(screen.getAllByText("Responsable de SEO").length).toBeGreaterThan(0));
+    expect(screen.getByRole("button", { name: /ver seo/i })).toBeInTheDocument();
+    expect(screen.getByText("Auditoría técnica")).toBeInTheDocument();
+  });
+
   it("03 Marketing / Elvira visible", async () => {
     mockFetch(() => departmentStatus);
     mount(<ControlPlaneRoute />);
@@ -185,11 +230,11 @@ describe("ENGINE 04 — Control Plane", () => {
   it("04 correct employee count from backend", async () => {
     mockFetch(() => departmentStatus);
     mount(<ControlPlaneRoute />);
-    // employees.length = 3 → "3" appears next to "empleados digitales".
+    // employees.length = 3 → "3" appears next to the company team.
     await waitFor(() => {
       expect(screen.getAllByText("3").length).toBeGreaterThan(0);
     });
-    expect(screen.getAllByText(/empleados digitales/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/^equipo$/i).length).toBeGreaterThan(0);
   });
 
   it("05 status normalized (business language)", async () => {
