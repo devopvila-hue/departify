@@ -20,6 +20,41 @@ type Surface = ToolConnectionView & {
 };
 
 const CATEGORY_ORDER = ["email", "calendar", "documents", "crm", "marketing", "team", "other"] as const;
+const CANONICAL_CONNECTION_NAMES: Record<string, string> = {
+  github_repository: "Proyecto de la web",
+  hostinger_email: "Correo de empresa",
+  google_analytics: "Google Analytics",
+  google_ads: "Google Ads",
+  meta_ads: "Meta Ads",
+  meta_business: "Meta Business",
+  tiktok: "TikTok",
+  tiktok_ads: "TikTok Ads",
+  google_calendar: "Google Calendar",
+  google_drive: "Google Drive",
+  microsoft_calendar: "Microsoft Outlook Calendar",
+  microsoft_365: "Microsoft 365",
+  hubspot: "HubSpot",
+  brevo: "Brevo",
+  mailchimp: "Mailchimp",
+  dropbox: "Dropbox",
+  wordpress: "WordPress",
+  shopify: "Shopify",
+  etsy: "Etsy",
+  gmail: "Gmail",
+  outlook: "Outlook",
+  whatsapp: "WhatsApp Business",
+  telegram: "Telegram",
+  youtube: "YouTube",
+  slack: "Slack",
+  notion: "Notion",
+  salesforce: "Salesforce",
+  pipedrive: "Pipedrive",
+  zoho: "Zoho",
+  mautic: "Mautic",
+  onedrive: "OneDrive",
+  microsoft_teams: "Microsoft Teams",
+  ticktick: "TickTick",
+};
 export function ConnectionsRoute() {
   const { organizationId } = useOrg();
   const location = useLocation();
@@ -368,8 +403,9 @@ function normalizeConnectionView(entry: unknown): ToolConnectionView | null {
   const toolId = textValue(raw.toolId);
   if (!toolId) return null;
 
-  const label = textValue(raw.label) ?? textValue(raw.name) ?? toolId;
-  const name = textValue(raw.name) ?? label;
+  const canonicalName = CANONICAL_CONNECTION_NAMES[toolId];
+  const label = textValue(raw.label) ?? textValue(raw.name) ?? canonicalName ?? "Herramienta conectada";
+  const name = textValue(raw.name) ?? textValue(raw.label) ?? canonicalName ?? "Herramienta conectada";
   const categoryId = CATEGORY_ORDER.includes(raw.categoryId as typeof CATEGORY_ORDER[number])
     ? raw.categoryId as ToolConnectionView["categoryId"]
     : "other";

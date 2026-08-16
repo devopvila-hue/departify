@@ -35,12 +35,16 @@ export function ControlPlaneRoute() {
 
   const load = useCallback(async () => {
     if (!organizationId) return;
-    const overview = await api.overview(organizationId);
-    if (overview?.company) {
-      setCompany(overview.company);
-      setPendingApprovals(overview.company.pendingApprovals);
-      setLoadFailed(false);
-    } else {
+    try {
+      const overview = await api.overview(organizationId);
+      if (overview?.company) {
+        setCompany(overview.company);
+        setPendingApprovals(overview.company.pendingApprovals);
+        setLoadFailed(false);
+      } else {
+        setLoadFailed(true);
+      }
+    } catch {
       setLoadFailed(true);
     }
   }, [organizationId]);
@@ -121,6 +125,9 @@ export function ControlPlaneRoute() {
             No he podido cargar el estado de tu empresa ahora mismo. Inténtalo
             de nuevo en un momento.
           </p>
+          <button type="button" className="dfy-button" onClick={() => void load()}>
+            Reintentar
+          </button>
         </section>
       </div>
     );
@@ -282,7 +289,7 @@ export function ControlPlaneRoute() {
         {/* Real team members from the operating projection */}
         <Card title="Equipo">
           {(company.employees.length ?? 0) === 0 ? (
-            <EmptyState title="Sin empleados" description="El equipo se está formando." />
+            <EmptyState title="Sin especialistas asignados" description="El trabajo se organiza por las capacidades de cada departamento." />
           ) : (
             <ul className="dfy-list">
               {company.employees.map((employee) => (
@@ -310,8 +317,7 @@ export function ControlPlaneRoute() {
             </ul>
           )}
           <p className="dfy-muted dfy-muted--small">
-            Cada persona del equipo tiene una especialidad. Pulsa una tarjeta
-            para ver qué está haciendo.
+            Los especialistas que ya tienen trabajo asignado aparecen aquí. Las capacidades disponibles se muestran debajo.
           </p>
         </Card>
 

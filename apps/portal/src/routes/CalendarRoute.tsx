@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { api, type BusinessCalendarEntry } from "@/app/api";
 import { useOrg } from "@/app/org-context";
@@ -12,10 +12,12 @@ export function CalendarRoute(props: { departmentId?: "marketing" | "seo" }) {
   const [type, setType] = useState("");
   const [externalState, setExternalState] = useState<"connected" | "disconnected" | "error">("disconnected");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     if (!organizationId) return;
     setLoading(true);
+    setError(false);
     void api.calendar(organizationId, {
       ...(department ? { departmentId: department } : {}),
       ...(status ? { status } : {}),
@@ -24,10 +26,13 @@ export function CalendarRoute(props: { departmentId?: "marketing" | "seo" }) {
       if (data) {
         setEntries(data.entries);
         setExternalState(data.externalState);
+      } else {
+        setError(true);
       }
-      setLoading(false);
-    });
+    }).catch(() => setError(true)).finally(() => setLoading(false));
   }, [organizationId, department, status, type]);
+
+  useEffect(() => { load(); }, [load]);
 
   return (
     <div className="dfy-page">
@@ -44,7 +49,7 @@ export function CalendarRoute(props: { departmentId?: "marketing" | "seo" }) {
         </div>
         <p className="dfy-muted dfy-muted--small">Google Calendar: {externalState === "connected" ? "conectado" : externalState === "error" ? "necesita atención" : "no conectado"}</p>
       </Card>
-      {loading ? <Card><p className="dfy-muted">Cargando calendario…</p></Card> : entries.length === 0 ? <Card><EmptyState title="No hay actividad en este rango" description="Aquí aparecerán tareas, aprobaciones, resultados y reuniones reales cuando existan." /></Card> : <div className="dfy-calendar-list">{entries.map((entry) => <Card key={entry.id}><div className="dfy-calendar-entry"><time dateTime={entry.startIso}>{formatDate(entry.startIso)}</time><div><strong>{entry.title}</strong><p>{entry.summary || "Sin detalle adicional."}</p><span className="dfy-muted dfy-muted--small">{entry.departmentId} · {typeLabel(entry.type)}</span></div><Badge tone={entry.status === "needs_approval" ? "warning" : entry.status === "failed" ? "danger" : entry.status === "completed" ? "success" : "neutral"}>{statusLabel(entry.status)}</Badge></div></Card>)}</div>}
+      {loading ? <Card><p className="dfy-muted">Cargando calendario…</p></Card> : error ? <Card><p className="dfy-alert" role="alert">No he podido cargar el calendario ahora mismo.</p><button type="button" className="dfy-button" onClick={load}>Reintentar</button></Card> : entries.length === 0 ? <Card><EmptyState title="No hay actividad en este rango" description="Aquí aparecerán tareas, aprobaciones, resultados y reuniones reales cuando existan." /></Card> : <div className="dfy-calendar-list">{entries.map((entry) => <Card key={entry.id}><div className="dfy-calendar-entry"><time dateTime={entry.startIso}>{formatDate(entry.startIso)}</time><div><strong>{entry.title}</strong><p>{entry.summary || "Sin detalle adicional."}</p><span className="dfy-muted dfy-muted--small">{entry.departmentId} · {typeLabel(entry.type)}</span></div><Badge tone={entry.status === "needs_approval" ? "warning" : entry.status === "failed" ? "danger" : entry.status === "completed" ? "success" : "neutral"}>{statusLabel(entry.status)}</Badge></div></Card>)}</div>}
     </div>
   );
 }

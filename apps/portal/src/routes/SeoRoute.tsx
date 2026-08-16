@@ -12,11 +12,24 @@ export function SeoRoute() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [repositoryBusy, setRepositoryBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     if (!organizationId) return;
-    const next = await api.seoDepartment(organizationId);
-    if (next) setData(next);
+    setLoading(true);
+    try {
+      const next = await api.seoDepartment(organizationId);
+      if (next) {
+        setData(next);
+        setError(null);
+      } else {
+        setError("No he podido cargar el estado de SEO ahora mismo.");
+      }
+    } catch {
+      setError("No he podido cargar el estado de SEO ahora mismo.");
+    } finally {
+      setLoading(false);
+    }
   }, [organizationId]);
 
   useEffect(() => { void load(); }, [load]);
@@ -68,7 +81,7 @@ export function SeoRoute() {
         <p className="dfy-hero__goal">Mejorar la web con problemas verificables y trabajo priorizado.</p>
       </section>
       {error && <p className="dfy-alert" role="alert">{error}</p>}
-      {!data ? <Card><p className="dfy-muted">Cargando SEO…</p></Card> : (
+      {!data && loading ? <Card><p className="dfy-muted">Cargando SEO…</p></Card> : !data ? <Card><p className="dfy-alert" role="alert">No he podido cargar el estado de SEO ahora mismo.</p><button type="button" className="dfy-button" onClick={() => void load()}>Reintentar</button></Card> : (
         <>
           <Card title="Estado de SEO" action={<Badge tone={data.state === "ready" ? "success" : "warning"}>{data.state === "ready" ? "Listo para revisar" : data.state === "web_detected" ? "Web detectada" : "Necesita configuración"}</Badge>}>
             {data.website ? <p>Hemos detectado tu web: <strong>{data.website}</strong></p> : <EmptyState title="Indica la web de tu empresa" description="SEO necesita una web real para poder revisar títulos, estructura, enlaces y accesibilidad básica." />}

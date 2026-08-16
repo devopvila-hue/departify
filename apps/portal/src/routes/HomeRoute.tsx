@@ -39,21 +39,26 @@ export function HomeRoute() {
 
   const load = useCallback(async () => {
     if (!organizationId) return;
-    const [overviewData, openingData, statusData] = await Promise.all([
-      api.overview(organizationId),
-      api.commandCenterOpening(organizationId),
-      api.status(organizationId),
-    ]);
-    if (overviewData) setOverview(overviewData);
-    if (openingData) setEvents(openingData.events);
-    if (statusData) {
-      const conv = statusData.conversation.map((turn) => ({
-        role: turn.role as "user" | "assistant",
-        content: turn.content,
-      }));
-      setTranscript(conv);
+    try {
+      const [overviewData, openingData, statusData] = await Promise.all([
+        api.overview(organizationId),
+        api.commandCenterOpening(organizationId),
+        api.status(organizationId),
+      ]);
+      if (overviewData) setOverview(overviewData);
+      if (openingData) setEvents(openingData.events);
+      if (statusData) {
+        const conv = statusData.conversation.map((turn) => ({
+          role: turn.role as "user" | "assistant",
+          content: turn.content,
+        }));
+        setTranscript(conv);
+      }
+    } catch {
+      setError("No he podido cargar el estado de tu empresa ahora mismo. Inténtalo de nuevo en un momento.");
+    } finally {
+      setOpening(false);
     }
-    setOpening(false);
   }, [organizationId]);
 
   useEffect(() => {
@@ -219,7 +224,7 @@ export function HomeRoute() {
                   <button
                     type="button"
                     className="dfy-button dfy-button--ghost"
-                    onClick={() => navigate("/marketing")}
+                    onClick={() => navigate(head.departmentId === "seo" ? "/seo" : "/marketing")}
                   >
                     Abrir departamento
                   </button>
@@ -227,8 +232,7 @@ export function HomeRoute() {
               ))}
             </ul>
             <p className="dfy-muted dfy-muted--small">
-              Pronto habrá más departamentos. Los futuros (Ventas, Finanzas,
-              Operaciones) están identificados pero no activos.
+              Aquí verás los departamentos activos de tu empresa.
             </p>
           </Card>
         )}

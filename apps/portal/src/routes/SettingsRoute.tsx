@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { api, type CompanyStatus, type ConnectionCardView } from "@/app/api";
 import { useOrg } from "@/app/org-context";
@@ -11,20 +12,26 @@ import { Badge, Card, EmptyState } from "@/components/primitives";
  */
 export function SettingsRoute() {
   const { organizationId } = useOrg();
+  const navigate = useNavigate();
   const [status, setStatus] = useState<CompanyStatus | null>(null);
   const [connections, setConnections] = useState<ConnectionCardView[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     if (!organizationId) return;
+    setLoadError(false);
+    setLoaded(false);
     void Promise.all([api.status(organizationId), api.connections(organizationId)])
       .then(([company, connected]) => {
         setStatus(company);
         setConnections(connected?.cards ?? []);
       })
-      .catch(() => undefined)
+      .catch(() => setLoadError(true))
       .finally(() => setLoaded(true));
   }, [organizationId]);
+
+  useEffect(() => { load(); }, [load]);
 
   const emailCards = connections.filter((card) => card.categoryId === "email");
   const connectedEmail = emailCards.find((card) => card.state === "connected");
@@ -39,6 +46,13 @@ export function SettingsRoute() {
           La información empresarial está en Empresa.
         </p>
       </section>
+
+      {loadError && (
+        <section className="dfy-card" aria-label="Error de configuración">
+          <p className="dfy-alert" role="alert">No he podido cargar la configuración de tu empresa.</p>
+          <button type="button" className="dfy-button" onClick={load}>Reintentar</button>
+        </section>
+      )}
 
       <Card title="Identidad de la empresa">
         <dl className="dfy-facts">
@@ -72,6 +86,9 @@ export function SettingsRoute() {
           title="No hay claves adicionales que configurar"
           description="Las conexiones disponibles se gestionan desde Conexiones. Cuando un servicio admita una clave propia, podrás obtenerla con instrucciones oficiales. Nunca se muestran secretos en el portal."
         />
+        <button type="button" className="dfy-button dfy-button--ghost" onClick={() => navigate("/conexiones")}>
+          Gestionar conexiones
+        </button>
       </Card>
 
       <Card title="Notificaciones">
