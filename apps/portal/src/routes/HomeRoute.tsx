@@ -100,7 +100,7 @@ export function HomeRoute() {
         </p>
       </section>
 
-      <Card title="Command Center">
+      <Card title="Actividad de tu empresa">
         <p className="dfy-muted dfy-muted--small">
           Tu única conversación con la empresa. Cuando Elvira y su equipo
           necesiten tu decisión, aparecerá aquí mismo.
@@ -168,7 +168,7 @@ export function HomeRoute() {
           <Card title="Equipo de Marketing">
             <p className="dfy-muted dfy-muted--small">
               Información: este es el equipo que Elvira tiene formando para tu
-              objetivo. No es una consola de agentes.
+              objetivo y el trabajo que tiene en marcha.
             </p>
             <div className="dfy-team-grid">
               <div className="dfy-team-director">
@@ -221,7 +221,7 @@ export function HomeRoute() {
                     className="dfy-button dfy-button--ghost"
                     onClick={() => navigate("/marketing")}
                   >
-                    Ver workspace
+                    Abrir departamento
                   </button>
                 </li>
               ))}
@@ -359,7 +359,7 @@ function CommandCenterEventCard(props: { event: CommandCenterEvent }) {
           {event.suggestion.requiredCredentials.length > 0 && (
             <p className="dfy-muted dfy-muted--small">
               Departify te pedirá estas credenciales en una ventana segura.
-              Nunca aparecen en el chat ni en tu DNA.
+              Nunca aparecen en el chat ni en la información de tu empresa.
             </p>
           )}
         </article>

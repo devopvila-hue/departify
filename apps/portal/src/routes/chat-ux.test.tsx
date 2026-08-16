@@ -233,7 +233,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
     fireEvent.change(input, { target: { value: "¿Tengo correos importantes?" } });
     fireEvent.click(screen.getByRole("button", { name: /enviar/i }));
     // Sending always snaps back to the latest exchange.
-    await waitFor(() => expect(el.scrollTop).toBe(el.scrollHeight));
+    await waitFor(() => expect(el.scrollTop).toBe(el.scrollHeight - el.clientHeight));
   });
 
   it("S2b. a transport failure recovers a durable completed turn", async () => {
@@ -296,7 +296,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("S3. 'Ir al último mensaje' appears when scrolled up and snaps to the bottom", async () => {
+  it("S3. 'Volver al último mensaje' appears when scrolled up and snaps to the bottom", async () => {
     const { container } = renderChat();
     await screen.findByText(/elvira toma la iniciativa/i);
     const el = scroller(container);
@@ -315,7 +315,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
     // Clicking the affordance snaps to the bottom.
     scrollTo(el, 60);
     fireEvent.click(screen.getByTestId("chat-jump-latest"));
-    await waitFor(() => expect(el.scrollTop).toBe(el.scrollHeight));
+    await waitFor(() => expect(el.scrollTop).toBe(el.scrollHeight - el.clientHeight));
   });
 
   it("S3b. scrolling up immediately exposes the latest-message affordance", async () => {
@@ -361,7 +361,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
     await act(async () => {
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     });
-    await waitFor(() => expect(el.scrollTop).toBe(el.scrollHeight));
+    await waitFor(() => expect(el.scrollTop).toBe(el.scrollHeight - el.clientHeight));
   });
 
   it("S6. the CEO thread is continuous and does not expose session switching", async () => {

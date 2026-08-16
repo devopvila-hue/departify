@@ -40,10 +40,10 @@ export function SettingsRoute() {
         </p>
       </section>
 
-      <Card title="Identidad y branding">
+      <Card title="Identidad de la empresa">
         <dl className="dfy-facts">
           <div>
-            <dt>Nombre visible</dt>
+            <dt>Nombre de la empresa</dt>
             <dd>{status?.companyName ?? (loaded ? "No disponible" : "Cargando…")}</dd>
           </div>
           <div>
@@ -53,10 +53,10 @@ export function SettingsRoute() {
         </dl>
       </Card>
 
-      <Card title="Correo">
+      <Card title="Correo de empresa">
         {connectedEmail ? (
           <dl className="dfy-facts">
-            <div><dt>Provider conectado</dt><dd>{connectedEmail.name}</dd></div>
+            <div><dt>Cuenta conectada</dt><dd>{connectedEmail.name}</dd></div>
             <div><dt>Estado</dt><dd><Badge tone="success">Conectado</Badge></dd></div>
           </dl>
         ) : (
@@ -67,10 +67,10 @@ export function SettingsRoute() {
         )}
       </Card>
 
-      <Card title="BYOK / API keys">
+      <Card title="Claves de servicios">
         <EmptyState
-          title="No hay claves propias configuradas"
-          description="El almacenamiento seguro de claves propias aún no está disponible para esta empresa. No se muestran secretos en el portal."
+          title="No hay claves adicionales que configurar"
+          description="Las conexiones disponibles se gestionan desde Conexiones. Cuando un servicio admita una clave propia, podrás obtenerla con instrucciones oficiales. Nunca se muestran secretos en el portal."
         />
       </Card>
 

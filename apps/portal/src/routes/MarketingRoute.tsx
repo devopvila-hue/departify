@@ -302,8 +302,8 @@ export function MarketingRoute() {
       </Card>
 
       <div className="dfy-grid">
-        {/* Digital employees */}
-        <Card title="Empleados digitales">
+        {/* Real department team */}
+        <Card title="Equipo">
           <ul className="dfy-list">
             {department.employees.map((employee) => (
               <li key={employee.id} className="dfy-digital-employee">

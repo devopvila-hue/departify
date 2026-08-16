@@ -169,7 +169,7 @@ export function ChatRoute() {
   //   1. New send → snap to bottom (forced).
   //   2. New assistant turn/event (passive) → only auto-follow if the
   //      CEO is near the bottom; if they scrolled up, preserve their
-  //      position and surface a "Ir al último mensaje" affordance.
+  //      position and surface a "Volver al último mensaje" affordance.
   //   3. Conversation switch → snap to bottom.
   const stickToBottomRef = useRef(true);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -197,13 +197,13 @@ export function ChatRoute() {
     return () => node.removeEventListener("scroll", onScroll);
   }, [hasOlderMessages, loadingOlder, loadOlderMessages]);
 
-  // Force scroll on send OR when the user clicks "Ir al último mensaje".
+  // Force scroll on send OR when the user clicks "Volver al último mensaje".
   useEffect(() => {
     if (!followRequested) return;
     const node = scrollerRef.current;
     if (!node) return;
     const follow = () => {
-      node.scrollTop = node.scrollHeight;
+      node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
       stickToBottomRef.current = true;
       setFollowingLatest(true);
       setFollowRequested(false);
@@ -223,7 +223,7 @@ export function ChatRoute() {
     if (!stickToBottomRef.current) return;
     const node = scrollerRef.current;
     if (!node) return;
-    node.scrollTop = node.scrollHeight;
+    node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
   }, [transcript, events]);
 
   // Customer Zero 01 P0 — poll the work feed so a final ELVIRA
@@ -486,9 +486,9 @@ export function ChatRoute() {
               stickToBottomRef.current = true;
               setFollowingLatest(true);
             }}
-            aria-label="Ir al último mensaje"
+            aria-label="Volver al último mensaje"
           >
-            ↓ Ir al último mensaje
+            ↓ Volver al último mensaje
           </button>
         )}
         <div ref={sentinelRef} aria-hidden="true" />

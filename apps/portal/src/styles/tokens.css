@@ -1512,7 +1512,8 @@ select {
 .dfy-chat-page {
   display: flex;
   flex-direction: column;
-  min-height: calc(100dvh - 56px);
+  height: calc(100dvh - 56px);
+  min-height: 0;
   max-width: 880px;
   margin: 0 auto;
   width: 100%;
@@ -1520,7 +1521,10 @@ select {
 
 .dfy-chat-scroller {
   flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding: 28px 20px 32px;
   display: flex;
   flex-direction: column;
@@ -2197,7 +2201,7 @@ select {
 
 @media (min-width: 1024px) {
   .dfy-chat-page {
-    min-height: calc(100dvh - 64px);
+    height: calc(100dvh - 64px);
   }
   .dfy-chat-scroller {
     padding: 40px 24px 32px;
@@ -2205,6 +2209,21 @@ select {
   .dfy-composer-bar {
     padding: 22px 24px 28px;
   }
+}
+
+/* The chat owns its viewport. Other routes continue to use normal page scroll. */
+.dfy-content:has(.dfy-chat-page) {
+  display: flex;
+  min-height: 0;
+  padding-bottom: 0;
+}
+
+.dfy-control-plane .dfy-grid {
+  gap: 16px;
+}
+
+.dfy-control-plane .dfy-card {
+  padding: 16px 18px;
 }
 
 @media (max-width: 600px) {
@@ -2426,6 +2445,13 @@ select {
   max-width: 560px;
 }
 
+.dfy-org__departments {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
 .dfy-department-card {
   display: flex;
   flex-direction: column;
@@ -2471,6 +2497,12 @@ select {
 @media (prefers-reduced-motion: reduce) {
   .dfy-status-dot {
     animation: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .dfy-org__departments {
+    grid-template-columns: 1fr;
   }
 }
 
