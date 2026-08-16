@@ -197,6 +197,64 @@ export interface DepartmentResult {
   producedByCapability: string;
 }
 
+export type DashboardWidgetKind =
+  | "metric" | "line" | "bar" | "area" | "donut" | "table" | "timeline" | "calendar-summary";
+
+export interface DashboardDefinition {
+  id: string;
+  organizationId: string;
+  departmentId: string;
+  title: string;
+  description: string;
+  dateRange: { kind: "relative" | "fixed"; days?: number; from?: string; to?: string };
+  metrics: string[];
+  widgets: { id: string; kind: DashboardWidgetKind; title: string; source: string; config?: Record<string, unknown> }[];
+  filters: string[];
+  dataSources: string[];
+  layout: Record<string, unknown>;
+  status: "active" | "archived";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type BusinessCalendarType = "task" | "result" | "approval" | "meeting";
+export type BusinessCalendarStatus = "pending" | "needs_approval" | "scheduled" | "completed" | "failed";
+
+export interface BusinessCalendarEntry {
+  id: string;
+  organizationId: string;
+  departmentId: string;
+  type: BusinessCalendarType;
+  status: BusinessCalendarStatus;
+  title: string;
+  summary: string;
+  startIso: string;
+  endIso: string;
+  source: "departify" | "google_calendar";
+  sourceId: string;
+  capability?: string;
+}
+
+export interface SeoAuditReport {
+  url: string;
+  fetchedAt: string;
+  page: {
+    title: string;
+    description: string;
+    canonical: string | null;
+    robots: string | null;
+    headings: { h1: string[]; h2: string[]; h3: string[] };
+    internalUrls: string[];
+    brokenUrls: string[];
+    imagesWithoutAlt: number;
+    structuredDataBlocks: number;
+    socialMetadata: string[];
+    sitemap: "available" | "missing" | "unavailable";
+  };
+  issues: { id: string; priority: "critical" | "important" | "opportunity"; title: string; impact: string; evidence: string }[];
+  source: "website";
+}
+
 export interface ExecutionReceipt {
   operationId: string;
   intent: string;
@@ -802,6 +860,16 @@ async function postJson<T>(
   }
 }
 
+async function fetchJson<T>(url: string, init: RequestInit): Promise<T | null> {
+  try {
+    const response = await fetch(url, { ...init, headers: buildHeaders(init) });
+    const parsed = (await response.json()) as T;
+    return response.ok ? parsed : parsed;
+  } catch {
+    return null;
+  }
+}
+
 export type GoogleOAuthReturnPath = "/" | "/conexiones" | "/chat";
 
 const GOOGLE_OAUTH_RETURN_CONTEXT_KEY = "departify_google_oauth_return_context";
@@ -1057,6 +1125,18 @@ export const api = {
       `/api/customer-zero/${org}/connections/corporate-email/configure`,
       payload,
     ),
+  configureMarketingConnector: (
+    org: string,
+    toolId: "wordpress" | "shopify",
+    payload: Record<string, string>,
+  ) =>
+    postJson<{
+      organizationId: string;
+      provider: string;
+      accountLabel: string;
+      operational: boolean;
+      error: string | null;
+    }>(`/api/customer-zero/${org}/connections/${toolId}/configure`, payload),
   plan: (org: string, goal: string) =>
     postJson<{ summary: string; items: MarketingWorkItem[]; error?: { message: string } }>(
       `/api/customer-zero/${org}/marketing/work`,
@@ -1194,4 +1274,53 @@ export const api = {
     getJson<{
       tools: { toolId: string; label: string; capability: string; status: string; note?: string }[];
     }>(`/api/departments/marketing/${org}/tools`),
+  dashboards: (org: string, departmentId: string) =>
+    getJson<{
+      organizationId: string;
+      departmentId: string;
+      dashboards: DashboardDefinition[];
+      dashboardCount: number;
+      dashboardLimit: number;
+      remainingSlots: number;
+    }>(`/api/departments/${departmentId}/${org}/dashboards`),
+  dashboardSummary: (org: string) =>
+    getJson<{ dashboardCount: number; dashboardLimit: number }>(`/api/dashboards/${org}`),
+  createDashboard: (org: string, departmentId: string, template?: string) =>
+    postJson<{
+      organizationId: string;
+      dashboard: DashboardDefinition;
+      dashboardCount: number;
+      dashboardLimit: number;
+    }>(`/api/departments/${departmentId}/${org}/dashboards`, template ? { template } : {}),
+  archiveDashboard: (org: string, departmentId: string, dashboardId: string) =>
+    fetchJson<{ organizationId: string; dashboard: DashboardDefinition }>(
+      `/api/departments/${departmentId}/${org}/dashboards/${dashboardId}`,
+      { method: "DELETE" },
+    ),
+  calendar: (org: string, filters?: { departmentId?: string; type?: string; status?: string; from?: string; to?: string }) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters ?? {})) if (value) params.set(key, value);
+    const query = params.toString();
+    return getJson<{
+      organizationId: string;
+      entries: BusinessCalendarEntry[];
+      externalState: "connected" | "disconnected" | "error";
+      sourceCount: number;
+    }>(`/api/calendar/${org}${query ? `?${query}` : ""}`);
+  },
+  seoDepartment: (org: string) =>
+    getJson<{
+      organizationId: string;
+      department: { id: string; name: string; responsible: string; description: string };
+      state: "ready" | "disconnected";
+      website: string | null;
+      tasks: DepartmentTask[];
+      results: DepartmentResult[];
+      capabilities: { websiteAudit: boolean; searchConsole: boolean; analytics: boolean; repositoryRead: boolean };
+    }>(`/api/departments/seo/${org}`),
+  seoAudit: (org: string) =>
+    postJson<{ organizationId: string; task: DepartmentTask; result: DepartmentResult; report: SeoAuditReport }>(
+      `/api/departments/seo/${org}/audit`,
+      {},
+    ),
 };

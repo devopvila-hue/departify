@@ -53,7 +53,26 @@ export type DepartmentWorkCapability =
   | "crm.segments.list"
   | "crm.campaigns.list"
   | "results.publish"
-  | "memory.remember";
+  | "memory.remember"
+  | "marketing.wordpress.connection.test"
+  | "marketing.wordpress.site.read"
+  | "marketing.wordpress.posts.list"
+  | "marketing.wordpress.posts.get"
+  | "marketing.wordpress.posts.create"
+  | "marketing.wordpress.posts.update"
+  | "marketing.wordpress.categories.list"
+  | "marketing.wordpress.tags.list"
+  | "marketing.shopify.connection.test"
+  | "marketing.shopify.shop.read"
+  | "marketing.shopify.products.list"
+  | "marketing.shopify.products.get"
+  | "marketing.shopify.products.create"
+  | "marketing.shopify.products.update"
+  | "marketing.shopify.orders.list"
+  | "marketing.shopify.orders.get"
+  | "marketing.shopify.customers.list"
+  | "seo.audit.website"
+  | "seo.repository.read";
 
 /** Departments of work the model is NOT allowed to promise today. */
 export const UNSUPPORTED_PROMISE_PATTERNS: readonly RegExp[] = [

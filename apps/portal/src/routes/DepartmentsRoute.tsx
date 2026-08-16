@@ -59,6 +59,15 @@ export function DepartmentsRoute() {
     },
   ];
 
+  active.push({
+    id: "seo",
+    name: "SEO",
+    head: { departmentId: "seo", department: "SEO", name: "Responsable de SEO", initials: "SEO", role: "Responsable de SEO" },
+    teamSize: 1,
+    activeTasks: 0,
+    tools: 0,
+  });
+
   const future = [
     { id: "sales", name: "Ventas", status: "Pronto" },
     { id: "finance", name: "Finanzas", status: "Pronto" },
@@ -76,8 +85,8 @@ export function DepartmentsRoute() {
         <p className="dfy-eyebrow">Departamentos</p>
         <h1>Los equipos que trabajan para tu empresa</h1>
         <p className="dfy-hero__lead">
-          Hoy Marketing está operativo. Los demás llegarán. Para hablar
-          con cualquier departamento, usa el chat.
+          Marketing y SEO tienen ya un espacio operativo. Para hablar con
+          cualquier departamento, usa el chat.
         </p>
       </section>
 
@@ -113,9 +122,9 @@ export function DepartmentsRoute() {
               <button
                 type="button"
                 className="dfy-button"
-                onClick={() => navigate("/tareas")}
+                onClick={() => navigate(dept.id === "seo" ? "/seo" : "/tareas")}
               >
-                Ver tareas
+                {dept.id === "seo" ? "Abrir SEO" : "Ver tareas"}
               </button>
               <button
                 type="button"

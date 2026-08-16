@@ -5,6 +5,7 @@ import { useAuth } from "@/app/auth-context";
 import { useOrg } from "@/app/org-context";
 import {
   ApprovalsIcon,
+  CalendarIcon,
   ChatIcon,
   CompanyIcon,
   ConnectionsIcon,
@@ -47,6 +48,7 @@ const SECONDARY: IconEntry[] = [
 const TERTIARY: IconEntryWithBadge[] = [
   { to: "/aprobaciones", label: "Aprobaciones", icon: ApprovalsIcon, badgeKey: "approvals" },
   { to: "/resultados", label: "Resultados", icon: ResultsIcon },
+  { to: "/calendario", label: "Calendario", icon: CalendarIcon },
 ];
 
 const FOOT: IconEntry[] = [
@@ -131,10 +133,7 @@ export function AppShell(props: { companyName?: string; pendingApprovals?: numbe
 
         <ul className="dfy-sidebar__nav dfy-sidebar__nav--foot">{FOOT.map(renderItem)}</ul>
 
-        <p className="dfy-sidebar__foot">
-          Marketing es el departamento activo. Los demás se activarán cuando
-          estén listos.
-        </p>
+        <p className="dfy-sidebar__foot">Marketing y SEO comparten el mismo espacio operativo.</p>
       </nav>
 
       <div className="dfy-shell__main">

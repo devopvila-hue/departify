@@ -7,7 +7,9 @@ import type { ConversationStore } from "../customer-zero/conversation-store.js";
 import type { CompanyDnaStore } from "../customer-zero/company-dna.js";
 import type { InboxStore } from "../customer-zero/inbox-domain.js";
 import type { MarketingService } from "../customer-zero/marketing-service.js";
+import type { MarketingActivityRepository } from "../customer-zero/marketing-repositories.js";
 import type { DepartmentWorkStore } from "../customer-zero/department-work.js";
+import type { DepartmentDashboardStore } from "../customer-zero/department-dashboards.js";
 import type { DepartmentMemoryStore } from "../customer-zero/department-memory.js";
 import type { ConnectorRuntime, ConnectorRuntimeCandidate } from "@departify/connector-runtime";
 
@@ -36,6 +38,8 @@ export interface ServerDeps {
   inbox?: InboxStore;
   /** Durable DepartmentTask/DepartmentResult store. */
   workStore?: DepartmentWorkStore;
+  /** Durable schema-driven dashboard definitions. */
+  dashboardStore?: DepartmentDashboardStore;
   /** Durable department knowledge; the session keeps only a bounded hot cache. */
   departmentMemory?: DepartmentMemoryStore;
   /** Public base URL of the portal, used to build OAuth redirect URIs. */
@@ -44,6 +48,8 @@ export interface ServerDeps {
   engine?: EngineAdapter;
   /** Departify-owned Marketing department service (Sprint ENGINE 03). */
   marketing?: MarketingService;
+  /** Durable Marketing activity/audit repository. */
+  marketingActivity?: MarketingActivityRepository;
   /** Production engine runtime policy (DEPLOY 01). */
   engineRuntimePolicy?: EngineRuntimePolicy;
   /** Enables the experimental native OpenClaw company.context slice. */
@@ -52,4 +58,6 @@ export interface ServerDeps {
   connectorRuntime?: ConnectorRuntime;
   /** Provider candidates selected by capability and the official-first policy. */
   connectorRuntimes?: readonly ConnectorRuntimeCandidate[];
+  /** Tenant-bound WordPress/Shopify runtime. */
+  marketingConnectorRuntime?: ConnectorRuntime;
 }

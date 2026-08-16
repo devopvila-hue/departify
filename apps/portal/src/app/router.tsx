@@ -15,6 +15,9 @@ import { RootRoute } from "@/routes/RootRoute";
 import { SettingsRoute } from "@/routes/SettingsRoute";
 import { ShellGate } from "@/components/ShellGate";
 import { TasksRoute } from "@/routes/TasksRoute";
+import { CalendarRoute } from "@/routes/CalendarRoute";
+import { DepartmentDashboardRoute } from "@/routes/DepartmentDashboardRoute";
+import { SeoRoute } from "@/routes/SeoRoute";
 
 export function RouteErrorFallback() {
   const navigate = useNavigate();
@@ -77,9 +80,15 @@ export const router = createBrowserRouter([
       { path: "/conexiones", element: <ConnectionsRoute /> },
       { path: "/aprobaciones", element: <DecisionsRoute /> },
       { path: "/resultados", element: <ResultsRoute /> },
+      { path: "/calendario", element: <CalendarRoute /> },
       { path: "/empresa", element: <CompanyRoute /> },
       { path: "/configuracion", element: <SettingsRoute /> },
       { path: "/marketing", element: <MarketingRoute /> },
+      { path: "/marketing/dashboards", element: <DepartmentDashboardRoute departmentId="marketing" /> },
+      { path: "/marketing/calendario", element: <CalendarRoute departmentId="marketing" /> },
+      { path: "/seo", element: <SeoRoute /> },
+      { path: "/seo/dashboards", element: <DepartmentDashboardRoute departmentId="seo" /> },
+      { path: "/seo/calendario", element: <CalendarRoute departmentId="seo" /> },
       { path: "/decisiones", element: <DecisionsRoute /> },
     ],
   },

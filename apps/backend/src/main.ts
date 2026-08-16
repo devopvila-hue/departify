@@ -14,6 +14,7 @@ import { SupabaseToolStateStore } from "./customer-zero/supabase-tool-state-stor
 import { SupabaseConversationStore } from "./customer-zero/supabase-conversation-store.js";
 import { SupabaseInboxStore } from "./customer-zero/supabase-inbox-store.js";
 import { SupabaseDepartmentWorkStore } from "./customer-zero/supabase-department-work-store.js";
+import { SupabaseDepartmentDashboardStore } from "./customer-zero/department-dashboards.js";
 import { SupabaseCompanyDnaStore } from "./customer-zero/supabase-company-dna-store.js";
 import { SupabaseDepartmentMemoryStore } from "./customer-zero/department-memory.js";
 import {
@@ -48,6 +49,11 @@ import {
   createActivepiecesConnectorRuntime,
   createConnectorRuntimeCandidates,
 } from "./customer-zero/activepieces-connector.js";
+import {
+  MarketingConnectorRuntime,
+  SupabaseMarketingConnectorStore,
+  setMarketingConnectorStore,
+} from "./customer-zero/marketing-connector.js";
 
 // Load the local environment file when present. The backend does not ship
 // secrets; local development reads them from `.env` at the repo root.
@@ -74,6 +80,7 @@ deps.connectorRuntime = createActivepiecesConnectorRuntime((event) => {
 deps.connectorRuntimes = createConnectorRuntimeCandidates((event) => {
   console.log("[connector-runtime]", JSON.stringify(event));
 });
+deps.marketingConnectorRuntime = new MarketingConnectorRuntime();
 
 // Supabase auth identity + tenant boundary (resolved first so the Marketing
 // durable repositories can be wired). In production a missing auth config is
@@ -89,6 +96,8 @@ try {
   deps.conversations = new SupabaseConversationStore(supabaseAuthConfig);
   deps.inbox = new SupabaseInboxStore(supabaseAuthConfig);
   deps.workStore = new SupabaseDepartmentWorkStore(supabaseAuthConfig);
+  deps.dashboardStore = new SupabaseDepartmentDashboardStore(supabaseAuthConfig);
+  deps.marketingActivity = new SupabaseMarketingActivityRepository(supabaseAuthConfig);
   // Durable canonical Company DNA (Customer Zero P0). Company
   // understanding MUST survive Railway backend restarts — the readiness
   // gate is evaluated against this store, never against process memory.
@@ -123,6 +132,8 @@ try {
   console.log(
     `[corporate-email] durable Supabase account store wired`,
   );
+  setMarketingConnectorStore(new SupabaseMarketingConnectorStore(supabaseAuthConfig));
+  console.log(`[marketing-connectors] durable Supabase credential store wired`);
 } catch (cause) {
   const message = cause instanceof Error ? cause.message : String(cause);
   if (config.environment === "production") {
@@ -176,7 +187,7 @@ try {
           // session (created during onboarding).
           reportRepository: createLazyReportRepository(),
           objectives: new SupabaseMarketingObjectiveRepository(supabaseAuthConfig),
-          activity: new SupabaseMarketingActivityRepository(supabaseAuthConfig),
+          ...(deps.marketingActivity ? { activity: deps.marketingActivity } : {}),
           approvals: new SupabaseMarketingApprovalRepository(supabaseAuthConfig),
           ...(deps.companyDna ? { companyDna: deps.companyDna } : {}),
           ...(deps.workStore ? { workStore: deps.workStore } : {}),

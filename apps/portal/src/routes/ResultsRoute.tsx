@@ -31,6 +31,12 @@ export function ResultsRoute() {
         setDashboardLimit(data.dashboardLimit ?? 5);
       }
     });
+    void api.dashboardSummary(organizationId).then((data) => {
+      if (data) {
+        setDashboardCount(data.dashboardCount);
+        setDashboardLimit(data.dashboardLimit);
+      }
+    });
   }, [organizationId]);
 
   const overviewResults = overview?.company?.results ?? overview?.results ?? [];

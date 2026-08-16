@@ -5,6 +5,7 @@ import { api, type MarketingDepartmentStatus } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import { Badge, Card, EmptyState, HeadBadge } from "@/components/primitives";
 import { readable } from "@/app/readable";
+import { DepartmentWorkspaceNav } from "@/components/DepartmentWorkspaceNav";
 
 /**
  * Marketing — department detail (Sprint ENGINE 04).
@@ -179,6 +180,7 @@ export function MarketingRoute() {
             {statusLabel}
           </Badge>
         </div>
+        <DepartmentWorkspaceNav departmentId="marketing" />
         {department.activeObjective && (
           <p className="dfy-hero__goal">
             Objetivo: <strong>{department.activeObjective.title}</strong> ·{" "}

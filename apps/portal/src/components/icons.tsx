@@ -90,6 +90,16 @@ export function ResultsIcon(props: IconProps): ReactElement {
   );
 }
 
+export function CalendarIcon(props: IconProps): ReactElement {
+  return (
+    <IconBase {...props}>
+      <rect x="4" y="5" width="16" height="15" rx="2" />
+      <path d="M8 3v4M16 3v4M4 10h16" />
+      <path d="M8 14h.01M12 14h.01M16 14h.01M8 17h.01M12 17h.01" />
+    </IconBase>
+  );
+}
+
 export function CompanyIcon(props: IconProps): ReactElement {
   return (
     <IconBase {...props}>
