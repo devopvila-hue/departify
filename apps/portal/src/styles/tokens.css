@@ -788,7 +788,7 @@ select {
 
 .dfy-page {
   display: grid;
-  gap: 20px;
+  gap: 16px;
   margin: 0 auto;
   width: 100%;
   max-width: 1080px;
@@ -840,7 +840,7 @@ select {
       var(--dfy-color-surface) 0%,
       var(--dfy-color-background) 100%
     );
-  padding: clamp(20px, 4vw, 32px);
+  padding: clamp(18px, 3vw, 24px);
 }
 
 .dfy-hero h1 {
@@ -926,7 +926,7 @@ select {
   border: 1px solid var(--dfy-color-border);
   border-radius: var(--dfy-radius-lg);
   background: var(--dfy-color-surface);
-  padding: 20px 22px;
+  padding: 16px 18px;
 }
 
 .dfy-card__head {
@@ -934,7 +934,7 @@ select {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .dfy-card__head h2 {
@@ -946,7 +946,7 @@ select {
 
 .dfy-grid {
   display: grid;
-  gap: 20px;
+  gap: 16px;
   grid-template-columns: 1fr;
 }
 
@@ -2224,6 +2224,16 @@ select {
 
 .dfy-control-plane .dfy-card {
   padding: 16px 18px;
+}
+
+@media (min-width: 860px) {
+  .dfy-settings-page {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dfy-settings-page > .dfy-hero {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 600px) {

@@ -30,7 +30,7 @@ export function SettingsRoute() {
   const connectedEmail = emailCards.find((card) => card.state === "connected");
 
   return (
-    <div className="dfy-page" data-testid="settings-route">
+    <div className="dfy-page dfy-settings-page" data-testid="settings-route">
       <section className="dfy-hero">
         <p className="dfy-eyebrow">Configuración</p>
         <h1>Preferencias operativas</h1>

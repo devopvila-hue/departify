@@ -133,7 +133,7 @@ export function AppShell(props: { companyName?: string; pendingApprovals?: numbe
 
         <ul className="dfy-sidebar__nav dfy-sidebar__nav--foot">{FOOT.map(renderItem)}</ul>
 
-        <p className="dfy-sidebar__foot">Marketing y SEO comparten el mismo espacio operativo.</p>
+        <p className="dfy-sidebar__foot">Marketing y SEO trabajan para tus objetivos.</p>
       </nav>
 
       <div className="dfy-shell__main">
