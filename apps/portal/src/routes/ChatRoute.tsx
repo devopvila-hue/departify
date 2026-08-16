@@ -61,8 +61,14 @@ export function ChatRoute() {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   /** Invalidates in-flight loads/turns when the authorized organization changes. */
   const loadGenerationRef = useRef(0);
+  const followRequestedRef = useRef(false);
   const [followRequested, setFollowRequested] = useState(false);
   const [followingLatest, setFollowingLatest] = useState(true);
+
+  function requestFollowToLatest(): void {
+    followRequestedRef.current = true;
+    setFollowRequested(true);
+  }
 
   const focusFromUrl = useMemo(() => {
     const params = new URLSearchParams(location.search);
@@ -92,7 +98,7 @@ export function ChatRoute() {
       // pass after the transcript has been committed; the effect below then
       // moves the existing scroller to the bottom without fighting streaming
       // or the user's later manual scroll.
-      setFollowRequested(true);
+      requestFollowToLatest();
     },
     [organizationId],
   );
@@ -108,6 +114,8 @@ export function ChatRoute() {
     setCurrentSummary(null);
     setHasOlderMessages(false);
     setOlderCursor(null);
+    followRequestedRef.current = false;
+    setFollowRequested(false);
     setOpening(true);
     setError(null);
     setBusy(false);
@@ -178,9 +186,16 @@ export function ChatRoute() {
   useEffect(() => {
     const node = scrollerRef.current;
     if (!node) return;
-    function onScroll() {
+    function onScroll(fromUser = true) {
       const el = node;
       if (!el) return;
+      // An explicit follow is cancellable. If the CEO moves the viewport
+      // before the scheduled layout pass runs, that movement is intent and
+      // must win over the pending follow request.
+      if (fromUser && followRequestedRef.current) {
+        followRequestedRef.current = false;
+        setFollowRequested(false);
+      }
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
       // < 80px from the bottom counts as "near".
       const nearLatest = distance < 80;
@@ -192,9 +207,10 @@ export function ChatRoute() {
         void loadOlderMessages();
       }
     }
-    node.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
-    return () => node.removeEventListener("scroll", onScroll);
+    const handleScroll = () => onScroll(true);
+    node.addEventListener("scroll", handleScroll, { passive: true });
+    onScroll(false);
+    return () => node.removeEventListener("scroll", handleScroll);
   }, [hasOlderMessages, loadingOlder, loadOlderMessages]);
 
   // Force scroll on send OR when the user clicks "Volver al último mensaje".
@@ -203,9 +219,11 @@ export function ChatRoute() {
     const node = scrollerRef.current;
     if (!node) return;
     const follow = () => {
+      if (!followRequestedRef.current) return;
       node.scrollTop = Math.max(0, node.scrollHeight - node.clientHeight);
       stickToBottomRef.current = true;
       setFollowingLatest(true);
+      followRequestedRef.current = false;
       setFollowRequested(false);
     };
     // Wait for the history DOM to be laid out before reading scrollHeight.
@@ -216,7 +234,7 @@ export function ChatRoute() {
     }
     const timeout = window.setTimeout(follow, 0);
     return () => window.clearTimeout(timeout);
-  }, [followRequested, transcript, events]);
+  }, [followRequested]);
 
   // Auto-follow passive updates only while the CEO is near the bottom.
   useEffect(() => {
@@ -350,7 +368,7 @@ export function ChatRoute() {
     // Sending a new message always returns focus to the latest exchange,
     // even if the CEO was reading older history. Distinct from passive
     // updates, which respect the manual scroll override.
-    setFollowRequested(true);
+    requestFollowToLatest();
 
     // When no conversation is active, route through the same backend
     // endpoint that auto-creates the durable conversation on first use.
@@ -482,7 +500,7 @@ export function ChatRoute() {
             className="dfy-chat-jump-latest"
             data-testid="chat-jump-latest"
             onClick={() => {
-              setFollowRequested(true);
+              requestFollowToLatest();
               stickToBottomRef.current = true;
               setFollowingLatest(true);
             }}

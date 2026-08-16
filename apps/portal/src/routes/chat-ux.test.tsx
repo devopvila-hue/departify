@@ -347,6 +347,47 @@ describe("Central Chat UX P0 — chat interaction", () => {
     expect(el.scrollTop).toBe(100);
   });
 
+  it("S4b. streaming completion respects a manual scroll up", async () => {
+    let resolveReply: ((response: Response) => void) | undefined;
+    const pendingReply = new Promise<Response>((resolve) => {
+      resolveReply = resolve;
+    });
+    mockChatFetch();
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+        if (String(url).includes("/conversations/conv-1/messages") && init?.method === "POST") {
+          return pendingReply;
+        }
+        return baseFetch(url, init);
+      }),
+    );
+
+    const { container } = renderChat();
+    await screen.findByText(/elvira toma la iniciativa/i);
+    const el = scroller(container);
+    setupScrollMetrics(el, 900, 300);
+    const input = await screen.findByLabelText(/mensaje para departify/i);
+    fireEvent.change(input, { target: { value: "sigue la respuesta" } });
+    fireEvent.click(screen.getByRole("button", { name: /enviar/i }));
+    await screen.findByText(/departify está pensando/i);
+
+    // The CEO can move back into the history while the answer is pending.
+    scrollTo(el, 100);
+    await waitFor(() => expect(screen.getByTestId("chat-jump-latest")).toBeInTheDocument());
+
+    resolveReply?.({
+      ok: true,
+      status: 200,
+      json: async () => assistantReply,
+    } as Response);
+
+    await screen.findByText(/he encontrado 2 correos/i);
+    expect(el.scrollTop).toBe(100);
+    expect(screen.getByTestId("chat-jump-latest")).toBeInTheDocument();
+  });
+
   it("S5. an existing conversation restores the viewport to the latest message", async () => {
     const { container } = renderChat();
     await screen.findByText(/elvira toma la iniciativa/i);
