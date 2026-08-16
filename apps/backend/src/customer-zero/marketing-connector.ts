@@ -231,6 +231,24 @@ export interface MarketingProbeResult {
   readonly error: string | null;
 }
 
+/**
+ * Provider errors stay in server logs/store for diagnostics, but the portal
+ * receives business-safe copy. In particular, never expose HTTP status text,
+ * response bodies, or credential-shaped values to the customer.
+ */
+export function humanizeMarketingConnectorError(
+  provider: MarketingConnectorProvider,
+  error: string | null | undefined,
+): string {
+  const value = (error ?? "").toLocaleLowerCase();
+  if (/401|403|unauthori[sz]ed|forbidden|invalid token|authentication/.test(value)) {
+    return provider === "wordpress"
+      ? "No hemos podido validar esta credencial. Comprueba que el usuario tenga permisos y que has usado una contraseña de aplicación completa."
+      : "No hemos podido validar esta credencial. Comprueba el nombre de la tienda, el token y los permisos de la app.";
+  }
+  return "No hemos podido validar esta credencial. Comprueba que la has copiado completa y vuelve a intentarlo.";
+}
+
 export async function probeMarketingCredentials(
   credentials: MarketingConnectorCredentials,
   signal?: AbortSignal,

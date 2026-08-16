@@ -50,6 +50,35 @@ export type ConnectionCategory =
   | "team"
   | "other";
 
+/** How the current product obtains a provider connection. */
+export type ConnectionMethod =
+  | "oauth"
+  | "manual"
+  | "platform_managed"
+  | "not_configured";
+
+export type CredentialFieldType = "text" | "url" | "password";
+
+export interface CredentialFieldDefinition {
+  readonly id: string;
+  readonly label: string;
+  readonly type: CredentialFieldType;
+  readonly placeholder?: string;
+  readonly secret?: boolean;
+  readonly helpText?: string;
+}
+
+/** Safe, build-time metadata for a customer-owned credential flow. */
+export interface CredentialHelpDefinition {
+  readonly whatYouNeed: string;
+  readonly steps: readonly string[];
+  readonly fields: readonly CredentialFieldDefinition[];
+  readonly actionLabel: string;
+  readonly actionUrl: string;
+  readonly docsUrl?: string;
+  readonly note?: string;
+}
+
 export interface ConnectionDefinition {
   readonly id: string;
   readonly name: string;
@@ -64,11 +93,15 @@ export interface ConnectionDefinition {
   readonly capabilities: readonly CapabilityDefinition[];
   /** Whether the portal can start a real connection handshake today. */
   readonly connectable?: boolean;
+  /** Connection path; never inferred from customer credentials in the UI. */
+  readonly connectionMethod?: ConnectionMethod;
   /** Where configuration originates when present (e.g. "env:mautic"). */
   readonly configSourceLabel?: string;
   /** Short business description surfaced under the card title. */
   readonly descriptionEs?: string;
   readonly descriptionEn?: string;
+  /** Customer-owned setup instructions, never used for platform secrets. */
+  readonly credentialHelp?: CredentialHelpDefinition;
 }
 
 export interface ConnectionInstance {
@@ -108,6 +141,7 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
       { id: "repository.write", nameEs: "Preparar cambios autorizados", nameEn: "Prepare authorized changes" },
     ],
     configSourceLabel: "oauth:github",
+    connectionMethod: "oauth",
     connectable: true,
     descriptionEs: "Conecta el proyecto donde está publicada tu web para localizar y preparar correcciones.",
     descriptionEn: "Connect the project hosting your website to locate and prepare fixes.",
@@ -128,6 +162,7 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
       { id: "email.organize", nameEs: "Organizar correo", nameEn: "Organize email" },
     ],
     configSourceLabel: "env:hostinger_email_mcp",
+    connectionMethod: "platform_managed",
     descriptionEs: "Tu buzón de empresa.",
     descriptionEn: "Your business mailbox.",
   },
@@ -150,6 +185,7 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
       { id: "crm.activity.read", nameEs: "Actividad de un contacto", nameEn: "Contact activity" },
     ],
     configSourceLabel: "env:mautic",
+    connectionMethod: "platform_managed",
   },
   {
     id: "gmail",
@@ -184,6 +220,7 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
       { id: "email.campaign.execute", nameEs: "Ejecutar campañas", nameEn: "Execute campaigns" },
     ],
     configSourceLabel: "env:resend",
+    connectionMethod: "platform_managed",
   },
   {
     id: "google_analytics",
@@ -289,6 +326,7 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
       { id: "marketing.social.publish", nameEs: "Preparar publicaciones", nameEn: "Prepare social posts" },
     ],
     configSourceLabel: "oauth:meta_business",
+    connectionMethod: "oauth",
     connectable: true,
     descriptionEs: "Facebook, Instagram y campañas de Meta, con acciones de pago sujetas a aprobación.",
     descriptionEn: "Facebook, Instagram and Meta campaigns, with paid actions subject to approval.",
@@ -457,6 +495,7 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
       { id: "marketing.video.prepare", nameEs: "Preparar contenido de vídeo", nameEn: "Prepare video content" },
     ],
     configSourceLabel: "oauth:google",
+    connectionMethod: "oauth",
     connectable: true,
     descriptionEs: "Canal y datos de YouTube para preparar y analizar contenido.",
     descriptionEn: "YouTube channel and data for content preparation and analysis.",
@@ -479,8 +518,27 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
       { id: "marketing.wordpress.tags.list", nameEs: "Consultar etiquetas", nameEn: "Read tags" },
     ],
     connectable: true,
+    connectionMethod: "manual",
     descriptionEs: "Consulta y prepara publicaciones de tu sitio WordPress.",
     descriptionEn: "Read and prepare posts on your WordPress site.",
+    credentialHelp: {
+      whatYouNeed: "La URL HTTPS de tu sitio, un usuario de WordPress y una contraseña de aplicación.",
+      steps: [
+        "Entra en wp-admin con el usuario que hará la conexión.",
+        "Ve a Usuarios → Perfil.",
+        "En Contraseñas de aplicación, crea una contraseña para Departify.",
+        "Copia la contraseña: WordPress solo la muestra una vez.",
+        "Vuelve aquí y pega los datos para comprobar la conexión.",
+      ],
+      fields: [
+        { id: "websiteUrl", label: "Dirección del sitio", type: "url", placeholder: "https://tu-sitio.com" },
+        { id: "username", label: "Usuario", type: "text", placeholder: "admin" },
+        { id: "password", label: "Contraseña de aplicación", type: "password", secret: true, placeholder: "xxxx xxxx xxxx xxxx" },
+      ],
+      actionLabel: "Abrir guía oficial ↗",
+      actionUrl: "https://developer.wordpress.org/advanced-administration/security/application-passwords/",
+      note: "Usa una contraseña de aplicación, no la contraseña principal de WordPress.",
+    },
   },
   {
     id: "shopify",
@@ -501,8 +559,25 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
       { id: "marketing.shopify.products.update", nameEs: "Actualizar productos", nameEn: "Update products" },
     ],
     connectable: true,
+    connectionMethod: "manual",
     descriptionEs: "Consulta y prepara productos de tu tienda Shopify.",
     descriptionEn: "Read and prepare products in your Shopify store.",
+    credentialHelp: {
+      whatYouNeed: "El subdominio de tu tienda y un token Admin API de una app personalizada compatible.",
+      steps: [
+        "Si ya tienes una app personalizada creada antes del cambio de Shopify, abre su configuración.",
+        "Copia el token Admin API de esa app.",
+        "Escribe el subdominio de tu tienda, sin https:// ni .myshopify.com.",
+        "Vuelve aquí y pega el token para comprobar la conexión.",
+      ],
+      fields: [
+        { id: "shopName", label: "Nombre de la tienda", type: "text", placeholder: "mi-tienda" },
+        { id: "adminToken", label: "Token Admin API", type: "password", secret: true, placeholder: "shpat_…" },
+      ],
+      actionLabel: "Abrir guía oficial ↗",
+      actionUrl: "https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/generate-app-access-tokens-admin",
+      note: "Las apps nuevas del Dev Dashboard usan un intercambio de token distinto. Esta conexión acepta actualmente tokens Admin API de apps personalizadas compatibles.",
+    },
   },
   {
     id: "etsy",

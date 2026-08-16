@@ -2980,6 +2980,22 @@ select {
   .dfy-drawer { width: 100%; border-radius: 15px; padding: 20px; }
 }
 
+.dfy-credential-guide__instructions { display: grid; gap: 8px; margin-bottom: 18px; }
+.dfy-credential-guide__instructions h3 { margin: 4px 0 0; font-size: .9rem; }
+.dfy-credential-guide__instructions p { margin: 0; color: var(--dfy-color-muted, #b5bfbd); font-size: .88rem; line-height: 1.5; }
+.dfy-credential-guide__instructions ol { display: grid; gap: 7px; margin: 0; padding-left: 22px; color: var(--dfy-color-muted, #b5bfbd); font-size: .88rem; line-height: 1.45; }
+.dfy-credential-guide__links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 5px; }
+.dfy-credential-guide__links a { color: var(--dfy-color-accent, #5ee4a2); font-size: .84rem; font-weight: 700; }
+.dfy-credential-guide__fields { display: grid; gap: 2px; }
+.dfy-credential-guide__input-wrap { display: flex; align-items: stretch; gap: 7px; }
+.dfy-credential-guide__input-wrap input { min-width: 0; flex: 1; }
+.dfy-credential-guide__toggle { flex: 0 0 auto; padding-inline: 10px; }
+@media (max-width: 620px) {
+  .dfy-credential-guide__input-wrap { display: grid; }
+  .dfy-credential-guide__toggle { justify-self: start; }
+  .dfy-credential-guide__links { display: grid; }
+}
+
 /* /conexiones — compact lifecycle surface. */
 .dfy-connections-page { max-width: 1160px; }
 .dfy-connections-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 30px; }

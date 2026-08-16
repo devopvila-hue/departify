@@ -4,9 +4,11 @@ import { useLocation } from "react-router-dom";
 import {
   api,
   rememberGoogleOAuthReturnPath,
+  type CredentialHelpDefinition,
   type ToolConnectionView,
 } from "@/app/api";
 import { useOrg } from "@/app/org-context";
+import { CredentialSetupGuide } from "@/components/CredentialSetupGuide";
 
 type SurfaceState = ToolConnectionView["state"] | "available";
 type Surface = ToolConnectionView & {
@@ -29,6 +31,7 @@ export function ConnectionsRoute() {
   const [configuring, setConfiguring] = useState<Surface | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [configError, setConfigError] = useState<string | null>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
 
   const load = useCallback(async () => {
@@ -64,8 +67,9 @@ export function ConnectionsRoute() {
 
   async function startConnect(surface: Surface, reconnect = false) {
     if (!organizationId || !surface.connectToolId || surface.unavailableReason) return;
-    if (surface.connectToolId === "wordpress" || surface.connectToolId === "shopify") {
+    if (surface.connectionMethod === "manual" && surface.credentialHelp) {
       setSelected(null);
+      setConfigError(null);
       setConfiguring(surface);
       return;
     }
@@ -217,12 +221,16 @@ export function ConnectionsRoute() {
         </div>
       )}
       {configuring && organizationId && (
-        <MarketingConfigurationDialog
-          surface={configuring}
+        <CredentialSetupGuide
+          providerName={configuring.name}
+          logo={<ConnectionLogo surface={configuring} />}
+          help={configuring.credentialHelp!}
           busy={busy === configuring.surfaceId}
+          error={configError}
           onClose={() => setConfiguring(null)}
           onSubmit={async (payload) => {
             setBusy(configuring.surfaceId);
+            setConfigError(null);
             setNotice(null);
             try {
               const result = await api.configureMarketingConnector(organizationId, configuring.connectToolId as "wordpress" | "shopify", payload);
@@ -231,10 +239,10 @@ export function ConnectionsRoute() {
                 setConfiguring(null);
                 await load();
               } else {
-                setNotice(result?.error ?? `No hemos podido verificar ${configuring.name}.`);
+                setConfigError(result?.error ?? `No hemos podido verificar ${configuring.name}.`);
               }
             } catch {
-              setNotice(`No hemos podido verificar ${configuring.name}.`);
+              setConfigError(`No hemos podido verificar ${configuring.name}.`);
             } finally {
               setBusy(null);
             }
@@ -387,6 +395,13 @@ function normalizeConnectionView(entry: unknown): ToolConnectionView | null {
   const configSource = textValue(raw.configSource);
   const verifiedAt = textValue(raw.verifiedAt);
   const blockedReason = textValue(raw.blockedReason);
+  const connectionMethod = raw.connectionMethod === "oauth"
+    || raw.connectionMethod === "manual"
+    || raw.connectionMethod === "platform_managed"
+    || raw.connectionMethod === "not_configured"
+    ? raw.connectionMethod
+    : undefined;
+  const credentialHelp = isCredentialHelp(raw.credentialHelp) ? raw.credentialHelp : undefined;
 
   return {
     toolId,
@@ -411,7 +426,26 @@ function normalizeConnectionView(entry: unknown): ToolConnectionView | null {
       : null,
     ...(verifiedAt ? { verifiedAt } : {}),
     ...(blockedReason ? { blockedReason } : {}),
+    ...(connectionMethod ? { connectionMethod } : {}),
+    ...(credentialHelp ? { credentialHelp } : {}),
   };
+}
+
+function isCredentialHelp(value: unknown): value is CredentialHelpDefinition {
+  if (!value || typeof value !== "object") return false;
+  const raw = value as Record<string, unknown>;
+  return typeof raw.whatYouNeed === "string"
+    && Array.isArray(raw.steps) && raw.steps.every((step) => typeof step === "string")
+    && Array.isArray(raw.fields)
+    && raw.fields.every((field) => {
+      if (!field || typeof field !== "object") return false;
+      const item = field as Record<string, unknown>;
+      return typeof item.id === "string"
+        && typeof item.label === "string"
+        && (item.type === "text" || item.type === "url" || item.type === "password");
+    })
+    && typeof raw.actionLabel === "string"
+    && typeof raw.actionUrl === "string";
 }
 
 function compareSurfaces(a: Surface, b: Surface): number {
@@ -425,7 +459,15 @@ function compareSurfaces(a: Surface, b: Surface): number {
 }
 
 function surfaceFrom(entry: ToolConnectionView): Surface {
-  const connectable = entry.toolId === "gmail" || entry.toolId === "google_calendar" || entry.toolId === "google_drive" || entry.toolId === "mautic" || entry.toolId === "ticktick" || entry.toolId === "meta_ads" || entry.toolId === "wordpress" || entry.toolId === "shopify";
+  const connectable = entry.connectionMethod === "manual"
+    || entry.toolId === "gmail"
+    || entry.toolId === "google_calendar"
+    || entry.toolId === "google_drive"
+    || entry.toolId === "mautic"
+    || entry.toolId === "ticktick"
+    || entry.toolId === "meta_ads"
+    || entry.toolId === "wordpress"
+    || entry.toolId === "shopify";
   return {
     ...entry,
     surfaceId: entry.toolId,
@@ -437,46 +479,6 @@ function surfaceFrom(entry: ToolConnectionView): Surface {
         : "Esta conexión aún no está disponible para configurarse desde el portal."
       : undefined,
   };
-}
-
-function MarketingConfigurationDialog(props: {
-  surface: Surface;
-  busy: boolean;
-  onClose: () => void;
-  onSubmit: (payload: Record<string, string>) => Promise<void>;
-}) {
-  const wordpress = props.surface.connectToolId === "wordpress";
-  const [websiteUrl, setWebsiteUrl] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [shopName, setShopName] = useState("");
-  const [adminToken, setAdminToken] = useState("");
-  return (
-    <div className="dfy-overlay dfy-overlay--front" role="presentation">
-      <section className="dfy-dialog dfy-manage-dialog" role="dialog" aria-modal="true" aria-labelledby="marketing-config-title">
-        <div className="dfy-dialog__header">
-          <div><h2 id="marketing-config-title">Conectar {props.surface.name}</h2><p>Los datos se guardan de forma segura y se comprueban antes de activar la conexión.</p></div>
-          <button type="button" className="dfy-icon-button" aria-label="Cerrar configuración" onClick={props.onClose}>×</button>
-        </div>
-        {wordpress ? (
-          <>
-            <label className="dfy-search-field"><span>Dirección del sitio</span><input type="url" value={websiteUrl} onChange={(event) => setWebsiteUrl(event.target.value)} placeholder="https://tu-sitio.com" /></label>
-            <label className="dfy-search-field"><span>Usuario</span><input value={username} onChange={(event) => setUsername(event.target.value)} /></label>
-            <label className="dfy-search-field"><span>Contraseña o contraseña de aplicación</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
-          </>
-        ) : (
-          <>
-            <label className="dfy-search-field"><span>Nombre de la tienda</span><input value={shopName} onChange={(event) => setShopName(event.target.value)} placeholder="mi-tienda" /></label>
-            <label className="dfy-search-field"><span>Token de Admin API</span><input type="password" value={adminToken} onChange={(event) => setAdminToken(event.target.value)} /></label>
-          </>
-        )}
-        <div className="dfy-dialog__actions">
-          <button type="button" className="dfy-button dfy-button--ghost" onClick={props.onClose}>Cancelar</button>
-          <button type="button" className="dfy-button" disabled={props.busy} onClick={() => void props.onSubmit(wordpress ? { websiteUrl, username, password } : { shopName, adminToken })}>{props.busy ? "Verificando…" : "Verificar conexión"}</button>
-        </div>
-      </section>
-    </div>
-  );
 }
 
 function metaSurface(source: ToolConnectionView | null, surfaceId: "facebook" | "instagram", name: string, description: string, grants: string[]): Surface {

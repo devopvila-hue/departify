@@ -140,6 +140,8 @@ import {
   getConnectionDefinition,
   renderConnectionCard,
   listAvailableCapabilitiesForOrg,
+  type ConnectionDefinition,
+  type ConnectionMethod,
   type ConnectionCardView,
 } from "../../customer-zero/connections-domain.js";
 import { isCapabilityAvailable } from "../../customer-zero/capability-registry.js";
@@ -148,6 +150,7 @@ import {
   apiVersionForShopify,
   capabilitiesForMarketingProvider,
   getMarketingConnectorStore,
+  humanizeMarketingConnectorError,
   probeMarketingCredentials,
   resolveMarketingConnectorCapability,
   type MarketingConnectorCredentials,
@@ -864,7 +867,15 @@ export async function registerCustomerZeroV2Routes(
           ...(probe.error ? { lastError: probe.error } : {}),
           updatedAt: now,
         });
-        return { organizationId, provider, available: probe.operational, state: probe.operational ? "connected" : "needs_attention", message: probe.error ?? "Conexión verificada." };
+        return {
+          organizationId,
+          provider,
+          available: probe.operational,
+          state: probe.operational ? "connected" : "needs_attention",
+          message: probe.operational
+            ? "Conexión verificada."
+            : humanizeMarketingConnectorError(record.credentials.provider, probe.error),
+        };
       }
       if (provider !== "mautic") {
         return reply.code(404).send({ error: "unsupported_provider" });
@@ -2236,7 +2247,9 @@ export async function registerCustomerZeroV2Routes(
         provider: credentials.provider,
         accountLabel: probe.accountLabel,
         operational: probe.operational,
-        error: probe.error,
+        error: probe.operational
+          ? null
+          : humanizeMarketingConnectorError(credentials.provider, probe.error),
       });
     },
   );
@@ -7449,6 +7462,25 @@ export interface ToolConnectionView {
   readonly action: "prepare" | "connect" | "verify" | "retry" | null;
   readonly verifiedAt?: string;
   readonly blockedReason?: string;
+  /** How the customer can obtain this connection, if at all. */
+  readonly connectionMethod?: ConnectionMethod;
+  /** Declarative customer-owned setup instructions; absent for OAuth/platform config. */
+  readonly credentialHelp?: ConnectionDefinition["credentialHelp"];
+}
+
+function connectionMethodFor(
+  tool: ToolDescriptor,
+  definition: ConnectionDefinition | undefined,
+): ConnectionMethod {
+  if (definition?.connectionMethod) return definition.connectionMethod;
+  if (definition?.credentialHelp) return "manual";
+  if (definition?.configSourceLabel?.startsWith("oauth:")) return "oauth";
+  if (definition?.configSourceLabel?.startsWith("env:")) return "platform_managed";
+  if (tool.authorizationEndpoint) return "oauth";
+  if (tool.requiredCredentials.some((credential) => /OAUTH|_APP_ID$|_APP_SECRET$/.test(credential))) {
+    return "platform_managed";
+  }
+  return "not_configured";
 }
 
 function safeRequiredConfigText(value: unknown, field: string): string {
@@ -7477,6 +7509,7 @@ async function buildCatalogConnectionViews(
   return TOOL_CATALOG.map((tool) => {
     const durable = durableByTool.get(tool.id);
     const definition = CONNECTION_DEFINITIONS.find((entry) => entry.id === tool.id);
+    const connectionMethod = connectionMethodFor(tool, definition);
     const catalogCapabilities = definition?.capabilities.map((entry) => entry.id) ?? [];
     const connectedCapabilities = durable
       ? [...(durable.grantedCapabilities ?? [])]
@@ -7516,6 +7549,8 @@ async function buildCatalogConnectionViews(
         hasState: false,
         humanLabel: t(locale, "Disponible", "Available"),
         action: "prepare",
+        connectionMethod,
+        ...(definition?.credentialHelp ? { credentialHelp: definition.credentialHelp } : {}),
       };
     }
     const lifecycle: ToolLifecycleStatus = connection.lifecycle;
@@ -7556,6 +7591,8 @@ async function buildCatalogConnectionViews(
       action: catalogAction(tool, consolidatedLifecycle),
       ...(connection.verifiedAt ? { verifiedAt: connection.verifiedAt } : {}),
       ...(connection.blockedReason ? { blockedReason: connection.blockedReason } : {}),
+      connectionMethod,
+      ...(definition?.credentialHelp ? { credentialHelp: definition.credentialHelp } : {}),
     };
   });
 }

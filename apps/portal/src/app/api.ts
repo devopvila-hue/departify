@@ -40,6 +40,28 @@ export type ToolDomain =
   | "marketing"
   | "team";
 
+export type ConnectionMethod = "oauth" | "manual" | "platform_managed" | "not_configured";
+export type CredentialFieldType = "text" | "url" | "password";
+
+export interface CredentialFieldDefinition {
+  id: string;
+  label: string;
+  type: CredentialFieldType;
+  placeholder?: string;
+  secret?: boolean;
+  helpText?: string;
+}
+
+export interface CredentialHelpDefinition {
+  whatYouNeed: string;
+  steps: string[];
+  fields: CredentialFieldDefinition[];
+  actionLabel: string;
+  actionUrl: string;
+  docsUrl?: string;
+  note?: string;
+}
+
 export interface ToolConnectionView {
   toolId: string;
   label: string;
@@ -63,6 +85,8 @@ export interface ToolConnectionView {
   action: "prepare" | "connect" | "verify" | "retry" | null;
   verifiedAt?: string;
   blockedReason?: string;
+  connectionMethod?: ConnectionMethod;
+  credentialHelp?: CredentialHelpDefinition;
 }
 
 /** Customer Zero 01 — five-state connection card view. */
