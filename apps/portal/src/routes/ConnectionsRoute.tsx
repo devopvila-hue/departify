@@ -54,6 +54,8 @@ const CANONICAL_CONNECTION_NAMES: Record<string, string> = {
   onedrive: "OneDrive",
   microsoft_teams: "Microsoft Teams",
   ticktick: "TickTick",
+  resend: "Resend",
+  linkedin_ads: "LinkedIn Ads",
 };
 export function ConnectionsRoute() {
   const { organizationId } = useOrg();
@@ -576,6 +578,8 @@ function ConnectionLogo({ surface }: { surface: Surface }) {
         : surface.surfaceId === "pipedrive" ? <svg viewBox="0 0 24 24"><path fill="#1f9d55" d="M4 19V7h4v12Zm6 0V4h4v15Zm6 0v-8h4v8Z" /></svg>
         : surface.surfaceId === "zoho" ? <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4" fill="#e42527" /><path fill="#fff" d="M6 8h12v2l-7 6h7v2H6v-2l7-6H6Z" /></svg>
         : surface.surfaceId === "mautic" ? <svg viewBox="0 0 24 24"><path fill="#f36f21" d="M4 17V7l4-3 4 3 4-3 4 3v10h-3V8l-5 3-5-3v9Z" /></svg>
+        : surface.surfaceId === "resend" ? <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5" fill="#111" /><path fill="#fff" d="M7 17V7h4.7c2.8 0 4.4 1.3 4.4 3.5 0 1.4-.7 2.5-2 3l2.8 3.5h-2.8l-2.3-3H9.7v3Zm2.7-5.2h1.7c1.3 0 2-.4 2-1.3s-.7-1.3-2-1.3H9.7Z" /></svg>
+        : surface.surfaceId === "linkedin_ads" ? <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" fill="#0a66c2" /><circle cx="8" cy="9" r="1.2" fill="#fff" /><path fill="#fff" d="M7 11h2v6H7zm4 0h2v.9c.6-.7 1.3-1.1 2.3-1.1 1.8 0 2.7 1.1 2.7 3.2V17h-2v-2.7c0-1-.3-1.7-1.2-1.7s-1.5.6-1.5 1.8V17h-2Z" /></svg>
         : surface.surfaceId === "slack" ? <svg viewBox="0 0 24 24"><path fill="#36c5f0" d="M8 3a2 2 0 1 1 0 4H6a2 2 0 1 1 2-4Zm0 6h2v9a2 2 0 1 1-4 0v-7a2 2 0 0 1 2-2Z" /><path fill="#2eb67d" d="M21 8a2 2 0 1 1-4 0V6a2 2 0 1 1 4 0Zm-6 0v2H6a2 2 0 1 1 0-4h7a2 2 0 0 1 2 2Z" /><path fill="#ecb22e" d="M16 21a2 2 0 1 1 0-4h2a2 2 0 1 1 0 4Zm0-6h-2V6a2 2 0 1 1 4 0v7a2 2 0 0 1-2 2Z" /><path fill="#e01e5a" d="M3 16a2 2 0 1 1 4 0v2a2 2 0 1 1-4 0Zm6 0v-2h9a2 2 0 1 1 0 4h-7a2 2 0 0 1-2-2Z" /></svg>
         : surface.surfaceId === "notion" ? <svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="1" fill="#111" /><path fill="#fff" d="M8 7h2l4 6V7h2v10h-2l-4-6v6H8Z" /></svg>
         : surface.surfaceId === "onedrive" ? <svg viewBox="0 0 24 24"><path fill="#0364b8" d="M7 17a4 4 0 1 1 1.3-7.8A5 5 0 0 1 18 11a3.5 3.5 0 0 1-.7 6.9H7Z" /></svg>

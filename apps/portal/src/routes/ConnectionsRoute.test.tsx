@@ -161,6 +161,8 @@ describe("ConnectionsRoute — lifecycle", () => {
         base({ toolId: "microsoft_365", name: "Microsoft 365", label: "Microsoft 365", category: "Documentos", categoryId: "documents" }),
         base({ toolId: "microsoft_calendar", name: "Microsoft Outlook Calendar", label: "Microsoft Outlook Calendar", category: "Calendario", categoryId: "calendar" }),
         base({ toolId: "etsy", name: "Etsy", label: "Etsy", category: "Marketing", categoryId: "marketing" }),
+        base({ toolId: "resend", name: "Resend", label: "Resend", category: "Email", categoryId: "email" }),
+        base({ toolId: "linkedin_ads", name: "LinkedIn Ads", label: "LinkedIn Ads", category: "Publicidad", categoryId: "marketing" }),
       ]),
     } as Response)));
     mount(<ConnectionsRoute />);
@@ -169,7 +171,7 @@ describe("ConnectionsRoute — lifecycle", () => {
     for (const name of [
       "Facebook", "Instagram", "Meta Ads", "Google Ads", "Google Analytics", "TikTok", "TikTok Ads",
       "WordPress", "Shopify", "HubSpot", "Brevo", "Mailchimp", "Dropbox", "Microsoft 365",
-      "Microsoft Outlook Calendar", "Etsy",
+      "Microsoft Outlook Calendar", "Etsy", "Resend", "LinkedIn Ads",
     ]) {
       const row = Array.from(document.querySelectorAll<HTMLElement>(".dfy-catalog-row"))
         .find((candidate) => candidate.querySelector(".dfy-catalog-row__copy strong")?.textContent === name);
