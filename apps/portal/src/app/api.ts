@@ -127,6 +127,23 @@ export interface ConnectionCardDetailView extends ConnectionCardView {
   provider: string;
 }
 
+export interface LlmSettingsView {
+  organizationId: string;
+  provider: "openai";
+  providerName: string;
+  model: string;
+  modelLabel: string;
+  configured: boolean;
+  state: "connected" | "needs_attention" | "needs_setup";
+  verifiedAt: string | null;
+  error: string | null;
+  help?: {
+    actionUrl: string;
+    docsUrl: string;
+    steps: string[];
+  };
+}
+
 export interface DecisionView {
   id: string;
   head: HeadIdentity;
@@ -995,7 +1012,14 @@ export const api = {
       connections: ToolConnectionView[];
       cards: ConnectionCardView[];
       unmappedTools: string[];
-    }>(`/api/customer-zero/${org}/connections`),
+      }>(`/api/customer-zero/${org}/connections`),
+  llmSettings: (org: string) =>
+    getJson<LlmSettingsView>(`/api/customer-zero/${org}/llm-settings`),
+  saveLlmSettings: (org: string, payload: { provider: "openai"; model: string; apiKey: string }) =>
+    postJson<LlmSettingsView & { error?: { code?: string; message?: string } }>(
+      `/api/customer-zero/${org}/llm-settings`,
+      payload,
+    ),
   workFeed: (org: string, since?: string) =>
     getJson<{
       organizationId: string;

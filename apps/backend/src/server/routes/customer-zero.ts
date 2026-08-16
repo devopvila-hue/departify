@@ -96,6 +96,7 @@ export async function registerCustomerZeroRoutes(
         const session = getOrCreateCustomerZeroSession(organizationId, {
           ...(deps.toolState ? { toolState: deps.toolState } : {}),
           ...(deps.conversations ? { conversations: deps.conversations } : {}),
+          ...(deps.llmCredentials ? { llmCredentials: deps.llmCredentials } : {}),
         });
         await hydrateSessionToolState(session);
         session.state.url = url;

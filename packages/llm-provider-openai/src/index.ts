@@ -1,5 +1,6 @@
 export { OpenAILlmProvider } from "./adapters/openai-llm-provider.js";
 export {
+  createOpenAIProviderFromApiKey,
   createOpenAIProviderFromConfig,
   registerOpenAIProvider,
 } from "./client/openai-provider-factory.js";

@@ -96,6 +96,7 @@ import {
   type GoogleCapability,
 } from "./google-tokens.js";
 import { getExternalOAuthTokenStore } from "./external-oauth-tokens.js";
+import type { LlmCredentialStore } from "./llm-credentials.js";
 
 const ONBOARDING_DIRECTOR_AGENT_ID = "agent_marketing_director";
 const ONBOARDING_EMPLOYEE_AGENT_ID = "agent_content_strategist";
@@ -243,6 +244,8 @@ export interface CustomerZeroSession {
   /** Canonical department memory store (Sprint 60). */
   readonly memoryStore: InMemoryMemoryRecordStore;
   readonly departmentMemory?: DepartmentMemoryStore;
+  /** Durable organization-owned BYOK store. */
+  readonly llmCredentials?: LlmCredentialStore;
   /** The session's Tool Runtime (Sprint 62 capability engine source). */
   readonly runtime: ToolRuntime;
   /** Canonical department capability registry (Sprint 62). */
@@ -265,6 +268,8 @@ export interface CustomerZeroSessionOptions {
   /** Durable conversation store (Supabase in production). */
   readonly conversations?: ConversationStore;
   readonly departmentMemory?: DepartmentMemoryStore;
+  /** Durable organization-owned BYOK store. */
+  readonly llmCredentials?: LlmCredentialStore;
 }
 
 /**
@@ -280,7 +285,10 @@ export function getOrCreateCustomerZeroSession(
     return existing;
   }
 
-  const llm = options.llm ?? buildLlmRuntime();
+  const llm = options.llm ?? buildLlmRuntime({
+    organizationId,
+    ...(options.llmCredentials ? { credentialStore: options.llmCredentials } : {}),
+  });
 
   // Discovery report persistence (in-memory for the local slice).
   const reportRepository = createInMemoryDiscoveryReportRepository();

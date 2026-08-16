@@ -34,6 +34,12 @@ import {
   produceTeamForSession,
   type CustomerZeroSession,
 } from "../../customer-zero/customer-zero-session.js";
+import {
+  BYOK_DEFAULT_MODEL,
+  BYOK_PROVIDER,
+  getLlmCredentialStore,
+  type LlmCredentialRecord,
+} from "../../customer-zero/llm-credentials.js";
 import { buildAnswersRawData } from "../../customer-zero/answers.js";
 import {
   normalizeCompanyUrl,
@@ -475,6 +481,7 @@ export async function registerCustomerZeroV2Routes(
         ...(deps.toolState ? { toolState: deps.toolState } : {}),
         ...(deps.conversations ? { conversations: deps.conversations } : {}),
         ...(deps.departmentMemory ? { departmentMemory: deps.departmentMemory } : {}),
+        ...(deps.llmCredentials ? { llmCredentials: deps.llmCredentials } : {}),
       });
       await hydrateSessionToolState(session);
       session.state.locale = locale;
@@ -780,6 +787,103 @@ export async function registerCustomerZeroV2Routes(
         cards,
         google: await buildGoogleIdentityView(organizationId),
         unmappedTools: session.state.unmappedTools,
+      });
+    },
+  );
+
+  // Organization-owned BYOK. The portal receives only safe metadata; the
+  // key is validated here and remains in the backend credential vault.
+  server.get<{
+    Params: { organizationId: string };
+  }>(
+    "/api/customer-zero/:organizationId/llm-settings",
+    async (request) => {
+      const { organizationId } = request.params;
+      await requireSession(organizationId, deps);
+      const record = await (deps.llmCredentials ?? getLlmCredentialStore()).get(organizationId, BYOK_PROVIDER);
+      return {
+        organizationId,
+        provider: BYOK_PROVIDER,
+        providerName: "OpenAI",
+        model: record?.model ?? BYOK_DEFAULT_MODEL,
+        modelLabel: "Recomendado — GPT-4o mini",
+        configured: Boolean(record),
+        state: record?.verifiedAt ? "connected" : record ? "needs_attention" : "needs_setup",
+        verifiedAt: record?.verifiedAt ?? null,
+        error: record?.lastError ?? null,
+        help: {
+          actionUrl: "https://platform.openai.com/api-keys",
+          docsUrl: "https://help.openai.com/en/articles/4936850-where-do-i-find-my-openai-api-key",
+          steps: [
+            "Abre tu página de claves de OpenAI.",
+            "Crea una clave nueva y cópiala.",
+            "Vuelve aquí y guárdala para comprobarla.",
+          ],
+        },
+      };
+    },
+  );
+
+  server.post<{
+    Params: { organizationId: string };
+    Body: { provider?: string; model?: string; apiKey?: string };
+  }>(
+    "/api/customer-zero/:organizationId/llm-settings",
+    async (request, reply) => {
+      const { organizationId } = request.params;
+      await requireSession(organizationId, deps);
+      const body = request.body ?? {};
+      if (body.provider && body.provider !== BYOK_PROVIDER) {
+        return reply.code(400).send({
+          error: { code: "unsupported_provider", message: "Este proveedor todavía no está disponible." },
+        });
+      }
+      if (body.model && body.model !== BYOK_DEFAULT_MODEL) {
+        return reply.code(400).send({
+          error: { code: "unsupported_model", message: "Selecciona el modelo recomendado." },
+        });
+      }
+      const apiKey = body.apiKey?.trim();
+      if (!apiKey) {
+        return reply.code(400).send({
+          error: { code: "missing_api_key", message: "Introduce una API key para continuar." },
+        });
+      }
+
+      const validation = await validateOpenAiApiKey(apiKey);
+      if (!validation.valid) {
+        return reply.code(validation.code === "provider_unavailable" ? 503 : 422).send({
+          error: { code: validation.code, message: validation.message },
+        });
+      }
+
+      const now = new Date().toISOString();
+      const record: LlmCredentialRecord = {
+        organizationId,
+        provider: BYOK_PROVIDER,
+        model: body.model ?? BYOK_DEFAULT_MODEL,
+        apiKey,
+        createdBy: request.authUser?.id ?? null,
+        verifiedAt: now,
+        lastError: null,
+      };
+      await (deps.llmCredentials ?? getLlmCredentialStore()).put(record);
+      request.log.info({
+        event: "llm_credential_verified",
+        organizationId,
+        provider: BYOK_PROVIDER,
+        model: record.model,
+      });
+      return reply.code(200).send({
+        organizationId,
+        provider: BYOK_PROVIDER,
+        providerName: "OpenAI",
+        model: record.model,
+        modelLabel: "Recomendado — GPT-4o mini",
+        configured: true,
+        state: "connected",
+        verifiedAt: now,
+        error: null,
       });
     },
   );
@@ -3416,6 +3520,7 @@ export async function requireSession(
     ...(deps.toolState ? { toolState: deps.toolState } : {}),
     ...(deps.conversations ? { conversations: deps.conversations } : {}),
     ...(deps.departmentMemory ? { departmentMemory: deps.departmentMemory } : {}),
+    ...(deps.llmCredentials ? { llmCredentials: deps.llmCredentials } : {}),
   });
   await hydrateSessionToolState(session);
   // Customer Zero P0 — rebuild the company understanding from DURABLE
@@ -7936,6 +8041,41 @@ async function projectInboxItem(item: InboxItem): Promise<InboxItem & {
     convertedToTask: Boolean(task),
     ...(task ? { relatedWorkItemId: task.id, state: "in_work" as const } : {}),
   };
+}
+
+async function validateOpenAiApiKey(apiKey: string): Promise<
+  | { valid: true }
+  | { valid: false; code: "invalid_api_key" | "provider_unavailable"; message: string }
+> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch("https://api.openai.com/v1/models", {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+    });
+    if (response.ok) return { valid: true };
+    if (response.status === 401 || response.status === 403) {
+      return {
+        valid: false,
+        code: "invalid_api_key",
+        message: "No hemos podido validar esta API key. Comprueba que la has copiado completa y vuelve a intentarlo.",
+      };
+    }
+    return {
+      valid: false,
+      code: "provider_unavailable",
+      message: "OpenAI no está disponible ahora mismo. Inténtalo de nuevo en unos minutos.",
+    };
+  } catch {
+    return {
+      valid: false,
+      code: "provider_unavailable",
+      message: "No hemos podido comprobar la API key ahora mismo. Inténtalo de nuevo en unos minutos.",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function providerForInboxSource(source: string): EmailProvider | null {

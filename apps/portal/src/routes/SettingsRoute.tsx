@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { api, type CompanyStatus, type ConnectionCardView } from "@/app/api";
+import { api, type CompanyStatus, type ConnectionCardView, type LlmSettingsView } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import { Badge, Card, EmptyState } from "@/components/primitives";
 
@@ -15,6 +15,11 @@ export function SettingsRoute() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<CompanyStatus | null>(null);
   const [connections, setConnections] = useState<ConnectionCardView[]>([]);
+  const [llmSettings, setLlmSettings] = useState<LlmSettingsView | null>(null);
+  const [llmKey, setLlmKey] = useState("");
+  const [editingLlm, setEditingLlm] = useState(false);
+  const [savingLlm, setSavingLlm] = useState(false);
+  const [llmError, setLlmError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
@@ -22,14 +27,42 @@ export function SettingsRoute() {
     if (!organizationId) return;
     setLoadError(false);
     setLoaded(false);
-    void Promise.all([api.status(organizationId), api.connections(organizationId)])
-      .then(([company, connected]) => {
+    void Promise.all([
+      api.status(organizationId),
+      api.connections(organizationId),
+      api.llmSettings(organizationId),
+    ])
+      .then(([company, connected, llm]) => {
         setStatus(company);
         setConnections(connected?.cards ?? []);
+        setLlmSettings(llm);
       })
       .catch(() => setLoadError(true))
       .finally(() => setLoaded(true));
   }, [organizationId]);
+
+  const saveLlm = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!organizationId || !llmKey.trim() || savingLlm) return;
+    setSavingLlm(true);
+    setLlmError(null);
+    const result = await api.saveLlmSettings(organizationId, {
+      provider: "openai",
+      model: "gpt-4o-mini",
+      apiKey: llmKey.trim(),
+    });
+    setSavingLlm(false);
+    if (!result || result.error || !result.configured) {
+      setLlmError(
+        result?.error?.message ??
+          "No hemos podido validar esta API key. Comprueba que la has copiado completa y vuelve a intentarlo.",
+      );
+      return;
+    }
+    setLlmSettings(result);
+    setLlmKey("");
+    setEditingLlm(false);
+  };
 
   useEffect(() => { load(); }, [load]);
 
@@ -81,11 +114,66 @@ export function SettingsRoute() {
         )}
       </Card>
 
-      <Card title="Claves de servicios">
-        <EmptyState
-          title="No hay claves adicionales que configurar"
-          description="Las conexiones disponibles se gestionan desde Conexiones. Cuando un servicio admita una clave propia, podrás obtenerla con instrucciones oficiales. Nunca se muestran secretos en el portal."
-        />
+      <Card title="Claves API y capacidades">
+        <div className="dfy-settings-capability" data-testid="llm-settings">
+          <p className="dfy-eyebrow">Capacidad</p>
+          <h3>Razonamiento de Departify</h3>
+          <p className="dfy-card__description">
+            Puedes usar tu propia cuenta de OpenAI para que Departify trabaje con la capacidad de IA de tu empresa.
+          </p>
+          {llmSettings?.configured && !editingLlm ? (
+            <div className="dfy-settings-capability__status">
+              <Badge tone="success">Conectado</Badge>
+              <span>{llmSettings.providerName} · {llmSettings.modelLabel}</span>
+              <button type="button" className="dfy-button dfy-button--ghost" onClick={() => setEditingLlm(true)}>
+                Cambiar clave
+              </button>
+            </div>
+          ) : (
+            <form className="dfy-settings-capability__form" onSubmit={saveLlm}>
+              <label>
+                Proveedor
+                <select value="openai" disabled aria-label="Proveedor">
+                  <option value="openai">OpenAI</option>
+                </select>
+              </label>
+              <label>
+                Modelo
+                <select value="gpt-4o-mini" disabled aria-label="Modelo">
+                  <option value="gpt-4o-mini">Recomendado — GPT-4o mini</option>
+                </select>
+              </label>
+              <label>
+                API key
+                <input
+                  type="password"
+                  value={llmKey}
+                  onChange={(event) => setLlmKey(event.target.value)}
+                  placeholder="Pega aquí tu API key"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  aria-label="API key"
+                  required
+                />
+              </label>
+              <p className="dfy-card__description">
+                Crea una clave en la página oficial y pégala aquí. Departify la guardará de forma segura y comprobará que funciona.
+              </p>
+              <div className="dfy-settings-capability__links">
+                <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">
+                  Obtener API key ↗
+                </a>
+                <a href="https://help.openai.com/en/articles/4936850-where-do-i-find-my-openai-api-key" target="_blank" rel="noopener noreferrer">
+                  Ver guía oficial ↗
+                </a>
+              </div>
+              {llmError && <p className="dfy-alert" role="alert">{llmError}</p>}
+              <button type="submit" className="dfy-button" disabled={savingLlm || !llmKey.trim()}>
+                {savingLlm ? "Comprobando…" : "Guardar y comprobar"}
+              </button>
+            </form>
+          )}
+        </div>
         <button type="button" className="dfy-button dfy-button--ghost" onClick={() => navigate("/conexiones")}>
           Gestionar conexiones
         </button>

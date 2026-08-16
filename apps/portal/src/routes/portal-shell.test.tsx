@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import type { ReactElement } from "react";
 
@@ -138,6 +138,67 @@ describe("portal shell", () => {
     expect(screen.getByRole("heading", { name: /^preferencias operativas$/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /lo que departify sabe/i })).not.toBeInTheDocument();
     expect(screen.getByText(/todavía no disponible/i)).toBeInTheDocument();
+  });
+
+  it("guides and saves the organization BYOK key without rendering the secret", async () => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url.includes("/llm-settings") && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            organizationId: "org_moon",
+            provider: "openai",
+            providerName: "OpenAI",
+            model: "gpt-4o-mini",
+            modelLabel: "Recomendado — GPT-4o mini",
+            configured: true,
+            state: "connected",
+            verifiedAt: "2026-08-17T00:00:00.000Z",
+            error: null,
+          }),
+        } as Response);
+      }
+      if (url.includes("/llm-settings")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            organizationId: "org_moon",
+            provider: "openai",
+            providerName: "OpenAI",
+            model: "gpt-4o-mini",
+            modelLabel: "Recomendado — GPT-4o mini",
+            configured: false,
+            state: "needs_setup",
+            verifiedAt: null,
+            error: null,
+            help: {
+              actionUrl: "https://platform.openai.com/api-keys",
+              docsUrl: "https://help.openai.com/en/articles/4936850-where-do-i-find-my-openai-api-key",
+              steps: [],
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes("/connections")) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ connections: [], cards: [], unmappedTools: [] }) } as Response);
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({ organizationId: "org_moon", companyName: "MOON Shared Living", conversation: [] }) } as Response);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    mount(<SettingsRoute />);
+
+    const key = await screen.findByLabelText("API key");
+    expect(key).toHaveAttribute("type", "password");
+    expect(screen.getByRole("link", { name: /obtener api key/i })).toHaveAttribute("href", "https://platform.openai.com/api-keys");
+    fireEvent.change(key, { target: { value: "sk-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: /guardar y comprobar/i }));
+
+    expect(await screen.findByText("Conectado")).toBeInTheDocument();
+    expect(screen.queryByText("sk-secret")).not.toBeInTheDocument();
+    const saveCall = fetchMock.mock.calls.find(([url, init]) => String(url).includes("/llm-settings") && init?.method === "POST");
+    expect(saveCall?.[1]?.body).toContain("sk-secret");
   });
 
   it("homes the Command Center single chat and speaks in business terms", async () => {

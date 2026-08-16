@@ -1286,6 +1286,53 @@ select {
   margin: 4px 0 0;
 }
 
+.dfy-settings-capability {
+  display: grid;
+  gap: 10px;
+}
+
+.dfy-settings-capability h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.dfy-settings-capability__form {
+  display: grid;
+  gap: 12px;
+  max-width: 34rem;
+}
+
+.dfy-settings-capability__form label {
+  display: grid;
+  gap: 6px;
+  color: var(--dfy-color-muted);
+  font-size: 0.82rem;
+}
+
+.dfy-settings-capability__form input,
+.dfy-settings-capability__form select {
+  min-height: 40px;
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-sm);
+  background: var(--dfy-color-surface-raised);
+  color: var(--dfy-color-text);
+  padding: 0 10px;
+  font: inherit;
+}
+
+.dfy-settings-capability__status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.dfy-settings-capability__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 .dfy-chat {
   display: grid;
   gap: 12px;
