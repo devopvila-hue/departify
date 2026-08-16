@@ -14,6 +14,9 @@ coverage/
 .DS_Store
 .gstack/
 
+# Local authenticated E2E state. Never commit production sessions.
+e2e/.auth/
+
 # Local dev secrets (engine device keys, ADC, etc.)
 .devkeys/
 .secrets/

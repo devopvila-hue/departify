@@ -20,9 +20,12 @@
     "test": "pnpm -r test",
     "test:engine-adapter": "pnpm --filter @departify/engine-adapter test:integration",
     "chat:latency-ab": "node tools/chat-latency-ab.mjs",
-    "format": "prettier --check ."
+    "format": "prettier --check .",
+    "e2e:auth": "node e2e/authenticate.mjs",
+    "e2e:production": "playwright test e2e/golden-department.spec.ts"
   },
   "devDependencies": {
+    "@playwright/test": "1.58.2",
     "@railway/cli": "5.30.4",
     "netlify-cli": "27.1.0",
     "prettier": "^3.3.3",
