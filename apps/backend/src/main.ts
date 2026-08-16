@@ -44,6 +44,7 @@ import {
   SupabaseMarketingObjectiveRepository,
 } from "./customer-zero/supabase-marketing-repositories.js";
 import { MarketingService } from "./customer-zero/marketing-service.js";
+import { SupabaseSeoRepositoryLinkStore, setSeoRepositoryLinkStore } from "./customer-zero/seo-repository.js";
 import type { ServerDeps } from "./server/deps.js";
 import {
   createActivepiecesConnectorRuntime,
@@ -97,6 +98,8 @@ try {
   deps.inbox = new SupabaseInboxStore(supabaseAuthConfig);
   deps.workStore = new SupabaseDepartmentWorkStore(supabaseAuthConfig);
   deps.dashboardStore = new SupabaseDepartmentDashboardStore(supabaseAuthConfig);
+  deps.seoRepositoryLinks = new SupabaseSeoRepositoryLinkStore(supabaseAuthConfig);
+  setSeoRepositoryLinkStore(deps.seoRepositoryLinks);
   deps.marketingActivity = new SupabaseMarketingActivityRepository(supabaseAuthConfig);
   // Durable canonical Company DNA (Customer Zero P0). Company
   // understanding MUST survive Railway backend restarts — the readiness

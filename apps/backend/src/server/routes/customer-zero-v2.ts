@@ -144,6 +144,16 @@ import {
 } from "../../customer-zero/connections-domain.js";
 import { isCapabilityAvailable } from "../../customer-zero/capability-registry.js";
 import {
+  accountLabelForCredentials,
+  apiVersionForShopify,
+  capabilitiesForMarketingProvider,
+  getMarketingConnectorStore,
+  probeMarketingCredentials,
+  resolveMarketingConnectorCapability,
+  type MarketingConnectorCredentials,
+} from "../../customer-zero/marketing-connector.js";
+import { persistMarketingConnectorOutcome } from "./connector-runtime.js";
+import {
   InMemoryDepartmentWorkStore,
   MAX_ACTIVE_DASHBOARDS,
   checkReplyForUnsupportedPromises,
@@ -155,6 +165,7 @@ import {
 } from "../../customer-zero/department-work.js";
 import { DepartmentWorkExecutor } from "../../customer-zero/department-work-executor.js";
 import { MARKETING_ROSTER } from "../../customer-zero/marketing-roster.js";
+import { projectDepartmentCapabilities } from "../../customer-zero/department-capabilities.js";
 import type { MarketingActivityRepository } from "../../customer-zero/marketing-repositories.js";
 import {
   InMemoryInboxStore,
@@ -826,6 +837,35 @@ export async function registerCustomerZeroV2Routes(
           state: status.state,
         };
       }
+      if (provider === "wordpress" || provider === "shopify") {
+        const session = await requireSession(organizationId, deps);
+        const userId = request.authUser?.id ?? organizationId;
+        const store = getMarketingConnectorStore();
+        const record = await store.get(organizationId, userId, provider);
+        if (!record) return reply.code(404).send({ error: "No hay una cuenta configurada." });
+        const probe = await probeMarketingCredentials(record.credentials);
+        const now = new Date().toISOString();
+        await store.put({ ...record, verifiedAt: probe.operational ? now : null, lastError: probe.error });
+        const tool = TOOL_CATALOG.find((entry) => entry.id === provider)!;
+        await session.toolState.upsert({
+          organizationId,
+          toolId: provider,
+          label: tool.label,
+          capability: tool.capability,
+          declared: true,
+          status: probe.operational ? "connected" : "degraded",
+          configSource: "secure_store:marketing_connector",
+          provider: "departify_marketing",
+          providerAccountRef: record.accountLabel,
+          grantedCapabilities: probe.operational ? capabilitiesForMarketingProvider(provider) : [],
+          ...(probe.operational ? { verifiedAt: now } : {}),
+          lastValidatedAt: now,
+          health: probe.operational ? "operational" : "down",
+          ...(probe.error ? { lastError: probe.error } : {}),
+          updatedAt: now,
+        });
+        return { organizationId, provider, available: probe.operational, state: probe.operational ? "connected" : "needs_attention", message: probe.error ?? "Conexión verificada." };
+      }
       if (provider !== "mautic") {
         return reply.code(404).send({ error: "unsupported_provider" });
       }
@@ -910,6 +950,28 @@ export async function registerCustomerZeroV2Routes(
           state: "needs_connection" as const,
           providerRevoked: result.providerRevoked,
         };
+      }
+
+      if (toolId === "wordpress" || toolId === "shopify") {
+        const userId = request.authUser?.id ?? organizationId;
+        const removed = await getMarketingConnectorStore().remove(organizationId, userId, toolId);
+        if (!removed) {
+          return reply.code(409).send({ error: { code: "connection_not_found", message: "No hay una cuenta conectada para desconectar." } });
+        }
+        const tool = TOOL_CATALOG.find((entry) => entry.id === toolId)!;
+        await session.toolState.upsert({
+          organizationId,
+          toolId,
+          label: tool.label,
+          capability: tool.capability,
+          declared: true,
+          status: "needs_connection",
+          configSource: "secure_store:marketing_connector",
+          provider: "departify_marketing",
+          grantedCapabilities: [],
+          updatedAt: new Date().toISOString(),
+        });
+        return { organizationId, toolId, state: "needs_connection" as const, providerRevoked: false };
       }
 
       const externalProvider: ExternalOAuthProvider | null =
@@ -1435,6 +1497,23 @@ export async function registerCustomerZeroV2Routes(
         buildConnectionState(tool, session.state.locale);
       session.state.connections.set(tool.id, connection);
 
+      if (tool.id === "wordpress" || tool.id === "shopify") {
+        connection.status = "blocked";
+        connection.lifecycle = "needs_connection";
+        connection.blockedReason = session.state.locale === "en"
+          ? `Enter the ${tool.label} account details to verify this connection.`
+          : `Introduce los datos de ${tool.label} para verificar esta conexión.`;
+        await persistToolState(session, toolStateFromConnection(session, connection));
+        return reply.code(200).send({
+          organizationId,
+          connection,
+          configurationRequired: true,
+          fields: tool.id === "wordpress"
+            ? ["websiteUrl", "username", "password"]
+            : ["shopName", "adminToken"],
+        });
+      }
+
       // Sprint 61 — Mautic uses API key auth (not OAuth). Validate
       // credentials through the canonical Tool Runtime.
       if (tool.id === "mautic") {
@@ -1581,11 +1660,14 @@ export async function registerCustomerZeroV2Routes(
         "meta_business",
         "meta_instagram",
         "ticktick",
+        "github",
       ]);
-      if (externalOAuthTools.has(tool.id as ExternalOAuthProvider) || tool.id === "meta_business") {
+      if (externalOAuthTools.has(tool.id as ExternalOAuthProvider) || tool.id === "meta_business" || tool.id === "github_repository") {
         const provider: ExternalOAuthProvider = tool.id === "meta_business" && requestedChannel === "instagram"
           ? "meta_instagram"
-          : tool.id as ExternalOAuthProvider;
+          : tool.id === "github_repository"
+            ? "github"
+            : tool.id as ExternalOAuthProvider;
         const missing = externalOAuthMissingCredentials(provider);
         if (missing.length > 0 || !externalOAuthCredentials(provider)) {
           connection.status = "blocked";
@@ -1972,8 +2054,11 @@ export async function registerCustomerZeroV2Routes(
         "meta_business",
         "meta_instagram",
         "ticktick",
+        "github",
       ]);
-      let provider: ExternalOAuthProvider | null = externalOAuthTools.has(effectiveToolId as ExternalOAuthProvider)
+      let provider: ExternalOAuthProvider | null = effectiveToolId === "github_repository"
+        ? "github"
+        : externalOAuthTools.has(effectiveToolId as ExternalOAuthProvider)
         ? effectiveToolId as ExternalOAuthProvider
         : null;
       if (effectiveToolId === "meta_business" && state) {
@@ -2075,6 +2160,83 @@ export async function registerCustomerZeroV2Routes(
           code: "OAUTH_PROVIDER_NOT_IMPLEMENTED",
           message: "The provider OAuth exchange is not implemented yet.",
         },
+      });
+    },
+  );
+
+  // Tenant-owned marketing connectors. Credentials are accepted only at this
+  // server boundary, probed before being marked operational, and never
+  // returned or copied into model/OpenClaw context.
+  server.post<{
+    Params: { organizationId: string; toolId: string };
+    Body: Record<string, unknown>;
+  }>(
+    "/api/customer-zero/:organizationId/connections/:toolId/configure",
+    async (request, reply) => {
+      const { organizationId, toolId } = request.params;
+      if (toolId !== "wordpress" && toolId !== "shopify") {
+        return reply.code(404).send({ error: "unsupported_provider" });
+      }
+      const session = await requireSession(organizationId, deps);
+      const body = request.body ?? {};
+      const userId = request.authUser?.id ?? organizationId;
+      let credentials: MarketingConnectorCredentials;
+      try {
+        if (toolId === "wordpress") {
+          const websiteUrl = safeRequiredConfigText(body.websiteUrl, "websiteUrl");
+          const username = safeRequiredConfigText(body.username, "username");
+          const password = safeRequiredConfigText(body.password, "password");
+          const parsed = new URL(websiteUrl);
+          if (!/^https?:$/.test(parsed.protocol)) throw new Error("websiteUrl must use http or https.");
+          credentials = { provider: "wordpress", websiteUrl: parsed.toString().replace(/\/+$/, ""), username, password };
+        } else {
+          const shopName = safeRequiredConfigText(body.shopName, "shopName")
+            .replace(/^https?:\/\//, "")
+            .replace(/\/+$/, "")
+            .replace(/\.myshopify\.com$/, "");
+          if (!/^[a-z0-9][a-z0-9-]*$/i.test(shopName)) throw new Error("shopName is invalid.");
+          credentials = { provider: "shopify", shopName, adminToken: safeRequiredConfigText(body.adminToken, "adminToken"), apiVersion: apiVersionForShopify() };
+        }
+      } catch (cause) {
+        return reply.code(400).send({ error: { code: "invalid_configuration", message: cause instanceof Error ? cause.message : "Invalid configuration." } });
+      }
+
+      const probe = await probeMarketingCredentials(credentials);
+      const now = new Date().toISOString();
+      await getMarketingConnectorStore().put({
+        organizationId,
+        userId,
+        provider: credentials.provider,
+        credentials,
+        accountLabel: accountLabelForCredentials(credentials),
+        verifiedAt: probe.operational ? now : null,
+        lastError: probe.error,
+      });
+      const tool = TOOL_CATALOG.find((entry) => entry.id === toolId)!;
+      await session.toolState.upsert({
+        organizationId,
+        toolId,
+        label: tool.label,
+        capability: tool.capability,
+        declared: true,
+        status: probe.operational ? "connected" : "degraded",
+        configSource: "secure_store:marketing_connector",
+        provider: "departify_marketing",
+        providerAccountRef: probe.accountLabel,
+        grantedCapabilities: probe.operational ? capabilitiesForMarketingProvider(credentials.provider) : [],
+        ...(probe.operational ? { verifiedAt: now } : {}),
+        lastValidatedAt: now,
+        health: probe.operational ? "operational" : "down",
+        ...(probe.error ? { lastError: probe.error } : {}),
+        updatedAt: now,
+      });
+      request.log.info({ event: "marketing_connector_configured", organizationId, provider: credentials.provider, operational: probe.operational, accountLabel: probe.accountLabel });
+      return reply.code(200).send({
+        organizationId,
+        provider: credentials.provider,
+        accountLabel: probe.accountLabel,
+        operational: probe.operational,
+        error: probe.error,
       });
     },
   );
@@ -2513,6 +2675,19 @@ export async function registerCustomerZeroV2Routes(
         dna,
         marketing,
         marketingApprovals,
+        seo: {
+          website: dna?.website ?? null,
+          capabilities: projectDepartmentCapabilities("seo", connections).map(({ id, label, description, state }) => ({
+            id,
+            label,
+            description,
+            state: !dna?.website && id !== "seo.search-console" && id !== "seo.analytics"
+              ? "necesita_conexion" as const
+              : state,
+          })),
+          tasks,
+          results,
+        },
       });
       return reply.code(200).send({
         organizationId,
@@ -5052,6 +5227,11 @@ export async function processCeoMessage(
         marketingTurn = { role: "assistant", content: assistantReply };
       }
     } else {
+    const directMarketingReply = await runConnectedMarketingConnectorMessage(session, deps, message, runtime?.userId ?? undefined);
+    if (directMarketingReply) {
+      assistantReply = directMarketingReply;
+      marketingTurn = { role: "assistant", content: assistantReply };
+    } else {
     const mauticConn = session.state.connections.get("mautic");
     const mauticLifecycle: ToolLifecycleStatus =
       mauticConn?.lifecycle ??
@@ -5124,6 +5304,7 @@ export async function processCeoMessage(
           : "I could not query Mautic right now. I can continue with the rest of the work.";
       }
       marketingTurn = { role: "assistant", content: assistantReply };
+    }
     }
     }
   }
@@ -7270,6 +7451,13 @@ export interface ToolConnectionView {
   readonly blockedReason?: string;
 }
 
+function safeRequiredConfigText(value: unknown, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${field} is required.`);
+  }
+  return value.trim();
+}
+
 /**
  * The full /conexiones surface: every catalog tool with its organization
  * state. "Not selected during onboarding" means AVAILABLE, not absent.
@@ -7526,6 +7714,56 @@ interface MauticTestResolution {
  * business-language resolution that the portal can render directly.
  * NEVER throws to the caller; never returns secret values.
  */
+async function runConnectedMarketingConnectorMessage(
+  session: CustomerZeroSession,
+  deps: ServerDeps,
+  message: string,
+  userId?: string,
+): Promise<string | null> {
+  const runtime = deps.marketingConnectorRuntime;
+  if (!runtime) return null;
+  const definition = resolveMarketingConnectorCapability(message);
+  if (!definition) return null;
+  const state = await session.toolState.get(session.organizationId, definition.providerToolId);
+  if (state?.status !== "connected" || !state.verifiedAt || !state.grantedCapabilities?.includes(definition.id)) return null;
+
+  const request = {
+      requestId: `ceo_marketing_${shortId()}`,
+      organizationId: session.organizationId,
+      ...(userId ? { userId } : {}),
+      capability: definition.id,
+      operation: definition.sideEffect ? "prepare" as const : "execute" as const,
+      input: {},
+      sideEffect: definition.sideEffect,
+    } as const;
+  const result = await runtime.execute(request);
+  await persistMarketingConnectorOutcome(deps, request, definition, result);
+  const providerLabel = definition.provider === "wordpress" ? "WordPress" : "Shopify";
+  if (result.status === "prepared") {
+    if (deps.marketing) {
+      await deps.marketing.requestApproval({
+        organizationId: session.organizationId,
+        title: definition.id.includes("wordpress") ? "Publicación WordPress" : "Producto Shopify",
+        detail: "Elvira ha preparado esta acción. Debe aprobarse antes de ejecutarla.",
+        locale: session.state.locale,
+      });
+    }
+    return session.state.locale === "en"
+      ? `${providerLabel} action prepared and is waiting for CEO approval.`
+      : `He preparado la acción en ${providerLabel} y queda pendiente de tu aprobación.`;
+  }
+  if (result.status !== "succeeded") {
+    return session.state.locale === "en"
+      ? `I could not query ${providerLabel} right now.`
+      : `No he podido consultar ${providerLabel} ahora mismo.`;
+  }
+  const output = result.output as unknown;
+  const count = Array.isArray(output) ? output.length : null;
+  return session.state.locale === "en"
+    ? `${providerLabel} returned ${count ?? 0} records.`
+    : `${providerLabel} ha devuelto ${count ?? 0} registros.`;
+}
+
 async function testMauticForOrg(
   session: CustomerZeroSession,
 ): Promise<MauticTestResolution> {

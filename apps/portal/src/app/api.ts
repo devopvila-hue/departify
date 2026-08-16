@@ -349,6 +349,7 @@ export interface CompanyOperatingState {
   dataStatus: "available" | "partial";
   summary: {
     digitalEmployees: number;
+    operationalCapabilities: number;
     workingNow: number;
     connectedTools: number;
     pendingApprovals: number;
@@ -367,6 +368,12 @@ export interface CompanyOperatingState {
       currentWork?: string;
     }[];
     employeesWorkingNow: number;
+    capabilities: {
+      id: string;
+      label: string;
+      description: string;
+      state: "disponible" | "necesita_conexion" | "no_disponible";
+    }[];
     tools: { toolId: string; label: string; capability: string }[];
     toolsConnected: number;
     activeObjective: { id: string | null; title: string; progress?: number } | null;
@@ -378,6 +385,12 @@ export interface CompanyOperatingState {
     departmentId: string;
     status: string;
     currentWork?: string;
+  }[];
+  capabilities: {
+    id: string;
+    label: string;
+    description: string;
+    state: "disponible" | "necesita_conexion" | "no_disponible";
   }[];
   tools: { toolId: string; label: string; capability: string; status: "connected" }[];
   pendingApprovals: {
@@ -600,6 +613,12 @@ export interface MarketingDepartmentStatus {
     capabilities: string[];
   }[];
   employeesWorkingNow: number;
+  capabilities: {
+    id: string;
+    label: string;
+    description: string;
+    state: "disponible" | "necesita_conexion" | "no_disponible";
+  }[];
   tools: { toolId: string; label: string; capability: string; status: string; note?: string }[];
   toolsConnected: number;
   activeObjective: {
@@ -1101,6 +1120,10 @@ export const api = {
       code,
       state,
     }),
+  finishExternalConnect: (org: string, toolId: string, code: string, state: string) =>
+    postJson<{ connection: ConnectionCard; operational?: boolean; returnPath?: string; error?: { code?: string; message?: string } }>(
+      `/api/customer-zero/${org}/connections/${toolId}/callback`, { code, state },
+    ),
   configureCorporateEmail: (
     org: string,
     payload: {
@@ -1312,12 +1335,36 @@ export const api = {
     getJson<{
       organizationId: string;
       department: { id: string; name: string; responsible: string; description: string };
-      state: "ready" | "disconnected";
+      state: "ready" | "web_detected" | "disconnected";
       website: string | null;
+      onboarding: {
+        stage: "website_missing" | "repository_missing" | "repository_select" | "ready";
+        websiteDetected: boolean;
+        repositoryConnected: boolean;
+        repositoryRead: boolean;
+        repositoryWrite: boolean;
+      };
+      repository: {
+        repositoryFullName: string;
+        defaultBranch: string;
+        access: "read" | "write";
+      } | null;
+      repositories: { id: string; fullName: string; private: boolean; defaultBranch: string; htmlUrl: string }[];
       tasks: DepartmentTask[];
       results: DepartmentResult[];
-      capabilities: { websiteAudit: boolean; searchConsole: boolean; analytics: boolean; repositoryRead: boolean };
+      capabilities: {
+        websiteAudit: boolean;
+        searchConsole: boolean;
+        analytics: boolean;
+        repositoryRead: boolean;
+        repositoryWrite: boolean;
+        roster: { id: string; label: string; description: string; state: "disponible" | "necesita_conexion" | "no_disponible" }[];
+      };
     }>(`/api/departments/seo/${org}`),
+  seoRepository: (org: string, repository: { repositoryId: string; repositoryFullName: string; defaultBranch?: string }) =>
+    postJson<{ organizationId: string; repository: { repositoryFullName: string; defaultBranch: string; access: "read" | "write" }; repositoryRead: boolean; repositoryWrite: boolean }>(
+      `/api/departments/seo/${org}/repository`, repository,
+    ),
   seoAudit: (org: string) =>
     postJson<{ organizationId: string; task: DepartmentTask; result: DepartmentResult; report: SeoAuditReport }>(
       `/api/departments/seo/${org}/audit`,

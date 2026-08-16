@@ -128,6 +128,13 @@ export interface DepartmentStatusView {
   readonly status: DepartmentStatus;
   readonly employees: readonly DigitalEmployee[];
   readonly employeesWorkingNow: number;
+  /** Business capabilities shown as the department's operating team. */
+  readonly capabilities: readonly {
+    readonly id: string;
+    readonly label: string;
+    readonly description: string;
+    readonly state: "disponible" | "necesita_conexion" | "no_disponible";
+  }[];
   readonly tools: readonly ConnectedTool[];
   readonly toolsConnected: number;
   readonly activeObjective: BusinessObjective | null;

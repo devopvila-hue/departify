@@ -689,6 +689,8 @@ function mapCapabilityToToolId(capability: DepartmentWorkCapability): string {
       return "department.work.publish_result";
     case "memory.remember":
       return "department.work.remember";
+    default:
+      return capability;
   }
 }
 

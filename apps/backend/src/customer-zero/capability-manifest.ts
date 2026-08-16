@@ -96,6 +96,30 @@ export const RUNTIME_CAPABILITY_RULES: readonly CapabilityRule[] = [
     id: "marketing.social.instagram.publish",
     sourceCapabilities: ["marketing.social.instagram.publish"],
   },
+  {
+    id: "marketing.wordpress.posts.read",
+    sourceCapabilities: ["marketing.wordpress.site.read", "marketing.wordpress.posts.list", "marketing.wordpress.posts.get", "marketing.wordpress.categories.list", "marketing.wordpress.tags.list"],
+  },
+  {
+    id: "marketing.wordpress.posts.write",
+    sourceCapabilities: ["marketing.wordpress.posts.create", "marketing.wordpress.posts.update"],
+  },
+  {
+    id: "marketing.shopify.products.read",
+    sourceCapabilities: ["marketing.shopify.shop.read", "marketing.shopify.products.list", "marketing.shopify.products.get"],
+  },
+  {
+    id: "marketing.shopify.products.write",
+    sourceCapabilities: ["marketing.shopify.products.create", "marketing.shopify.products.update"],
+  },
+  {
+    id: "marketing.shopify.orders.read",
+    sourceCapabilities: ["marketing.shopify.orders.list", "marketing.shopify.orders.get"],
+  },
+  {
+    id: "marketing.shopify.customers.read",
+    sourceCapabilities: ["marketing.shopify.customers.list"],
+  },
   { id: "calendar.list", sourceCapabilities: ["calendar.read"] },
   { id: "calendar.create", sourceCapabilities: ["calendar.create"] },
   { id: "drive.search", sourceCapabilities: ["drive.search"] },

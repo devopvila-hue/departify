@@ -22,6 +22,8 @@ describe("provider-backed marketing OAuth", () => {
     delete process.env.META_APP_SECRET;
     delete process.env.TICKTICK_CLIENT_ID;
     delete process.env.TICKTICK_CLIENT_SECRET;
+    delete process.env.GITHUB_OAUTH_CLIENT_ID;
+    delete process.env.GITHUB_OAUTH_CLIENT_SECRET;
     installGoogleOAuthStateStore(null);
     installExternalOAuthTokenStoreForTest(null);
   });
@@ -35,6 +37,32 @@ describe("provider-backed marketing OAuth", () => {
       "TICKTICK_CLIENT_ID",
       "TICKTICK_CLIENT_SECRET",
     ]);
+    expect(externalOAuthMissingCredentials("github")).toEqual([
+      "GITHUB_OAUTH_CLIENT_ID",
+      "GITHUB_OAUTH_CLIENT_SECRET",
+    ]);
+  });
+
+  it("creates a GitHub repository authorization state without exposing write capability", async () => {
+    process.env.GITHUB_OAUTH_CLIENT_ID = "github-client-test";
+    process.env.GITHUB_OAUTH_CLIENT_SECRET = "github-secret-test";
+    const stateStore = createInMemoryOAuthStateStore();
+    installGoogleOAuthStateStore(stateStore);
+
+    const out = await startExternalOAuth({
+      organizationId: "org-seo",
+      userId: "user-seo",
+      provider: "github",
+      returnPath: "/seo",
+      redirectUri: "https://app.departify.app/connections/github_repository/callback",
+    });
+    const authorizationUrl = new URL(out.authorizationUrl);
+
+    expect(authorizationUrl.origin).toBe("https://github.com");
+    expect(authorizationUrl.pathname).toBe("/login/oauth/authorize");
+    expect(authorizationUrl.searchParams.get("client_id")).toBe("github-client-test");
+    expect(authorizationUrl.searchParams.get("scope")?.split(" ")).toEqual(["read:user", "repo"]);
+    expect((await stateStore.get(out.state))?.requestedToolId).toBe("github_repository");
   });
 
   it("creates a durable, provider-specific Meta authorization state", async () => {

@@ -97,6 +97,7 @@ export function MarketingRoute() {
   // Older API responses remain renderable while the backend rolls out the
   // durable work projection.
   const activeWork = department?.activeWork ?? [];
+  const capabilities = department?.capabilities ?? [];
 
   async function decideApproval(approvalId: string, action: "approve" | "reject") {
     if (!organizationId) return;
@@ -321,6 +322,22 @@ export function MarketingRoute() {
                     : employee.status === "bloqueado"
                       ? "Bloqueado"
                       : "Disponible"}
+                </Badge>
+              </li>
+            ))}
+          </ul>
+        </Card>
+
+        <Card title="Capacidades del equipo">
+          <ul className="dfy-list">
+            {capabilities.map((capability) => (
+              <li key={capability.id}>
+                <span>
+                  <strong>{capability.label}</strong>
+                  <span className="dfy-muted dfy-muted--small">{capability.description}</span>
+                </span>
+                <Badge tone={capability.state === "disponible" ? "success" : capability.state === "necesita_conexion" ? "warning" : "neutral"}>
+                  {capability.state === "disponible" ? "Disponible" : capability.state === "necesita_conexion" ? "Necesita conexión" : "No disponible"}
                 </Badge>
               </li>
             ))}

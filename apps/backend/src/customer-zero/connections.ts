@@ -69,12 +69,18 @@ export const TOOL_DOMAINS: Readonly<Record<string, readonly ToolDomain[]>> = {
   brevo: ["marketing", "email"],
   hostinger_email: ["email"],
   microsoft_teams: ["team"],
+  google_analytics: ["marketing"],
+  tiktok: ["marketing"],
   meta_ads: ["marketing"],
   tiktok_ads: ["marketing"],
   google_ads: ["marketing"],
   meta_business: ["marketing"],
   youtube: ["marketing"],
   ticktick: ["team"],
+  wordpress: ["marketing"],
+  shopify: ["marketing"],
+  etsy: ["marketing"],
+  github_repository: ["marketing"],
 };
 
 export function domainsFor(toolId: string): readonly ToolDomain[] {
@@ -126,6 +132,17 @@ export interface ToolDescriptor {
  * sprint targets 1-2 real connections, not a catalog.
  */
 export const TOOL_CATALOG: readonly ToolDescriptor[] = [
+  {
+    id: "github_repository",
+    label: "Proyecto de la web",
+    capability: "repository.read",
+    categoryEs: "Proyecto web",
+    categoryEn: "Web project",
+    connectable: true,
+    requiredCredentials: ["GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET"],
+    authorizationEndpoint: "https://github.com/login/oauth/authorize",
+    scopes: ["read:user", "repo"],
+  },
   {
     id: "hostinger_email",
     label: "Correo de empresa",
@@ -355,6 +372,24 @@ export const TOOL_CATALOG: readonly ToolDescriptor[] = [
     requiredCredentials: [],
   },
   {
+    id: "google_analytics",
+    label: "Google Analytics",
+    capability: "analytics.web",
+    categoryEs: "Marketing",
+    categoryEn: "Marketing",
+    connectable: false,
+    requiredCredentials: [],
+  },
+  {
+    id: "tiktok",
+    label: "TikTok",
+    capability: "marketing.tiktok",
+    categoryEs: "Marketing",
+    categoryEn: "Marketing",
+    connectable: false,
+    requiredCredentials: [],
+  },
+  {
     id: "tiktok_ads",
     label: "TikTok Ads",
     capability: "marketing.tiktok.ads.read",
@@ -409,6 +444,33 @@ export const TOOL_CATALOG: readonly ToolDescriptor[] = [
     authorizationEndpoint: "https://ticktick.com/oauth/authorize",
     scopes: ["tasks:read", "tasks:write"],
   },
+  {
+    id: "wordpress",
+    label: "WordPress",
+    capability: "marketing.wordpress.posts",
+    categoryEs: "Marketing",
+    categoryEn: "Marketing",
+    connectable: true,
+    requiredCredentials: [],
+  },
+  {
+    id: "shopify",
+    label: "Shopify",
+    capability: "marketing.shopify.products",
+    categoryEs: "Marketing",
+    categoryEn: "Marketing",
+    connectable: true,
+    requiredCredentials: [],
+  },
+  {
+    id: "etsy",
+    label: "Etsy",
+    capability: "marketing.etsy",
+    categoryEs: "Marketing",
+    categoryEn: "Marketing",
+    connectable: false,
+    requiredCredentials: [],
+  },
 ];
 
 /** Free-text / synonym resolution: the CEO's words → the internal connector. */
@@ -455,6 +517,10 @@ const ALIASES: Readonly<Record<string, string>> = {
   mailchimp: "mailchimp",
   slack: "slack",
   notion: "notion",
+  wordpress: "wordpress",
+  "wordpress.com": "wordpress",
+  shopify: "shopify",
+  etsy: "etsy",
 };
 
 /**
@@ -564,7 +630,7 @@ export function startConnection(
   // durable state nonce and perform a post-exchange operational probe. The
   // legacy pure helper cannot provide those guarantees, so never manufacture
   // an authorization URL here. The HTTP route owns those providers.
-  if (tool.id === "meta_business" || tool.id === "ticktick") {
+  if (tool.id === "meta_business" || tool.id === "ticktick" || tool.id === "github_repository") {
     connection.status = "blocked";
     connection.blockedReason = t(
       locale,

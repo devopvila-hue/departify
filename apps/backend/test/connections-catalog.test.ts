@@ -221,7 +221,10 @@ describe("P-B production fix — connections catalog", () => {
   it("K. Marketing tools are visible with honest prepared states", async () => {
     const org = await start();
     const views = await connections(org);
-    for (const toolId of ["meta_business", "youtube", "ticktick"]) {
+    for (const toolId of [
+      "google_ads", "meta_ads", "google_analytics", "tiktok", "tiktok_ads", "meta_business", "youtube", "ticktick",
+      "shopify", "wordpress", "etsy", "hubspot", "brevo", "mailchimp", "dropbox", "microsoft_365", "microsoft_calendar",
+    ]) {
       const tool = views.find((view) => view.toolId === toolId);
       expect(tool).toBeDefined();
       expect(tool?.state).not.toBe("connected");

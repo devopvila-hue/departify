@@ -108,6 +108,45 @@ describe("ConnectionsRoute — lifecycle", () => {
     expect(screen.queryByText("Meta Business")).not.toBeInTheDocument();
   });
 
+  it("keeps the complete Marketing catalog visible when connections are unconfigured", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => payload([
+        base({ toolId: "meta_business", name: "Meta Business", label: "Meta Business", category: "Marketing", categoryId: "marketing" }),
+        base({ toolId: "google_ads", name: "Google Ads", label: "Google Ads", category: "Publicidad", categoryId: "marketing" }),
+        base({ toolId: "meta_ads", name: "Meta Ads", label: "Meta Ads", category: "Publicidad", categoryId: "marketing" }),
+        base({ toolId: "google_analytics", name: "Google Analytics", label: "Google Analytics", category: "Marketing", categoryId: "marketing" }),
+        base({ toolId: "tiktok", name: "TikTok", label: "TikTok", category: "Marketing", categoryId: "marketing" }),
+        base({ toolId: "tiktok_ads", name: "TikTok Ads", label: "TikTok Ads", category: "Publicidad", categoryId: "marketing" }),
+        base({ toolId: "shopify", name: "Shopify", label: "Shopify", category: "Marketing", categoryId: "marketing" }),
+        base({ toolId: "wordpress", name: "WordPress", label: "WordPress", category: "Marketing", categoryId: "marketing" }),
+        base({ toolId: "hubspot", name: "HubSpot", label: "HubSpot", category: "CRM", categoryId: "crm" }),
+        base({ toolId: "brevo", name: "Brevo", label: "Brevo", category: "Correo", categoryId: "email" }),
+        base({ toolId: "mailchimp", name: "Mailchimp", label: "Mailchimp", category: "Correo", categoryId: "email" }),
+        base({ toolId: "dropbox", name: "Dropbox", label: "Dropbox", category: "Documentos", categoryId: "documents" }),
+        base({ toolId: "microsoft_365", name: "Microsoft 365", label: "Microsoft 365", category: "Documentos", categoryId: "documents" }),
+        base({ toolId: "microsoft_calendar", name: "Microsoft Outlook Calendar", label: "Microsoft Outlook Calendar", category: "Calendario", categoryId: "calendar" }),
+        base({ toolId: "etsy", name: "Etsy", label: "Etsy", category: "Marketing", categoryId: "marketing" }),
+      ]),
+    } as Response)));
+    mount(<ConnectionsRoute />);
+    fireEvent.click(await screen.findByRole("button", { name: /\+ añadir/i }));
+
+    for (const name of [
+      "Facebook", "Instagram", "Meta Ads", "Google Ads", "Google Analytics", "TikTok", "TikTok Ads",
+      "WordPress", "Shopify", "HubSpot", "Brevo", "Mailchimp", "Dropbox", "Microsoft 365",
+      "Microsoft Outlook Calendar", "Etsy",
+    ]) {
+      const row = Array.from(document.querySelectorAll<HTMLElement>(".dfy-catalog-row"))
+        .find((candidate) => candidate.querySelector(".dfy-catalog-row__copy strong")?.textContent === name);
+      expect(row).toBeDefined();
+      if (!row) throw new Error(`Missing catalog row: ${name}`);
+      expect(row.querySelector("svg")).not.toBeNull();
+      expect(row.querySelector(".dfy-connection-logo strong")).toBeNull();
+    }
+  });
+
   it("normalizes an available provider with a missing name before sorting", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({
       ok: true,

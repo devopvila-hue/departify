@@ -149,6 +149,7 @@ export function ControlPlaneRoute() {
       </div>
     );
   }
+  const departmentCapabilities = department.capabilities ?? [];
 
   return (
     <div className="dfy-page dfy-control-plane">
@@ -164,8 +165,8 @@ export function ControlPlaneRoute() {
       {/* Company status summary — real backend data */}
       <section className="dfy-company-summary" aria-label="Resumen de la empresa">
         <div className="dfy-company-summary__stat">
-          <strong>{company.summary.digitalEmployees}</strong>
-          <span>empleados digitales</span>
+          <strong>{company.summary.operationalCapabilities ?? company.summary.digitalEmployees}</strong>
+          <span>capacidades operativas</span>
         </div>
         <div className="dfy-company-summary__stat">
           <strong>{company.summary.workingNow}</strong>
@@ -226,8 +227,8 @@ export function ControlPlaneRoute() {
 
             <ul className="dfy-department__metrics">
               <li>
-                <strong>{department.employees.length}</strong>
-                <span>empleados digitales</span>
+                <strong>{department.capabilities?.length ?? department.employees.length}</strong>
+                <span>capacidades</span>
               </li>
               <li>
                 <strong>{department.employeesWorkingNow}</strong>
@@ -300,6 +301,22 @@ export function ControlPlaneRoute() {
             Cada empleado digital tiene una especialidad. Pulsa una tarjeta para
             ver qué está haciendo.
           </p>
+        </Card>
+
+        <Card title="Capacidades del equipo">
+          <ul className="dfy-list">
+            {departmentCapabilities.map((capability) => (
+              <li key={`${department.id}-${capability.id}`}>
+                <span>
+                  <strong>{capability.label}</strong>
+                  <span className="dfy-muted dfy-muted--small">{capability.description}</span>
+                </span>
+                <Badge tone={capability.state === "disponible" ? "success" : capability.state === "necesita_conexion" ? "warning" : "neutral"}>
+                  {capability.state === "disponible" ? "Disponible" : capability.state === "necesita_conexion" ? "Necesita conexión" : "No disponible"}
+                </Badge>
+              </li>
+            ))}
+          </ul>
         </Card>
 
         {/* Connected tools */}

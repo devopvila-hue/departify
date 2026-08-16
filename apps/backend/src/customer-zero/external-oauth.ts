@@ -16,6 +16,7 @@ export const EXTERNAL_OAUTH_PROVIDERS: readonly ExternalOAuthProvider[] = [
   "meta_business",
   "meta_instagram",
   "ticktick",
+  "github",
 ];
 
 /** Facebook Login / Facebook Login for Business permissions for Pages. */
@@ -62,7 +63,9 @@ export function externalOAuthCredentials(provider: ExternalOAuthProvider): {
 } | null {
   const names: readonly [string, string] = provider === "meta_business" || provider === "meta_instagram"
     ? ["META_APP_ID", "META_APP_SECRET"]
-    : ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"];
+    : provider === "github"
+      ? ["GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET"]
+      : ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"];
   const clientId = process.env[names[0]]?.trim() ?? "";
   const clientSecret = process.env[names[1]]?.trim() ?? "";
   return clientId && clientSecret ? { clientId, clientSecret } : null;
@@ -73,7 +76,9 @@ export function externalOAuthMissingCredentials(
 ): string[] {
   const names: readonly [string, string] = provider === "meta_business" || provider === "meta_instagram"
     ? ["META_APP_ID", "META_APP_SECRET"]
-    : ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"];
+    : provider === "github"
+      ? ["GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET"]
+      : ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"];
   return names.filter((name) => !(process.env[name]?.trim()));
 }
 
@@ -84,7 +89,12 @@ export function externalOAuthRedirectUri(
   const base = (
     publicBaseUrl?.trim() || process.env.PUBLIC_BASE_URL?.trim() || "http://localhost:3000"
   ).replace(/\/+$/, "");
-  return `${base}/connections/${provider === "meta_instagram" ? "meta_business" : provider}/callback`;
+  const callbackTool = provider === "meta_instagram"
+    ? "meta_business"
+    : provider === "github"
+      ? "github_repository"
+      : provider;
+  return `${base}/connections/${callbackTool}/callback`;
 }
 
 function providerConfig(provider: ExternalOAuthProvider, redirectUri: string) {
@@ -101,6 +111,14 @@ function providerConfig(provider: ExternalOAuthProvider, redirectUri: string) {
       authorizationEndpoint: "https://www.instagram.com/oauth/authorize",
       tokenEndpoint: "https://api.instagram.com/oauth/access_token",
       scopes: META_INSTAGRAM_SCOPES,
+      redirectUri,
+    };
+  }
+  if (provider === "github") {
+    return {
+      authorizationEndpoint: "https://github.com/login/oauth/authorize",
+      tokenEndpoint: "https://github.com/login/oauth/access_token",
+      scopes: ["read:user", "repo"],
       redirectUri,
     };
   }
@@ -131,7 +149,7 @@ export async function startExternalOAuth(input: {
     organizationId: input.organizationId,
     userId: input.userId,
     connectionIntent: "marketing",
-    requestedToolId: input.provider,
+    requestedToolId: input.provider === "github" ? "github_repository" : input.provider,
     returnPath: input.returnPath,
     createdAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + 10 * 60 * 1000).toISOString(),
@@ -282,6 +300,28 @@ async function exchangeTickTickCode(
   };
 }
 
+async function exchangeGithubCode(
+  code: string,
+  credentials: { clientId: string; clientSecret: string },
+  redirectUri: string,
+): Promise<{ accessToken: string; refreshToken: string | null; expiresAt: string | null; scopes: string[] }> {
+  const response = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: { accept: "application/json", "content-type": "application/json" },
+    body: JSON.stringify({ client_id: credentials.clientId, client_secret: credentials.clientSecret, code, redirect_uri: redirectUri }),
+    signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS),
+  });
+  const body = await readJson(response, "github");
+  const accessToken = typeof body.access_token === "string" ? body.access_token : "";
+  if (!accessToken) throw new Error("GITHUB_MISSING_ACCESS_TOKEN");
+  return {
+    accessToken,
+    refreshToken: typeof body.refresh_token === "string" ? body.refresh_token : null,
+    expiresAt: typeof body.expires_in === "number" ? new Date(Date.now() + body.expires_in * 1000).toISOString() : null,
+    scopes: parseScopes(body.scope, ["read:user", "repo"]),
+  };
+}
+
 interface MetaSocialAsset {
   readonly id: string;
   readonly name: string;
@@ -384,6 +424,22 @@ async function probeTickTick(accessToken: string): Promise<{ label: string; scop
   return { label: "TickTick", scopes: [] };
 }
 
+async function probeGithub(accessToken: string): Promise<{ label: string; scopes: string[] }> {
+  const response = await fetch("https://api.github.com/user", {
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${accessToken}`,
+      "x-github-api-version": "2022-11-28",
+      "user-agent": "DepartifySEO/1.0",
+    },
+    signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS),
+  });
+  const body = await readJson(response, "github");
+  const login = typeof body.login === "string" ? body.login.trim() : "";
+  if (!login) throw new Error("GITHUB_NO_IDENTITY");
+  return { label: `GitHub · ${login}`, scopes: [] };
+}
+
 export async function completeExternalOAuth(input: {
   organizationId: string;
   userId: string;
@@ -397,7 +453,7 @@ export async function completeExternalOAuth(input: {
   if (
     stateRecord.organizationId !== input.organizationId ||
     stateRecord.userId !== input.userId ||
-    stateRecord.requestedToolId !== input.provider
+    stateRecord.requestedToolId !== (input.provider === "github" ? "github_repository" : input.provider)
   ) {
     throw new Error("org_or_user_mismatch");
   }
@@ -409,13 +465,17 @@ export async function completeExternalOAuth(input: {
     ? await exchangeMetaCode(input.code, credentials, input.redirectUri)
     : input.provider === "meta_instagram"
       ? await exchangeMetaInstagramCode(input.code, credentials, input.redirectUri)
-      : await exchangeTickTickCode(input.code, credentials, input.redirectUri);
+      : input.provider === "github"
+        ? await exchangeGithubCode(input.code, credentials, input.redirectUri)
+        : await exchangeTickTickCode(input.code, credentials, input.redirectUri);
   const metaProbe = input.provider === "meta_business"
     ? await probeMeta(exchanged.accessToken)
     : input.provider === "meta_instagram"
       ? await probeMetaInstagram(exchanged.accessToken)
       : null;
-  const probe = metaProbe ?? await probeTickTick(exchanged.accessToken);
+  const probe = metaProbe ?? (input.provider === "github"
+    ? await probeGithub(exchanged.accessToken)
+    : await probeTickTick(exchanged.accessToken));
   const record: ExternalOAuthTokenRecord = {
     organizationId: input.organizationId,
     userId: input.userId,
@@ -445,6 +505,8 @@ export async function completeExternalOAuth(input: {
             ? ["marketing.social.publish"]
             : []),
         ]
-    : ["tasks.read", "tasks.write"];
+    : input.provider === "github"
+      ? ["repository.read"]
+      : ["tasks.read", "tasks.write"];
   return { record, returnPath: stateRecord.returnPath, grantedCapabilities };
 }

@@ -8,6 +8,7 @@ import { DecisionsRoute } from "@/routes/DecisionsRoute";
 import { DepartmentsRoute } from "@/routes/DepartmentsRoute";
 import { GoogleOAuthCallbackRoute } from "@/routes/GoogleOAuthCallbackRoute";
 import { MetaOAuthCallbackRoute } from "@/routes/MetaOAuthCallbackRoute";
+import { GitHubOAuthCallbackRoute } from "@/routes/GitHubOAuthCallbackRoute";
 import { InboxRoute } from "@/routes/InboxRoute";
 import { MarketingRoute } from "@/routes/MarketingRoute";
 import { ResultsRoute } from "@/routes/ResultsRoute";
@@ -66,6 +67,11 @@ export const router = createBrowserRouter([
   {
     path: "/connections/meta_business/callback",
     element: <MetaOAuthCallbackRoute />,
+    errorElement: <RouteErrorFallback />,
+  },
+  {
+    path: "/connections/github_repository/callback",
+    element: <GitHubOAuthCallbackRoute />,
     errorElement: <RouteErrorFallback />,
   },
   {

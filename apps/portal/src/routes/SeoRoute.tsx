@@ -11,6 +11,7 @@ export function SeoRoute() {
   const [report, setReport] = useState<SeoAuditReport | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [repositoryBusy, setRepositoryBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (!organizationId) return;
@@ -31,6 +32,32 @@ export function SeoRoute() {
     setRunning(false);
   }
 
+  async function connectRepository() {
+    if (!organizationId) return;
+    setRepositoryBusy(true);
+    const result = await api.connect(organizationId, "github_repository");
+    const authorizationUrl = result?.connection?.authorizationUrl;
+    if (authorizationUrl) {
+      window.location.href = authorizationUrl;
+      return;
+    }
+    setError(result?.connection?.blockedReason ?? "No he podido iniciar la conexión del proyecto.");
+    setRepositoryBusy(false);
+  }
+
+  async function selectRepository(repository: { id: string; fullName: string; defaultBranch: string }) {
+    if (!organizationId) return;
+    setRepositoryBusy(true);
+    const result = await api.seoRepository(organizationId, {
+      repositoryId: repository.id,
+      repositoryFullName: repository.fullName,
+      defaultBranch: repository.defaultBranch,
+    });
+    if (!result?.repository) setError("No he podido asociar este proyecto con la web.");
+    await load();
+    setRepositoryBusy(false);
+  }
+
   return (
     <div className="dfy-page">
       <section className="dfy-hero dfy-hero--department">
@@ -43,10 +70,31 @@ export function SeoRoute() {
       {error && <p className="dfy-alert" role="alert">{error}</p>}
       {!data ? <Card><p className="dfy-muted">Cargando SEO…</p></Card> : (
         <>
-          <Card title="Estado de SEO" action={<Badge tone={data.state === "ready" ? "success" : "warning"}>{data.state === "ready" ? "Listo para revisar" : "Necesita configuración"}</Badge>}>
-            {data.website ? <p>Web analizada: <strong>{data.website}</strong></p> : <EmptyState title="Indica la web de tu empresa" description="SEO necesita una web real para poder revisar títulos, estructura, enlaces y accesibilidad básica." />}
-            <div className="dfy-seo-capabilities"><span>Auditoría web {data.capabilities.websiteAudit ? "disponible" : "bloqueada"}</span><span>Search Console {data.capabilities.searchConsole ? "conectado" : "pendiente de conexión"}</span><span>Analytics {data.capabilities.analytics ? "conectado" : "pendiente de conexión"}</span></div>
+          <Card title="Estado de SEO" action={<Badge tone={data.state === "ready" ? "success" : "warning"}>{data.state === "ready" ? "Listo para revisar" : data.state === "web_detected" ? "Web detectada" : "Necesita configuración"}</Badge>}>
+            {data.website ? <p>Hemos detectado tu web: <strong>{data.website}</strong></p> : <EmptyState title="Indica la web de tu empresa" description="SEO necesita una web real para poder revisar títulos, estructura, enlaces y accesibilidad básica." />}
+            {data.website && !data.repository && (
+              <div className="dfy-seo-onboarding" role="status">
+                <strong>{data.onboarding.repositoryConnected ? "Selecciona el proyecto de tu web" : "Conecta el proyecto de tu web"}</strong>
+                <p className="dfy-muted">La auditoría pública funciona ya. Con el proyecto conectado, SEO podrá localizar los archivos que deben corregirse.</p>
+                {!data.onboarding.repositoryConnected ? (
+                  <div className="dfy-seo-onboarding__actions">
+                    <button type="button" className="dfy-button" disabled={repositoryBusy} onClick={() => void connectRepository()}>{repositoryBusy ? "Conectando…" : "Conectar proyecto"}</button>
+                    <button type="button" className="dfy-button dfy-button--ghost" onClick={() => setError("Puedes conectar el proyecto más adelante desde SEO.")}>Ahora no</button>
+                  </div>
+                ) : (
+                  <select aria-label="Proyecto de la web" disabled={repositoryBusy || data.repositories.length === 0} defaultValue="" onChange={(event) => { const repository = data.repositories.find((item) => item.id === event.target.value); if (repository) void selectRepository(repository); }}>
+                    <option value="">Selecciona el proyecto</option>
+                    {data.repositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.fullName}{repository.private ? " · privado" : ""}</option>)}
+                  </select>
+                )}
+              </div>
+            )}
+            {data.repository && <p className="dfy-muted">Proyecto conectado: <strong>{data.repository.repositoryFullName}</strong> · Lectura disponible · Cambios requieren autorización.</p>}
+            <div className="dfy-seo-capabilities"><span>Auditoría web {data.capabilities.websiteAudit ? "disponible" : "pendiente"}</span><span>Proyecto web {data.capabilities.repositoryRead ? "conectado" : "pendiente"}</span><span>Search Console {data.capabilities.searchConsole ? "conectado" : "pendiente de conexión"}</span><span>Analytics {data.capabilities.analytics ? "conectado" : "pendiente de conexión"}</span></div>
             <button type="button" className="dfy-button" disabled={!data.capabilities.websiteAudit || running} onClick={() => void runAudit()}>{running ? "Revisando la web…" : "Revisar el SEO de nuestra web"}</button>
+          </Card>
+          <Card title="Capacidades del equipo">
+            <ul className="dfy-list">{data.capabilities.roster.map((capability) => <li key={capability.id}><span><strong>{capability.label}</strong><span className="dfy-muted dfy-muted--small">{capability.description}</span></span><Badge tone={capability.state === "disponible" ? "success" : capability.state === "necesita_conexion" ? "warning" : "neutral"}>{capability.state === "disponible" ? "Disponible" : capability.state === "necesita_conexion" ? "Necesita conexión" : "No disponible"}</Badge></li>)}</ul>
           </Card>
           {report && <SeoReport report={report} />}
           <Card title="Trabajo SEO">

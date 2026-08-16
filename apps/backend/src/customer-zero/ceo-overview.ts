@@ -24,6 +24,16 @@ import {
 } from "./department-identity.js";
 import { MARKETING_ROSTER } from "./marketing-roster.js";
 import { t, type SupportedLocale } from "./locale.js";
+import {
+  projectDepartmentCapabilities,
+} from "./department-capabilities.js";
+
+type DepartmentCapabilityCard = {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+  readonly state: "disponible" | "necesita_conexion" | "no_disponible";
+};
 
 export interface DecisionView {
   readonly id: string;
@@ -82,6 +92,7 @@ export interface CompanyOperatingState {
   readonly dataStatus: "available" | "partial";
   readonly summary: {
     readonly digitalEmployees: number;
+    readonly operationalCapabilities: number;
     readonly workingNow: number;
     readonly connectedTools: number;
     readonly pendingApprovals: number;
@@ -100,6 +111,7 @@ export interface CompanyOperatingState {
       readonly currentWork?: string;
     }[];
     readonly employeesWorkingNow: number;
+    readonly capabilities: readonly DepartmentCapabilityCard[];
     readonly tools: readonly { readonly toolId: string; readonly label: string; readonly capability: string }[];
     readonly toolsConnected: number;
     readonly activeObjective: { readonly id: string | null; readonly title: string; readonly progress?: number } | null;
@@ -112,6 +124,7 @@ export interface CompanyOperatingState {
     readonly status: string;
     readonly currentWork?: string;
   }[];
+  readonly capabilities: readonly DepartmentCapabilityCard[];
   readonly tools: readonly {
     readonly toolId: string;
     readonly label: string;
@@ -154,6 +167,12 @@ export function buildCompanyOperatingState(input: {
   readonly dna: CompanyDnaRecord | null;
   readonly marketing: DepartmentStatusView | null;
   readonly marketingApprovals: readonly ApprovalRequest[];
+  readonly seo?: {
+    readonly website: string | null;
+    readonly capabilities: readonly DepartmentCapabilityCard[];
+    readonly tasks: readonly DepartmentTask[];
+    readonly results: readonly DepartmentResult[];
+  };
 }): CompanyOperatingState {
   const userVisibleConnection = (connection: OperationalConnectionView) =>
     connection.toolId !== "google_workspace";
@@ -203,6 +222,9 @@ export function buildCompanyOperatingState(input: {
   const marketingTools = (input.marketing?.tools ?? [])
     .filter((tool) => tool.status === "connected")
     .map((tool) => ({ toolId: tool.toolId, label: tool.label, capability: tool.capability }));
+  const marketingCapabilities = input.marketing?.capabilities ?? projectDepartmentCapabilities("marketing", input.connections).map(({ id, label, description, state }) => ({ id, label, description, state }));
+  const seo = input.seo;
+  const seoTasks = (seo?.tasks ?? []).filter((task) => task.departmentId === "seo");
   const marketingStatus = marketingTasks.length > 0
     ? marketingTasks.some((task) => task.status === "waiting_approval")
       ? "esperando_aprobacion"
@@ -212,6 +234,38 @@ export function buildCompanyOperatingState(input: {
       : input.marketingApprovals.some((approval) => approval.status === "pending")
         ? "esperando_aprobacion"
         : "disponible";
+  const departments = [{
+    id: "marketing",
+    name: input.marketing?.name ?? "Marketing",
+    status: marketingStatus,
+    head: input.head,
+    employees: marketingEmployees,
+    employeesWorkingNow: workingEmployeeCount,
+    capabilities: marketingCapabilities,
+    tools: marketingTools,
+    toolsConnected: marketingTools.length,
+    activeObjective: marketingObjective,
+  }];
+  if (seo) {
+    departments.push({
+      id: "seo",
+      name: "SEO",
+      status: seo.website ? "disponible" : "necesita_configuracion",
+      head: {
+        departmentId: "seo",
+        department: "SEO",
+        name: "Responsable de SEO",
+        initials: "SEO",
+        role: "Responsable de SEO",
+      },
+      employees: [],
+      employeesWorkingNow: seoTasks.some((task) => task.status === "running") ? 1 : 0,
+      capabilities: seo.capabilities,
+      tools: [],
+      toolsConnected: 0,
+      activeObjective: null,
+    });
+  }
   const pendingApprovals = input.base.decisions.filter((decision) => decision.status === "pending").length
     + input.marketingApprovals.filter((approval) => approval.status === "pending").length;
 
@@ -269,23 +323,15 @@ export function buildCompanyOperatingState(input: {
     dataStatus: "available",
     summary: {
       digitalEmployees: marketingEmployees.length,
+      operationalCapabilities: marketingCapabilities.length + (seo?.capabilities.length ?? 0),
       workingNow: workingEmployeeCount,
       connectedTools: connectedTools.length,
       pendingApprovals,
       activeObjective,
     },
-    departments: [{
-      id: "marketing",
-      name: input.marketing?.name ?? "Marketing",
-      status: marketingStatus,
-      head: input.head,
-      employees: marketingEmployees,
-      employeesWorkingNow: workingEmployeeCount,
-      tools: marketingTools,
-      toolsConnected: marketingTools.length,
-      activeObjective: marketingObjective,
-    }],
+    departments,
     employees: marketingEmployees,
+    capabilities: [...marketingCapabilities, ...(seo?.capabilities ?? [])],
     tools: connectedTools,
     pendingApprovals: input.marketingApprovals
       .filter((approval) => approval.status === "pending")

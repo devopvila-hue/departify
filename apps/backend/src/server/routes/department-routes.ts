@@ -16,10 +16,18 @@ import {
 } from "../../customer-zero/department-calendar.js";
 import { auditWebsite } from "../../customer-zero/seo-audit.js";
 import { requireSession, workStoreForRoutes } from "./customer-zero-v2.js";
+import { buildCanonicalConnectionViews } from "./customer-zero-v2.js";
 import { findOperationalGoogleIdentityForOrg } from "../../customer-zero/credential-resolver.js";
 import { GoogleCalendarAdapter } from "../../customer-zero/google-calendar-adapter.js";
 import type { ServerDeps } from "../deps.js";
 import type { DepartmentWorkCapability } from "../../customer-zero/department-work.js";
+import {
+  getSeoRepositoryLinkStore,
+  inspectGithubRepository,
+  listGithubRepositories,
+} from "../../customer-zero/seo-repository.js";
+import { projectDepartmentCapabilities } from "../../customer-zero/department-capabilities.js";
+import { buildSeoOnboardingState } from "../../customer-zero/seo-onboarding.js";
 
 const WIDGET_KINDS = new Set<DashboardWidgetKind>([
   "metric", "line", "bar", "area", "donut", "table", "timeline", "calendar-summary",
@@ -186,23 +194,86 @@ export async function registerDepartmentRoutes(server: FastifyInstance, deps: Se
 
   server.get<{ Params: { organizationId: string } }>("/api/departments/seo/:organizationId", async (request) => {
     const { organizationId } = request.params;
-    await requireSession(organizationId, deps);
-    const [dna, tasks, results] = await Promise.all([
+    const session = await requireSession(organizationId, deps);
+    const [dna, tasks, results, connections] = await Promise.all([
       deps.companyDna?.get(organizationId) ?? Promise.resolve(null),
       workStoreForRoutes().listTasksForOrg(organizationId, 100),
       workStoreForRoutes().listResultsForOrg(organizationId, 100),
+      buildCanonicalConnectionViews(session, session.state.locale),
     ]);
     const seoTasks = tasks.filter((task) => task.departmentId === "seo");
     const seoResults = results.filter((result) => result.departmentId === "seo");
+    const repository = dna?.website
+      ? await getSeoRepositoryLinkStore().get(organizationId, dna.website)
+      : null;
+    const repositoryConnected = connections.some(
+      (connection) => connection.toolId === "github_repository" && connection.state === "connected",
+    );
+    const capabilities = projectDepartmentCapabilities("seo", connections).map((capability) =>
+      !dna?.website && capability.id !== "seo.search-console" && capability.id !== "seo.analytics"
+        ? { ...capability, state: "necesita_conexion" as const }
+        : capability,
+    );
+    const onboarding = buildSeoOnboardingState({ website: dna?.website, repository, repositoryConnected });
     return {
       organizationId,
       department: { id: "seo", name: "SEO", responsible: "Responsable de SEO", description: "Mejora verificable de la web y su visibilidad orgánica." },
-      state: dna?.website ? "ready" : "disconnected",
+      state: dna?.website ? repository ? "ready" : "web_detected" : "disconnected",
       website: dna?.website ?? null,
+      onboarding,
+      repository,
+      repositories: repositoryConnected && !repository
+        ? await listGithubRepositories(organizationId, request.authUser?.id ?? organizationId)
+        : [],
       tasks: seoTasks,
       results: seoResults,
-      capabilities: { websiteAudit: Boolean(dna?.website), searchConsole: false, analytics: false, repositoryRead: false },
+      capabilities: {
+        websiteAudit: Boolean(dna?.website),
+        searchConsole: capabilities.some((capability) => capability.id === "seo.search-console" && capability.state === "disponible"),
+        analytics: capabilities.some((capability) => capability.id === "seo.analytics" && capability.state === "disponible"),
+        repositoryRead: Boolean(repository && repositoryConnected),
+        repositoryWrite: false,
+        roster: capabilities,
+      },
     };
+  });
+
+  server.post<{
+    Params: { organizationId: string };
+    Body: { repositoryId?: string; repositoryFullName?: string; defaultBranch?: string };
+  }>("/api/departments/seo/:organizationId/repository", async (request, reply) => {
+    const { organizationId } = request.params;
+    const session = await requireSession(organizationId, deps);
+    const dna = await (deps.companyDna?.get(organizationId) ?? Promise.resolve(null));
+    if (!dna?.website) return reply.code(409).send({ error: { code: "SEO_WEBSITE_REQUIRED", message: "Primero necesitamos detectar la web de tu empresa." } });
+    const userId = request.authUser?.id ?? organizationId;
+    const connections = await buildCanonicalConnectionViews(session, session.state.locale);
+    if (!connections.some((connection) => connection.toolId === "github_repository" && connection.state === "connected")) {
+      return reply.code(409).send({ error: { code: "SEO_REPOSITORY_CONNECTION_REQUIRED", message: "Conecta el proyecto de tu web antes de seleccionar un repositorio." } });
+    }
+    const body = request.body ?? {};
+    const repositories = await listGithubRepositories(organizationId, userId);
+    const selected = repositories.find((repository) =>
+      (body.repositoryId && repository.id === body.repositoryId) ||
+      (body.repositoryFullName && repository.fullName === body.repositoryFullName),
+    );
+    if (!selected) return reply.code(400).send({ error: { code: "SEO_REPOSITORY_NOT_ACCESSIBLE", message: "Ese proyecto no está entre los repositorios accesibles de la conexión." } });
+    const now = new Date().toISOString();
+    const link = {
+      organizationId,
+      departmentId: "seo" as const,
+      website: dna.website,
+      provider: "github" as const,
+      repositoryId: selected.id,
+      repositoryFullName: selected.fullName,
+      defaultBranch: body.defaultBranch?.trim() || selected.defaultBranch,
+      access: "read" as const,
+      selectedBy: userId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await getSeoRepositoryLinkStore().upsert(link);
+    return { organizationId, repository: link, repositoryRead: true, repositoryWrite: false };
   });
 
   server.post<{ Params: { organizationId: string } }>("/api/departments/seo/:organizationId/audit", async (request, reply) => {
@@ -235,6 +306,20 @@ export async function registerDepartmentRoutes(server: FastifyInstance, deps: Se
     });
     try {
       const report = await auditWebsite(dna.website);
+      const repository = await getSeoRepositoryLinkStore().get(organizationId, dna.website);
+      let repositoryInspection: Awaited<ReturnType<typeof inspectGithubRepository>> | null = null;
+      if (repository && request.authUser?.id) {
+        try {
+          repositoryInspection = await inspectGithubRepository({
+            organizationId,
+            userId: request.authUser.id,
+            link: repository,
+            issueIds: report.issues.map((issue) => issue.id),
+          });
+        } catch (error) {
+          request.log.warn({ event: "seo_repository_read_failed", organizationId, code: error instanceof Error ? error.message : "unknown" });
+        }
+      }
       const critical = report.issues.filter((issue) => issue.priority === "critical").length;
       const important = report.issues.filter((issue) => issue.priority === "important").length;
       const opportunities = report.issues.filter((issue) => issue.priority === "opportunity").length;
@@ -251,8 +336,17 @@ export async function registerDepartmentRoutes(server: FastifyInstance, deps: Se
           `Se revisó title, description, canonical, robots, encabezados, enlaces internos, imágenes, datos estructurados, metadata social y sitemap.`,
           ``,
           ...report.issues.map((issue) => `- **${issue.priority}** ${issue.title} — ${issue.evidence}`),
+          ...(repositoryInspection ? [
+            "",
+            `Proyecto conectado: ${repositoryInspection.repository.fullName}`,
+            `Archivos de metadatos localizados: ${repositoryInspection.likelyMetadataFiles.length}.`,
+            ...Object.entries(repositoryInspection.issueFileHints).flatMap(([issueId, files]) => files.map((file) => `- ${issueId}: ${file}`)),
+          ] : []),
         ].join("\n"),
-        data: report as unknown as Record<string, unknown>,
+        data: {
+          ...(report as unknown as Record<string, unknown>),
+          ...(repositoryInspection ? { repository: repositoryInspection } : {}),
+        },
         source: "SEO website audit",
         producedByCapability: "seo.audit.website" as DepartmentWorkCapability,
       });

@@ -83,6 +83,10 @@ export function availableConfigForTool(toolId: string): string | null {
       return hasEnv(["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"])
         ? "oauth:ticktick"
         : null;
+    case "github_repository":
+      return hasEnv(["GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET"])
+        ? "oauth:github"
+        : null;
     default:
       return null;
   }
@@ -119,6 +123,9 @@ export function hasWorkingConnector(toolId: string): boolean {
     toolId === "hostinger_email" ||
     toolId === "meta_business" ||
     toolId === "ticktick"
+    || toolId === "wordpress"
+    || toolId === "shopify"
+    || toolId === "github_repository"
   );
 }
 

@@ -12,6 +12,7 @@ import type { DepartmentWorkStore } from "../customer-zero/department-work.js";
 import type { DepartmentDashboardStore } from "../customer-zero/department-dashboards.js";
 import type { DepartmentMemoryStore } from "../customer-zero/department-memory.js";
 import type { ConnectorRuntime, ConnectorRuntimeCandidate } from "@departify/connector-runtime";
+import type { SeoRepositoryLinkStore } from "../customer-zero/seo-repository.js";
 
 /**
  * Server dependencies — Phase P0-A / P-B.
@@ -60,4 +61,6 @@ export interface ServerDeps {
   connectorRuntimes?: readonly ConnectorRuntimeCandidate[];
   /** Tenant-bound WordPress/Shopify runtime. */
   marketingConnectorRuntime?: ConnectorRuntime;
+  /** Durable SEO website-to-repository association. */
+  seoRepositoryLinks?: SeoRepositoryLinkStore;
 }

@@ -19,15 +19,21 @@ export function DepartmentsRoute() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<CompanyStatus | null>(null);
   const [head, setHead] = useState<HeadIdentity | null>(null);
+  const [marketing, setMarketing] = useState<Awaited<ReturnType<typeof api.marketingDepartment>>>(null);
+  const [seo, setSeo] = useState<Awaited<ReturnType<typeof api.seoDepartment>>>(null);
 
   const load = useCallback(async () => {
     if (!organizationId) return;
-    const [statusData, handoff] = await Promise.all([
+    const [statusData, handoff, marketingData, seoData] = await Promise.all([
       api.status(organizationId),
       api.handoff(organizationId),
+      api.marketingDepartment(organizationId),
+      api.seoDepartment(organizationId),
     ]);
     if (statusData) setStatus(statusData);
     if (handoff) setHead(handoff.head);
+    if (marketingData) setMarketing(marketingData);
+    if (seoData) setSeo(seoData);
   }, [organizationId]);
 
   useEffect(() => {
@@ -38,7 +44,7 @@ export function DepartmentsRoute() {
     id: string;
     name: string;
     head: HeadIdentity | null;
-    teamSize: number;
+      teamSize: number;
     activeTasks: number;
     tools: number;
   }> = [
@@ -46,7 +52,7 @@ export function DepartmentsRoute() {
       id: "marketing",
       name: "Marketing",
       head,
-      teamSize: 3,
+      teamSize: marketing?.capabilities?.length ?? marketing?.employees?.length ?? 0,
       activeTasks:
         (status?.marketingWork?.items ?? []).filter(
           (it) =>
@@ -55,7 +61,7 @@ export function DepartmentsRoute() {
             it.status === "approved" ||
             it.status === "needs_approval",
         ).length,
-      tools: (status?.connections ?? []).filter((c) => c.status === "connected").length,
+      tools: marketing?.tools?.filter((tool) => tool.status === "connected").length ?? 0,
     },
   ];
 
@@ -63,9 +69,9 @@ export function DepartmentsRoute() {
     id: "seo",
     name: "SEO",
     head: { departmentId: "seo", department: "SEO", name: "Responsable de SEO", initials: "SEO", role: "Responsable de SEO" },
-    teamSize: 1,
-    activeTasks: 0,
-    tools: 0,
+    teamSize: seo?.capabilities?.roster?.length ?? 0,
+    activeTasks: seo?.tasks?.filter((task) => ["queued", "running", "waiting_approval"].includes(task.status)).length ?? 0,
+    tools: seo?.onboarding?.repositoryConnected ? 1 : 0,
   });
 
   const future = [
@@ -107,7 +113,7 @@ export function DepartmentsRoute() {
             <ul className="dfy-department__metrics">
               <li>
                 <strong>{dept.teamSize}</strong>
-                <span>especialistas</span>
+                <span>capacidades</span>
               </li>
               <li>
                 <strong>{dept.activeTasks}</strong>

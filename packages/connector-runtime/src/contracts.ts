@@ -3,6 +3,7 @@ export type ConnectorOperation = "prepare" | "execute";
 /** Execution providers are implementation details; they never cross into the CEO UI. */
 export type ConnectorProvider =
   | "activepieces"
+  | "departify_marketing"
   | "meta_ads"
   | "tiktok_ads"
   | "google_ads_mcp"

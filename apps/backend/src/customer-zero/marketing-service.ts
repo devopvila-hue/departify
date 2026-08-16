@@ -68,12 +68,14 @@ import type {
   DepartmentWorkStore,
 } from "./department-work.js";
 import { MARKETING_ROSTER } from "./marketing-roster.js";
+import { projectDepartmentCapabilities } from "./department-capabilities.js";
 
 export interface MarketingOperationalConnection {
   readonly toolId: string;
   readonly label: string;
   readonly capability: string;
   readonly state: string;
+  readonly capabilities?: readonly string[];
 }
 
 export interface MarketingOperationalSnapshot {
@@ -95,6 +97,8 @@ const MARKETING_TOOLS: readonly Omit<ConnectedTool, "status" | "note">[] = [
   { toolId: "gmail", label: "Gmail", capability: "Email" },
   { toolId: "notion", label: "Notion", capability: "Documentos" },
   { toolId: "youtube", label: "YouTube", capability: "Vídeo y distribución" },
+  { toolId: "wordpress", label: "WordPress", capability: "Contenido web" },
+  { toolId: "shopify", label: "Shopify", capability: "Catálogo y tienda" },
   { toolId: "ticktick", label: "TickTick", capability: "Tareas del equipo" },
 ];
 
@@ -654,6 +658,7 @@ export class MarketingService {
         status: "not_provisioned",
         employees: [],
         employeesWorkingNow: 0,
+        capabilities: [],
         tools: [],
         toolsConnected: 0,
         activeObjective: null,
@@ -683,6 +688,10 @@ export class MarketingService {
       status,
       employees,
       employeesWorkingNow: employees.filter((e) => e.status === "trabajando").length,
+      capabilities: projectDepartmentCapabilities(
+        "marketing",
+        operational?.connections ?? connectedToolIds.map((toolId) => ({ toolId, state: "connected" })),
+      ).map(({ id, label, description, state }) => ({ id, label, description, state })),
       tools,
       toolsConnected: tools.filter((t) => t.status === "connected").length,
       activeObjective: objective,

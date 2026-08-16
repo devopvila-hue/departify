@@ -3,6 +3,7 @@ import { buildCompanyOperatingState, type CeoOverview } from "../src/customer-ze
 import { buildHeadView, getMarketingHead } from "../src/customer-zero/department-identity.js";
 import type { DepartmentTask, DepartmentResult } from "../src/customer-zero/department-work.js";
 import type { InboxItem } from "../src/customer-zero/inbox-domain.js";
+import { departmentCapabilityDefinitions } from "../src/customer-zero/department-capabilities.js";
 
 const head = buildHeadView(getMarketingHead(), "es");
 const base = {
@@ -145,5 +146,50 @@ describe("company operating state projection", () => {
     expect(result.employees).toEqual([]);
     expect(result.tools).toEqual([]);
     expect(result.activity).toEqual([]);
+  });
+
+  it("uses the same canonical capability roster for department and company counts", () => {
+    const marketingCapabilities = departmentCapabilityDefinitions("marketing").map((entry) => ({
+      ...entry,
+      state: "disponible" as const,
+    }));
+    const seoCapabilities = departmentCapabilityDefinitions("seo").map((entry) => ({
+      ...entry,
+      state: "necesita_conexion" as const,
+    }));
+    const result = buildCompanyOperatingState({
+      base,
+      head,
+      tasks: [],
+      results: [],
+      inboxItems: [],
+      connections: [],
+      dna: null,
+      marketing: {
+        id: "marketing",
+        name: "Marketing",
+        head: { departmentId: "marketing", department: "Marketing", name: "Elvira", role: "Jefa de Marketing", initials: "E" },
+        status: "disponible",
+        employees: [],
+        employeesWorkingNow: 0,
+        capabilities: marketingCapabilities,
+        tools: [],
+        toolsConnected: 0,
+        activeObjective: null,
+        pendingApprovals: [],
+        recentActivity: [],
+        results: [],
+        activeWork: [],
+      },
+      marketingApprovals: [],
+      seo: { website: null, capabilities: seoCapabilities, tasks: [], results: [] },
+    });
+
+    expect(result.departments.find((department) => department.id === "marketing")?.capabilities.length)
+      .toBe(marketingCapabilities.length);
+    expect(result.departments.find((department) => department.id === "seo")?.capabilities.length)
+      .toBe(seoCapabilities.length);
+    expect(result.summary.operationalCapabilities)
+      .toBe(marketingCapabilities.length + seoCapabilities.length);
   });
 });
