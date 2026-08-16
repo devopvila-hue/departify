@@ -108,6 +108,39 @@ describe("ConnectionsRoute — lifecycle", () => {
     expect(screen.queryByText("Meta Business")).not.toBeInTheDocument();
   });
 
+  it("keeps GitHub available when the canonical registry exposes its OAuth connector", async () => {
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => payload([
+        base({
+          toolId: "github_repository",
+          name: "GitHub",
+          label: "GitHub",
+          category: "Productividad",
+          categoryId: "documents",
+          connectionMethod: "oauth",
+        }),
+      ]),
+    } as Response)));
+    mount(<ConnectionsRoute />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /\+ añadir/i }));
+    const row = await screen.findByRole("button", { name: /github/i });
+    expect(row.querySelector("svg")).not.toBeNull();
+    expect(row).toHaveTextContent("Disponible");
+
+    const surface = buildSurfaces([base({
+      toolId: "github_repository",
+      name: "GitHub",
+      label: "GitHub",
+      connectionMethod: "oauth",
+    })])[0];
+    if (!surface) throw new Error("GitHub surface was not built");
+    expect(surface.connectToolId).toBe("github_repository");
+    expect(surface.unavailableReason).toBeUndefined();
+  });
+
   it("keeps the complete Marketing catalog visible when connections are unconfigured", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({
       ok: true,

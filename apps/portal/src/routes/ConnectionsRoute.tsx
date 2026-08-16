@@ -460,6 +460,7 @@ function compareSurfaces(a: Surface, b: Surface): number {
 
 function surfaceFrom(entry: ToolConnectionView): Surface {
   const connectable = entry.connectionMethod === "manual"
+    || entry.toolId === "github_repository"
     || entry.toolId === "gmail"
     || entry.toolId === "google_calendar"
     || entry.toolId === "google_drive"
@@ -544,6 +545,7 @@ function ConnectionLogo({ surface }: { surface: Surface }) {
         : surface.surfaceId === "onedrive" ? <svg viewBox="0 0 24 24"><path fill="#0364b8" d="M7 17a4 4 0 1 1 1.3-7.8A5 5 0 0 1 18 11a3.5 3.5 0 0 1-.7 6.9H7Z" /></svg>
         : surface.surfaceId === "microsoft_teams" ? <svg viewBox="0 0 24 24"><circle cx="17.5" cy="7" r="3" fill="#6264a7" /><path fill="#6264a7" d="M5 8h9v8a4 4 0 0 1-4 4H5Zm4-5a3 3 0 1 1 0 6 3 3 0 0 1 0-6Z" /><path fill="#fff" d="M7 10h5v2h-1.5v5h-2v-5H7Z" /></svg>
         : surface.surfaceId === "youtube" ? <svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="4" fill="#ff0000" /><path fill="#fff" d="m10 9 5 3-5 3Z" /></svg>
+        : surface.surfaceId === "github_repository" ? <svg viewBox="0 0 24 24"><path fill="#24292f" d="M12 2.2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.61-3.37-1.18-3.37-1.18-.46-1.16-1.11-1.47-1.11-1.47-.91-.63.07-.62.07-.62 1 .07 1.53 1.03 1.53 1.03.9 1.52 2.35 1.08 2.92.83.09-.65.35-1.08.64-1.33-2.22-.25-4.55-1.11-4.55-4.94 0-1.09.39-1.98 1.02-2.68-.1-.25-.44-1.27.1-2.65 0 0 .83-.27 2.73 1.03a9.3 9.3 0 0 1 4.98 0c1.9-1.3 2.73-1.03 2.73-1.03.54 1.38.2 2.4.1 2.65.64.7 1.02 1.59 1.02 2.68 0 3.84-2.33 4.68-4.56 4.93.36.31.68.91.68 1.84v2.73c0 .26.18.58.69.48A10 10 0 0 0 12 2.2Z" /></svg>
         : surface.surfaceId === "ticktick" ? <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#4772fa" /><path fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" d="m7 12 3 3 7-7" /></svg>
         : surface.surfaceId === "facebook" ? <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="#1877f2" /><path fill="#fff" d="M13.3 19v-6h2l.3-2.2h-2.3V9.4c0-.7.2-1.2 1.2-1.2h1.2V6.2c-.2 0-.9-.1-1.8-.1-1.8 0-3 1.1-3 3.1v1.6H9v2.2h1.9v6Z" /></svg>
         : surface.surfaceId === "instagram" ? <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="5" fill="none" stroke="#d62976" strokeWidth="2.5" /><circle cx="12" cy="12" r="4" fill="none" stroke="#d62976" strokeWidth="2.2" /><circle cx="17.5" cy="6.7" r="1.2" fill="#d62976" /></svg>
