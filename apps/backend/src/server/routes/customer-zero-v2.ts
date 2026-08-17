@@ -4782,7 +4782,7 @@ export async function processCeoMessage(
   // request, but only this control-plane path can execute a tenant-scoped
   // write and return a human result without provider ids.
   if (
-    isDriveWriteRequest(operationalMessage) &&
+    (isDriveWriteRequest(operationalMessage) || isMarketingDrivePlanRequest(operationalMessage)) &&
     (/\bdepartify\b/i.test(operationalMessage) || isMarketingDrivePlanRequest(operationalMessage))
   ) {
     const outcome = await runDriveWriteTurn(
