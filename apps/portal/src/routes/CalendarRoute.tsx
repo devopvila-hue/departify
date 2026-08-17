@@ -56,4 +56,4 @@ export function CalendarRoute(props: { departmentId?: "marketing" | "seo" }) {
 
 function formatDate(value: string): string { return new Intl.DateTimeFormat("es-ES", { weekday: "short", day: "2-digit", month: "short" }).format(new Date(value)); }
 function typeLabel(value: string): string { return ({ task: "Trabajo", result: "Resultado", approval: "Aprobación", meeting: "Reunión" } as Record<string, string>)[value] ?? value; }
-function statusLabel(value: string): string { return ({ pending: "Pendiente", needs_approval: "Necesita aprobación", scheduled: "Programado", completed: "Completado", failed: "Fallido" } as Record<string, string>)[value] ?? value; }
+function statusLabel(value: string): string { return ({ pending: "Pendiente", needs_approval: "Necesita aprobación", scheduled: "Programado", completed: "Completado", failed: "Fallido", cancelled: "Cancelado" } as Record<string, string>)[value] ?? value; }

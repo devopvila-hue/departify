@@ -117,6 +117,7 @@ export interface WorkItemView {
   readonly result?: string;
   readonly capability?: string;
   readonly kind: string;
+  readonly resultUrl?: string;
 }
 
 /** Connection need represented as a structured card. No credentials. */

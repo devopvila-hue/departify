@@ -173,7 +173,7 @@ export interface ResultView {
  * -----------------------------------------------------------------------*/
 
 export type DepartmentWorkStatus =
-  "queued" | "running" | "waiting_approval" | "completed" | "failed";
+  "queued" | "running" | "waiting_approval" | "completed" | "failed" | "cancelled";
 
 export interface DepartmentTask {
   id: string;
@@ -201,6 +201,9 @@ export interface DepartmentTask {
     inboxItemId: string;
     provider: string;
     providerMessageId: string;
+  } | {
+    type: "chat_operation";
+    operationKey: string;
   };
 }
 
@@ -275,7 +278,7 @@ export interface DashboardDefinition {
 
 export type BusinessCalendarType = "task" | "result" | "approval" | "meeting";
 export type BusinessCalendarStatus =
-  "pending" | "needs_approval" | "scheduled" | "completed" | "failed";
+  "pending" | "needs_approval" | "scheduled" | "completed" | "failed" | "cancelled";
 
 export interface BusinessCalendarEntry {
   id: string;
@@ -580,6 +583,7 @@ export interface CommandCenterWorkItemView {
   kind: string;
   capability?: string;
   result?: string;
+  resultUrl?: string;
 }
 
 export interface CommandCenterConnectionSuggestion {

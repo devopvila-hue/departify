@@ -274,7 +274,7 @@ async function runNativeMarketingDelegation(input: {
           });
           await workStore.updateTask(assignment.taskId, {
             status: "completed",
-            statusMessage: `${assignment.label} ha terminado el trabajo delegado por Elvira.`,
+            statusMessage: "Marketing ha terminado este trabajo.",
             progress: 1,
             completedAt: new Date().toISOString(),
             resultId: storedResult.id,
@@ -294,7 +294,7 @@ async function runNativeMarketingDelegation(input: {
           try {
             await workStore.updateTask(assignment.taskId, {
               status: "failed",
-              statusMessage: `${assignment.label} no ha podido completar el trabajo delegado.`,
+              statusMessage: "No se ha podido completar este trabajo de Marketing.",
               progress: 0,
               completedAt: new Date().toISOString(),
               errorCode,
@@ -365,26 +365,26 @@ async function runNativeMarketingDelegation(input: {
   );
   let finalMessage: string;
   if (synthesis) {
-    finalMessage = `Elvira ha terminado el trabajo delegado:\n\n${synthesis}`;
+    finalMessage = `El plan de Marketing ha terminado:\n\n${synthesis}`;
     await workStore.createResult({
       organizationId: input.organizationId,
       departmentId: "marketing",
       relatedWorkItemId: finished[0]?.taskId ?? null,
-      title: "Elvira: síntesis del trabajo de Marketing",
+      title: "Resultado del plan de Marketing",
       summary: synthesis.slice(0, 400),
       content: synthesis,
       data: {
         objective: input.objective.slice(0, 500),
         specialistIds: finished.map((assignment) => assignment.specialistId),
       },
-      source: "Elvira native Marketing synthesis",
+      source: "Marketing",
       producedByCapability: "results.publish",
     });
   } else if (finished.length > 0) {
-    finalMessage = `Elvira ha recibido resultados de ${finished.map((assignment) => assignment.label).join(", ")}. Puedes consultarlos en Resultados.`;
+    finalMessage = `He recibido resultados del plan de Marketing. Puedes consultarlos en Resultados.`;
   } else {
     finalMessage =
-      "Elvira no ha podido completar el trabajo delegado. No se ha publicado ni ejecutado ninguna acción externa.";
+      "No he podido completar el plan de Marketing. No se ha publicado ni ejecutado ninguna acción externa. Puedes reintentarlo.";
   }
   await input.session.conversations.addMessage(
     conversation.id,
@@ -1076,7 +1076,7 @@ export async function registerInternalEngineRoutes(
               capability: "results.publish",
               toolId: "openclaw.agent",
               status: "running",
-              statusMessage: `Elvira ha delegado el trabajo a ${label}.`,
+              statusMessage: "Marketing está trabajando en este plan.",
               progress: 0.1,
               requiredCapabilities: ["results.publish"],
               startedAt: new Date().toISOString(),
@@ -1088,9 +1088,13 @@ export async function registerInternalEngineRoutes(
             });
             tasks.push({ specialistId, label, taskId: task.id });
           }
-          const delegated: NativeMarketingDelegationItem[] = tasks.map(
-            (task) => ({
-              ...task,
+          // Keep provider/task identifiers inside the control plane. The
+          // model only needs a business-facing acknowledgement and a safe
+          // status summary; ids must never become candidate CEO copy.
+          const delegated = tasks.map(
+            ({ label, specialistId }) => ({
+              label,
+              specialistId,
               status: "running",
             }),
           );
@@ -1126,7 +1130,7 @@ export async function registerInternalEngineRoutes(
           result = {
             status: "success",
             operation: toolName,
-            summary: `Elvira ha delegado el trabajo a ${tasks.map((task) => task.label).join(", ")}. El trabajo queda en curso y volverá a la conversación cuando termine.`,
+            summary: "He puesto en marcha el plan de Marketing. El trabajo queda en curso y aparecerá aquí cuando termine.",
             data: {
               objective: objective.slice(0, 500),
               delegated,

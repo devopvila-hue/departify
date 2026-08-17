@@ -171,6 +171,7 @@ import {
   MAX_ACTIVE_DASHBOARDS,
   checkReplyForUnsupportedPromises,
   detectUnbackedWorkClaim,
+  departmentWorkFailureMessage,
   type DepartmentWorkCapability,
   type DepartmentResult,
   type DepartmentTask,
@@ -4758,10 +4759,32 @@ export async function processCeoMessage(
     trace.approvalClassification = pendingDecision ?? (repeatedApprovedOperation ? "APPROVE" : null);
   }
 
+  // Short conversational follow-ups belong to the durable work state when a
+  // real work item exists. They must never reach the LLM as a fresh request.
+  const workFollowUp = classifyDurableWorkFollowUp(operationalMessage);
+  if (
+    workFollowUp &&
+    !pendingDecision &&
+    !session.state.pendingCalendarWork &&
+    !session.state.pendingEmailWork &&
+    !session.state.pendingFacebookPagesWork
+  ) {
+    const followUpResult = await durableWorkFollowUp(
+      session,
+      conversation,
+      message,
+      workFollowUp,
+    );
+    if (followUpResult) return followUpResult;
+  }
+
   // External Drive mutations are deterministic: the model may interpret the
   // request, but only this control-plane path can execute a tenant-scoped
   // write and return a human result without provider ids.
-  if (isDriveWriteRequest(operationalMessage) && /\bdepartify\b/i.test(operationalMessage)) {
+  if (
+    isDriveWriteRequest(operationalMessage) &&
+    (/\bdepartify\b/i.test(operationalMessage) || isMarketingDrivePlanRequest(operationalMessage))
+  ) {
     const outcome = await runDriveWriteTurn(
       session,
       operationalMessage,
@@ -4774,6 +4797,8 @@ export async function processCeoMessage(
       outcome.reply,
       "drive_query",
       outcome.status,
+      null,
+      outcome.result ?? null,
     );
   }
 
@@ -5871,6 +5896,9 @@ async function completeRuntimeCeoTurn(
               result: workResult.summary,
               capability: workResult.producedByCapability,
               kind: "dashboard" as const,
+              ...(typeof workResult.data?.driveUrl === "string"
+                ? { resultUrl: workResult.data.driveUrl }
+                : {}),
             },
           }]
         : []),
@@ -5926,14 +5954,30 @@ async function completeDurableWorkStatusTurn(
   reference: DurableWorkReference,
 ): Promise<CeoMessageResult> {
   const isEs = session.state.locale !== "en";
+  const humanStatus = (status: DepartmentTask["status"]): string => {
+    if (isEs) {
+      if (status === "queued") return "en cola";
+      if (status === "running") return "en curso";
+      if (status === "waiting_approval") return "esperando tu aprobación";
+      if (status === "completed") return "completado";
+      if (status === "failed") return "no completado";
+      return "cancelado";
+    }
+    if (status === "queued") return "queued";
+    if (status === "running") return "in progress";
+    if (status === "waiting_approval") return "waiting for your approval";
+    if (status === "completed") return "completed";
+    if (status === "failed") return "not completed";
+    return "cancelled";
+  };
   const reply = reference.kind === "result"
     ? isEs
       ? `El trabajo «${reference.result.title}» está completado. Puedes consultar el resultado en Resultados.`
       : `The work “${reference.result.title}” is completed. You can review the result in Results.`
     : reference.kind === "task"
       ? isEs
-        ? `El trabajo «${reference.task.title}» está en estado «${reference.task.status}».`
-        : `The work “${reference.task.title}” is currently “${reference.task.status}”.`
+        ? `El trabajo «${reference.task.title}» está en un estado ${humanStatus(reference.task.status)}.`
+        : `The work “${reference.task.title}” is currently ${humanStatus(reference.task.status)}.`
       : isEs
         ? `No he encontrado ningún trabajo durable con esa referencia.`
         : `I could not find durable work with that reference.`;
@@ -5966,6 +6010,7 @@ async function completeDeterministicOperationTurn(
   intent: RoutingDecision["intent"],
   status: "success" | "blocked" | "cancelled" | "already_verified",
   connectionSuggestion: ConnectionSuggestion | null = null,
+  workResult: DepartmentResult | null = null,
 ): Promise<CeoMessageResult> {
   try {
     await session.conversations.addMessage(conversation.id, "assistant", reply);
@@ -5993,6 +6038,23 @@ async function completeDeterministicOperationTurn(
           : "blocked",
         message: reply,
       },
+      ...(workResult
+        ? [{
+            kind: "result" as const,
+            item: {
+              id: workResult.id,
+              title: workResult.title,
+              description: workResult.summary,
+              status: "completed" as const,
+              result: workResult.summary,
+              capability: workResult.producedByCapability,
+              kind: "drive" as const,
+              ...(typeof workResult.data?.driveUrl === "string"
+                ? { resultUrl: workResult.data.driveUrl }
+                : {}),
+            },
+          }]
+        : []),
     ],
     routing: {
       intent,
@@ -6003,6 +6065,125 @@ async function completeDeterministicOperationTurn(
     pendingToolId: null,
     conversationId: conversation.id,
   };
+}
+
+type DurableWorkFollowUp = "acknowledgement" | "status" | "cancel" | "retry";
+
+export function classifyDurableWorkFollowUp(message: string): DurableWorkFollowUp | null {
+  const normalized = normalizePendingOperationMessage(message);
+  if (/^(?:ok|vale|perfecto|entendido|gracias|de acuerdo|genial|perfect)$/i.test(normalized)) {
+    return "acknowledgement";
+  }
+  if (/\b(?:c[oó]mo va|como va|estado|ya est[aá]|termin[oó]|termino|progreso|status|how is it going|is it ready)\b/i.test(normalized)) {
+    return "status";
+  }
+  if (/^(?:cancela(?:lo|la)?|cancelar|para(?:lo)?|det[eé]n(?:lo)?|no lo hagas|descarta(?:lo|la)?)(?:\s+(?:el|la|este|ese)\s+(?:trabajo|plan|tarea))?$/i.test(normalized)) {
+    return "cancel";
+  }
+  if (/\b(?:reintenta|int[eé]ntalo de nuevo|vuelve a intentarlo|retry|try again)\b/i.test(normalized)) {
+    return "retry";
+  }
+  return null;
+}
+
+function isChatOperationTask(task: DepartmentTask): boolean {
+  return task.source?.type === "chat_operation";
+}
+
+function driveUrlFromResult(result: DepartmentResult | null): string | null {
+  const value = result?.data?.driveUrl;
+  return typeof value === "string" && /^https:\/\/(?:drive|docs)\.google\.com\//i.test(value)
+    ? value
+    : null;
+}
+
+async function latestRelevantDurableTask(
+  organizationId: string,
+  followUp: DurableWorkFollowUp,
+): Promise<DepartmentTask | null> {
+  const tasks = await workStoreForRoutes().listTasksForOrg(organizationId, 50);
+  const chatTasks = tasks.filter(isChatOperationTask);
+  if (followUp === "acknowledgement" || followUp === "retry" || followUp === "cancel") {
+    const candidate = chatTasks[0] ?? tasks[0];
+    if (!candidate) return null;
+    const recent = Date.now() - new Date(candidate.createdAt).getTime() <= 15 * 60_000;
+    if (recent) {
+      return candidate;
+    }
+    return null;
+  }
+  return tasks[0] ?? null;
+}
+
+async function durableWorkFollowUp(
+  session: CustomerZeroSession,
+  conversation: ConversationRecord,
+  message: string,
+  followUp: DurableWorkFollowUp,
+): Promise<CeoMessageResult | null> {
+  const store = workStoreForRoutes();
+  const task = await latestRelevantDurableTask(session.organizationId, followUp);
+  if (!task) return null;
+
+  if (followUp === "cancel") {
+    if (task.status === "queued" || task.status === "running" || task.status === "waiting_approval") {
+      await store.updateTask(task.id, {
+        status: "cancelled",
+        progress: task.progress,
+        statusMessage: "Trabajo cancelado por la empresa.",
+        completedAt: new Date().toISOString(),
+        errorCode: "CANCELLED_BY_USER",
+        errorMessage: "El usuario canceló el trabajo.",
+      });
+      const reply = session.state.locale === "en"
+        ? "Understood. I stopped that work before starting another action."
+        : "Entendido. He cancelado ese trabajo y no iniciaré ninguna otra acción.";
+      return completeDeterministicOperationTurn(session, conversation, message, reply, "direct_response", "cancelled");
+    }
+    return null;
+  }
+
+  if (followUp === "retry" && task.status === "failed" && isChatOperationTask(task)) {
+    if (isDriveWriteRequest(message)) return null;
+    const reply = session.state.locale === "en"
+      ? "I can retry that work. Please repeat the request so I can verify the destination before starting again."
+      : "Puedo reintentarlo. Repite la petición para verificar el destino antes de volver a empezar.";
+    return completeDeterministicOperationTurn(session, conversation, message, reply, "explain_work", "blocked");
+  }
+
+  const result = task.resultId ? await store.getResult(task.resultId) : null;
+  const isEs = session.state.locale !== "en";
+  let reply: string;
+  if (task.status === "queued" || task.status === "running") {
+    reply = isEs
+      ? followUp === "acknowledgement"
+        ? "Perfecto. El trabajo sigue en curso."
+        : `El trabajo «${task.title}» sigue en preparación.`
+      : followUp === "acknowledgement"
+        ? "Perfect. The work is still in progress."
+        : `“${task.title}” is still being prepared.`;
+  } else if (task.status === "completed") {
+    const url = driveUrlFromResult(result);
+    reply = isEs
+      ? `Ya está listo: **${task.title}**.\n\nGuardado en **Departify / 01_Marketing**.${url ? `\n\n[ Abrir en Google Drive ↗ ](${url})` : ""}`
+      : `It is ready: **${task.title}**.\n\nSaved in **Departify / 01_Marketing**.${url ? `\n\n[ Open in Google Drive ↗ ](${url})` : ""}`;
+  } else if (task.status === "failed") {
+    reply = departmentWorkFailureMessage(task, session.state.locale);
+  } else if (task.status === "cancelled") {
+    reply = isEs ? "Ese trabajo está cancelado y no se ha iniciado otra acción." : "That work is cancelled and no other action was started.";
+  } else {
+    reply = isEs ? "El trabajo está esperando una decisión antes de continuar." : "The work is waiting for a decision before it can continue.";
+  }
+  return completeDeterministicOperationTurn(
+    session,
+    conversation,
+    message,
+    reply,
+    task.status === "completed" ? "explain_existing_result" : "explain_work",
+    task.status === "failed" ? "blocked" : "success",
+    null,
+    result,
+  );
 }
 
 function isExplicitNewBusinessIntent(
@@ -6686,7 +6867,7 @@ async function runDriveWriteTurn(
   session: CustomerZeroSession,
   message: string,
   isEs: boolean,
-): Promise<{ reply: string; status: "success" | "blocked" }> {
+): Promise<{ reply: string; status: "success" | "blocked"; task?: DepartmentTask; result?: DepartmentResult }> {
   const readIdentity = await findOperationalGoogleIdentityForOrg(session.organizationId, "drive.read");
   if (!readIdentity) {
     return {
@@ -6707,6 +6888,68 @@ async function runDriveWriteTurn(
   }
 
   const validationOnly = isDriveValidationRequest(message);
+  const operationKey = validationOnly
+    ? "drive_validation_workspace"
+    : "drive_marketing_plan_workspace";
+  const store = workStoreForRoutes();
+  const existing = (await store.listTasksForOrg(session.organizationId, 50))
+    .find((candidate) => candidate.source?.type === "chat_operation" && candidate.source.operationKey === operationKey);
+  if (existing && (existing.status === "queued" || existing.status === "running")) {
+    return {
+      status: "success",
+      task: existing,
+      reply: isEs ? "Ya está en marcha. Puedes consultar su estado desde Tareas." : "It is already in progress. You can check its status in Tasks.",
+    };
+  }
+  if (existing?.status === "completed" && existing.resultId) {
+    const existingResult = await store.getResult(existing.resultId);
+    const existingUrl = driveUrlFromResult(existingResult);
+    return {
+      status: "success",
+      task: existing,
+      ...(existingResult ? { result: existingResult } : {}),
+      reply: isEs
+        ? `El trabajo ya estaba completado: **${existing.title}**.\n\nGuardado en **Departify / 01_Marketing**.${existingUrl ? `\n\n[ Abrir en Google Drive ↗ ](${existingUrl})` : ""}`
+        : `The work was already completed: **${existing.title}**.\n\nSaved in **Departify / 01_Marketing**.${existingUrl ? `\n\n[ Open in Google Drive ↗ ](${existingUrl})` : ""}`,
+    };
+  }
+  let task: DepartmentTask;
+  if (existing?.status === "failed") {
+    const retried = await store.updateTask(existing.id, {
+      status: "running",
+      progress: 0.05,
+      statusMessage: "Preparando de nuevo el trabajo en Google Drive.",
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      resultId: null,
+      errorCode: null,
+      errorMessage: null,
+    });
+    task = retried;
+  } else {
+    task = await store.createTask({
+      organizationId: session.organizationId,
+      departmentId: "marketing",
+      objectiveId: null,
+      requestedBy: "ceo",
+      assignedEmployeeId: "agent_content_strategist",
+      title: validationOnly ? "Validación de Google Drive" : "Plan de Marketing en Google Drive",
+      summary: validationOnly ? "la validación de Google Drive" : "el plan de Marketing en Google Drive",
+      capability: "drive.workspace.create",
+      toolId: "google_drive.workspace",
+      status: "running",
+      statusMessage: "Preparando el trabajo en Google Drive.",
+      progress: 0.05,
+      requiredCapabilities: ["drive.workspace.create"],
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      resultId: null,
+      errorCode: null,
+      errorMessage: null,
+      timeoutMs: 120_000,
+      source: { type: "chat_operation", operationKey },
+    });
+  }
   const receipt = startExecutionReceipt({
     operationId: connectorOperationId("drive_workspace"),
     intent: "drive.workspace.create",
@@ -6719,13 +6962,61 @@ async function runDriveWriteTurn(
     organizationId: session.organizationId,
     userId: writeIdentity.userId,
   });
-  const result = validationOnly
-    ? await adapter.ensureDriveValidationWorkspace()
-    : await adapter.ensureDepartifyWorkspace();
+  let result: Awaited<ReturnType<GoogleDriveAdapter["ensureDepartifyWorkspace"]>>;
+  try {
+    result = validationOnly
+      ? await adapter.ensureDriveValidationWorkspace()
+      : await adapter.ensureDepartifyWorkspace();
+  } catch {
+    result = { success: false, errorCode: "unavailable", message: "Google Drive no ha confirmado la operación." };
+  }
   if (!result.success || !result.value) {
     session.state.lastExecutionReceipt = failExecutionReceipt(receipt, result.errorCode ?? "provider_error");
-    return { status: "blocked", reply: driveFailure(result.message, isEs) };
+    const failedTask = await store.updateTask(task.id, {
+      status: "failed",
+      progress: 0,
+      statusMessage: "No se ha podido confirmar la creación.",
+      completedAt: new Date().toISOString(),
+      errorCode: "drive_provider",
+      errorMessage: result.message ?? "Google Drive no ha confirmado la operación.",
+    });
+    return {
+      status: "blocked",
+      task: failedTask,
+      reply: departmentWorkFailureMessage(failedTask, session.state.locale),
+    };
   }
+  const driveUrl = result.value.root.webViewLink && /^https:\/\/(?:drive|docs)\.google\.com\//i.test(result.value.root.webViewLink)
+    ? result.value.root.webViewLink
+    : undefined;
+  const persistedResult = await store.createResult({
+    organizationId: session.organizationId,
+    departmentId: "marketing",
+    relatedWorkItemId: task.id,
+    title: validationOnly ? "Validación de Google Drive" : "Plan de Marketing listo",
+    summary: validationOnly
+      ? "Google Drive confirmó la carpeta y el documento de prueba."
+      : "Plan de Marketing guardado en Departify / 01_Marketing.",
+    content: validationOnly
+      ? "La carpeta Departify / 01_Marketing y el documento de prueba existen y se han verificado en Google Drive."
+      : "El plan de Marketing está guardado en la carpeta Departify / 01_Marketing de Google Drive.",
+    data: {
+      drivePath: "Departify / 01_Marketing",
+      folderCount: result.value.folders.length,
+      documentCount: result.value.documents.length,
+      verified: true,
+      ...(driveUrl ? { driveUrl } : {}),
+    },
+    source: "Google Drive",
+    producedByCapability: "drive.workspace.create",
+  });
+  const completedTask = await store.updateTask(task.id, {
+    status: "completed",
+    progress: 1,
+    statusMessage: "Trabajo completado en Google Drive.",
+    completedAt: new Date().toISOString(),
+    resultId: persistedResult.id,
+  });
   session.state.lastExecutionReceipt = completeExecutionReceipt(receipt, {
     safeMetadata: {
       rootName: result.value.root.name,
@@ -6734,25 +7025,31 @@ async function runDriveWriteTurn(
       verified: true,
     },
   });
-  const verb = isEs ? "He creado" : "I created";
   const existingNote = isEs
     ? "Si ya existía algún elemento, lo he reutilizado para no duplicarlo."
     : "Existing elements were reused so the workspace is not duplicated.";
   return {
     status: "success",
+    task: completedTask,
+    result: persistedResult,
     reply: isEs
       ? validationOnly
-        ? `${verb} y he comprobado en Google Drive **Departify/01_Marketing** y el documento **${DRIVE_VALIDATION_DOCUMENT_NAME}**. El contenido también se ha verificado. ${existingNote}`
-        : `${verb} y he comprobado en Google Drive el espacio **Departify**, con sus carpetas de trabajo y ${result.value.documents.length} documentos. ${existingNote}`
+        ? `He comprobado en Google Drive **Departify/01_Marketing** y el documento **${DRIVE_VALIDATION_DOCUMENT_NAME}**. El contenido también se ha verificado. ${existingNote}${driveUrl ? `\n\n[ Abrir en Google Drive ↗ ](${driveUrl})` : ""}`
+        : `Plan de Marketing listo.\n\nGuardado en **Departify / 01_Marketing** con sus carpetas de trabajo y ${result.value.documents.length} documentos. ${existingNote}${driveUrl ? `\n\n[ Abrir en Google Drive ↗ ](${driveUrl})` : ""}`
       : validationOnly
-        ? `${verb} and verified **Departify/01_Marketing** and the **${DRIVE_VALIDATION_DOCUMENT_NAME}** document in Google Drive. Its content was verified too. ${existingNote}`
-        : `${verb} and verified the **Departify** workspace in Google Drive with its work folders and ${result.value.documents.length} documents. ${existingNote}`,
+        ? `I verified **Departify/01_Marketing** and the **${DRIVE_VALIDATION_DOCUMENT_NAME}** document in Google Drive. Its content was verified too. ${existingNote}${driveUrl ? `\n\n[ Open in Google Drive ↗ ](${driveUrl})` : ""}`
+        : `Marketing plan ready.\n\nSaved in **Departify / 01_Marketing** with its work folders and ${result.value.documents.length} documents. ${existingNote}${driveUrl ? `\n\n[ Open in Google Drive ↗ ](${driveUrl})` : ""}`,
   };
 }
 
 function isDriveValidationRequest(message: string): boolean {
   return /01[_\s-]?marketing/i.test(message) &&
     /prueba|validar|test/i.test(message);
+}
+
+export function isMarketingDrivePlanRequest(message: string): boolean {
+  return /\bplan\b[\s\S]*\bmarketing\b[\s\S]*\b(?:drive|google\s+drive|google\s+docs?)\b/i.test(message) ||
+    /\bmarketing\b[\s\S]*\bplan\b[\s\S]*\b(?:drive|google\s+drive|google\s+docs?)\b/i.test(message);
 }
 
 function connectorOperationId(prefix: string): string {

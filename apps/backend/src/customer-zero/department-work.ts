@@ -33,7 +33,8 @@ export type DepartmentWorkStatus =
   | "running"
   | "waiting_approval"
   | "completed"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export const DEPARTMENT_WORK_STATUSES: readonly DepartmentWorkStatus[] = [
   "queued",
@@ -41,6 +42,7 @@ export const DEPARTMENT_WORK_STATUSES: readonly DepartmentWorkStatus[] = [
   "waiting_approval",
   "completed",
   "failed",
+  "cancelled",
 ];
 
 /* ----------------------------------------------------------------------------
@@ -72,7 +74,8 @@ export type DepartmentWorkCapability =
   | "marketing.shopify.orders.get"
   | "marketing.shopify.customers.list"
   | "seo.audit.website"
-  | "seo.repository.read";
+  | "seo.repository.read"
+  | "drive.workspace.create";
 
 /** Departments of work the model is NOT allowed to promise today. */
 export const UNSUPPORTED_PROMISE_PATTERNS: readonly RegExp[] = [
@@ -167,6 +170,9 @@ export interface DepartmentTask {
     readonly inboxItemId: string;
     readonly provider: string;
     readonly providerMessageId: string;
+  } | {
+    readonly type: "chat_operation";
+    readonly operationKey: string;
   };
 }
 
@@ -455,8 +461,10 @@ export function departmentWorkStatusMessage(
       return es ? "Informe listo." : "Report ready.";
     case "failed":
       return es
-        ? "Elvira no ha podido completar este análisis."
-        : "Elvira could not complete this analysis.";
+        ? "No he podido completar este trabajo."
+        : "I could not complete this work.";
+    case "cancelled":
+      return es ? "Trabajo cancelado." : "Work cancelled.";
   }
 }
 
@@ -466,8 +474,8 @@ export function departmentWorkFailureMessage(
 ): string {
   const es = locale !== "en";
   const base = es
-    ? `Elvira no ha podido completar el análisis de ${task.summary}.`
-    : `Elvira could not complete the analysis of ${task.summary}.`;
+    ? `No he podido completar ${task.summary}.`
+    : `I could not complete ${task.summary}.`;
   if (task.errorCode === "dashboard_limit") {
     return es
       ? "Ya hay 5 dashboards activos. No he creado otro. Elimina uno o pide que se reutilice/actualice uno existente."
@@ -482,6 +490,16 @@ export function departmentWorkFailureMessage(
     return es
       ? `${base} Mautic no responde. Reintenta en unos minutos.`
       : `${base} Mautic is not responding. Try again in a few minutes.`;
+  }
+  if (task.errorCode === "drive_provider") {
+    return es
+      ? `${base} Google Drive no ha confirmado la operación. No se ha modificado nada fuera de Departify. Puedo intentarlo de nuevo.`
+      : `${base} Google Drive did not confirm the operation. Nothing outside Departify was modified. I can try again.`;
+  }
+  if (task.errorCode === "generation_failed" || task.errorCode === "specialist_unavailable") {
+    return es
+      ? `${base} No he recibido una respuesta completa del plan. Puedes reintentarlo.`
+      : `${base} I did not receive a complete response for the plan. You can retry it.`;
   }
   return base;
 }

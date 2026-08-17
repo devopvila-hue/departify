@@ -2,7 +2,7 @@ import type { CalendarEvent } from "./google-calendar-adapter.js";
 import type { DepartmentResult, DepartmentTask } from "./department-work.js";
 
 export type BusinessCalendarType = "task" | "result" | "approval" | "meeting";
-export type BusinessCalendarStatus = "pending" | "needs_approval" | "scheduled" | "completed" | "failed";
+export type BusinessCalendarStatus = "pending" | "needs_approval" | "scheduled" | "completed" | "failed" | "cancelled";
 
 export interface BusinessCalendarEntry {
   readonly id: string;
@@ -37,6 +37,7 @@ function dayEnd(iso: string): string {
 function taskStatus(status: DepartmentTask["status"]): BusinessCalendarStatus {
   if (status === "completed") return "completed";
   if (status === "failed") return "failed";
+  if (status === "cancelled") return "cancelled";
   if (status === "waiting_approval") return "needs_approval";
   return "pending";
 }

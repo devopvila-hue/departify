@@ -795,13 +795,24 @@ function EventCard(props: {
             </span>
           </header>
           {event.item.result && <p>{event.item.result}</p>}
-          <button
-            type="button"
-            className="dfy-button dfy-button--ghost dfy-button--small"
-            onClick={() => onNavigate("/resultados")}
-          >
-            Ver archivo
-          </button>
+          {event.item.resultUrl ? (
+            <a
+              className="dfy-button dfy-button--ghost dfy-button--small"
+              href={event.item.resultUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Abrir en Google Drive ↗
+            </a>
+          ) : (
+            <button
+              type="button"
+              className="dfy-button dfy-button--ghost dfy-button--small"
+              onClick={() => onNavigate("/resultados")}
+            >
+              Ver resultado
+            </button>
+          )}
         </article>
       );
     case "work_update":

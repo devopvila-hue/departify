@@ -312,6 +312,8 @@ function labelForStatus(status: string): string {
       return "En marcha";
     case "failed":
       return "Falló";
+    case "cancelled":
+      return "Cancelada";
     case "unavailable":
       return "Bloqueada";
     default:
