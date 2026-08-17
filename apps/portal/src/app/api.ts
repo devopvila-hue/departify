@@ -1144,7 +1144,7 @@ export const api = {
       org,
       "overview",
       `/api/customer-zero/${org}/overview`,
-      10_000,
+      60_000,
     ),
   status: (org: string) =>
     cachedOrgGetJson<CompanyStatus>(
