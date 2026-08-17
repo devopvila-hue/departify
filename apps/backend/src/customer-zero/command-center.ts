@@ -1231,8 +1231,13 @@ export function isCalendarCreateRequest(message: string): boolean {
 
 export function isDriveRequest(message: string): boolean {
   const hasSource = /\b(drive|documento|documentos|archivo|archivos|pdf|plan\s+de\s+marketing|google\s+docs?)\b/i.test(message);
-  const hasAction = /\b(busca|buscar|encuentra|encontrar|lee|leer|dice|dime|tengo|informaci[oó]n|reciente?s?|organiza|organizar|ordena|clasifica|recent|search|find|read|what does)\b/i.test(message);
+  const hasAction = /\b(busca|buscar|encuentra|encontrar|lee|leer|dice|dime|tengo|informaci[oó]n|reciente?s?|organiza|organizar|ordena|clasifica|crea|crear|creas|creado|escribe|escribir|actualiza|actualizar|recent|search|find|read|what does|create|write|update)\b/i.test(message);
   return hasSource && hasAction;
+}
+
+export function isDriveWriteRequest(message: string): boolean {
+  return /\b(drive|google\s+docs?|carpetas?|folder|documentos?|archivos?|file)\b/i.test(message) &&
+    /\b(crea|crear|creas|creado|escribe|escribir|actualiza|actualizar|guarda|guardar|create|write|update|save)\b/i.test(message);
 }
 
 export function isMultiCapabilityRequest(message: string): boolean {

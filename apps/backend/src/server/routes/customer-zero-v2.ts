@@ -94,6 +94,7 @@ import {
   buildProactiveOpening,
   isCalendarCreateRequest,
   isDriveRequest,
+  isDriveWriteRequest,
   isEmailReadFollowUp,
   isEmailReadQuestion,
   isCalendarReadRequest,
@@ -187,6 +188,7 @@ import {
   GMAIL_SCOPES,
   GOOGLE_CALENDAR_SCOPES,
   GOOGLE_DRIVE_SCOPES,
+  GOOGLE_DRIVE_WRITE_SCOPES,
   GOOGLE_YOUTUBE_SCOPES,
   googleOAuthRedirectUri,
   GmailOAuthError,
@@ -236,6 +238,7 @@ import {
   getGoogleTokenStore,
   hasOperationalGoogleCapability,
   hasGoogleCapability,
+  hasGrantedScope,
   revokeGoogleConnection,
   type GoogleCapability,
   type GoogleTokenProvider,
@@ -1564,6 +1567,7 @@ export async function registerCustomerZeroV2Routes(
     Body: {
       returnPath?: "/" | "/conexiones" | "/chat";
       reconnect?: boolean;
+      includeDriveWrite?: boolean;
       channel?: "facebook" | "instagram";
     };
   }>(
@@ -1740,10 +1744,16 @@ export async function registerCustomerZeroV2Routes(
         // NOT through the URL. This URL is identical to the one the
         // browser reaches after consent AND the one we send to
         // oauth2.googleapis.com/token.
+        const existingGoogle = (await getGoogleTokenStore().listForOrg(organizationId))[0] ?? null;
+        const wantsDriveWrite =
+          (tool.id === "google_drive" || tool.id === "google_workspace") &&
+          (request.body?.includeDriveWrite === true ||
+            !existingGoogle ||
+            !hasGrantedScope(existingGoogle.scopes, "https://www.googleapis.com/auth/drive.readonly"));
         const scopes = tool.id === "google_calendar"
           ? GOOGLE_CALENDAR_SCOPES
           : tool.id === "google_drive" || tool.id === "google_workspace"
-            ? GOOGLE_DRIVE_SCOPES
+            ? wantsDriveWrite ? GOOGLE_DRIVE_WRITE_SCOPES : GOOGLE_DRIVE_SCOPES
             : tool.id === "youtube"
               ? GOOGLE_YOUTUBE_SCOPES
               : GMAIL_SCOPES;
@@ -4114,6 +4124,9 @@ async function buildRuntimeBridge(
               capabilities: [
                 ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.search")) ? ["drive.search"] : []),
                 ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.read")) ? ["drive.read"] : []),
+                ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.create_folder")) ? ["drive.create_folder"] : []),
+                ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.create_file")) ? ["drive.create_file"] : []),
+                ...(userGoogleSummaries.some((summary) => hasOperationalGoogleCapability(summary, "drive.write")) ? ["drive.write"] : []),
               ],
             }
           : connection.capabilities
@@ -4264,7 +4277,7 @@ function shouldUseNativeAgentPath(message: string): boolean {
 }
 
 function nativeMutationRequiresDeterministicGate(message: string): boolean {
-  return isCalendarCreateRequest(message) || isEmailSendRequest(message) || isEmailReplyRequest(message) || isFacebookPagesPublishRequest(message);
+  return isCalendarCreateRequest(message) || isEmailSendRequest(message) || isEmailReplyRequest(message) || isFacebookPagesPublishRequest(message) || isDriveWriteRequest(message);
 }
 
 function isFacebookPagesPublishRequest(message: string): boolean {
@@ -4290,6 +4303,11 @@ function runtimeToolsMatchRequest(
   }
   if (isFacebookPagesPublishRequest(message)) {
     return toolNames.includes("departify.facebook.pages.publish");
+  }
+  if (isDriveWriteRequest(message)) {
+    return toolNames.includes("departify.drive.create_folder") ||
+      toolNames.includes("departify.drive.create_file") ||
+      toolNames.includes("departify.drive.write");
   }
   if (
     session?.state.pendingCalendarWork &&
@@ -4578,6 +4596,55 @@ async function executeRuntimeTool(
       });
     }
 
+    case "departify.drive.create_folder":
+    case "departify.drive.create_file":
+    case "departify.drive.write": {
+      const capability = call.name === "departify.drive.create_folder"
+        ? "drive.create_folder"
+        : call.name === "departify.drive.create_file"
+          ? "drive.create_file"
+          : "drive.write";
+      const identity = await findOperationalGoogleIdentityForOrg(session.organizationId, capability);
+      if (!identity) {
+        return withReceipt({
+          status: "blocked",
+          operation: call.name,
+          summary: isEs
+            ? "Google Drive necesita autorización adicional para crear contenido."
+            : "Google Drive needs additional authorization to create content.",
+        });
+      }
+      const adapter = new GoogleDriveAdapter({ organizationId: session.organizationId, userId: identity.userId });
+      const result = call.name === "departify.drive.create_folder"
+        ? await adapter.createFolder({
+            name: text("name"),
+            ...(text("parentFolderId") ? { parentFolderId: text("parentFolderId") } : {}),
+          })
+        : call.name === "departify.drive.create_file"
+          ? await adapter.createFile({
+            name: text("name"),
+            content: text("content"),
+            ...(text("parentFolderId") ? { parentFolderId: text("parentFolderId") } : {}),
+            ...(text("mimeType") ? { mimeType: text("mimeType") } : {}),
+          })
+          : await adapter.writeContent({
+            fileId: text("fileId"),
+            content: text("content"),
+            ...(text("mimeType") ? { mimeType: text("mimeType") } : {}),
+          });
+      return withReceipt({
+        status: result.success ? "success" : "blocked",
+        operation: call.name,
+        summary: result.success
+          ? call.name === "departify.drive.create_folder"
+            ? `He creado la carpeta ${result.value?.name ?? ""} en Google Drive.`
+            : call.name === "departify.drive.create_file"
+              ? `He creado ${result.value?.name ?? ""} en Google Drive.`
+              : `He actualizado ${result.value?.name ?? "el documento"} en Google Drive.`
+          : result.message ?? "Google Drive no está disponible.",
+      });
+    }
+
     case "departify.tasks.list": {
       const tasks = await workStore.listTasksForOrg(session.organizationId, 20);
       return {
@@ -4686,6 +4753,25 @@ export async function processCeoMessage(
   );
   if (trace) {
     trace.approvalClassification = pendingDecision ?? (repeatedApprovedOperation ? "APPROVE" : null);
+  }
+
+  // External Drive mutations are deterministic: the model may interpret the
+  // request, but only this control-plane path can execute a tenant-scoped
+  // write and return a human result without provider ids.
+  if (isDriveWriteRequest(operationalMessage) && /\bdepartify\b/i.test(operationalMessage)) {
+    const outcome = await runDriveWriteTurn(
+      session,
+      session.state.locale !== "en",
+      deps,
+    );
+    return completeDeterministicOperationTurn(
+      session,
+      conversation,
+      message,
+      outcome.reply,
+      "drive_query",
+      outcome.status,
+    );
   }
 
   // ENGINE 02.4 — pending side effects are a deterministic control-plane
@@ -6587,6 +6673,86 @@ export async function runDriveTurn(
   };
 }
 
+/**
+ * Explicit Drive write path used by Chat and the native runtime gate. It is
+ * intentionally small: the first supported business operation is the
+ * idempotent Departify workspace. All provider ids stay inside the execution
+ * receipt and never enter the CEO-facing reply.
+ */
+async function runDriveWriteTurn(
+  session: CustomerZeroSession,
+  isEs: boolean,
+  deps: ServerDeps,
+): Promise<{ reply: string; status: "success" | "blocked" }> {
+  const readIdentity = await findOperationalGoogleIdentityForOrg(session.organizationId, "drive.read");
+  if (!readIdentity) {
+    return {
+      status: "blocked",
+      reply: isEs
+        ? "Google Drive todavía no está conectado. Conéctalo desde Conexiones para poder crear el espacio de Departify."
+        : "Google Drive is not connected yet. Connect it from Connections before creating the Departify workspace.",
+    };
+  }
+  const writeIdentity = await findOperationalGoogleIdentityForOrg(session.organizationId, "drive.write", readIdentity.userId);
+  if (!writeIdentity) {
+    return {
+      status: "blocked",
+      reply: isEs
+        ? "Google Drive está conectado para leer. Necesita un permiso adicional para crear carpetas y documentos; puedes actualizarlo desde Conexiones."
+        : "Google Drive is connected for reading. It needs one additional permission to create folders and documents; you can update it from Connections.",
+    };
+  }
+
+  const dna = await resolveCompanyDnaStore(deps).get(session.organizationId);
+  const companyName = dna?.companyName?.trim() || (isEs ? "Empresa pendiente de completar" : "Company profile pending");
+  const objective = dna?.objective?.trim() || (isEs ? "Todavía no hay un objetivo aprobado en Departify." : "No approved objective is stored in Departify yet.");
+  const website = dna?.website?.trim() || (isEs ? "Todavía no hay una web configurada." : "No website is configured yet.");
+  const honest = isEs
+    ? "Este documento será actualizado por Departify cuando exista información o una estrategia aprobada."
+    : "Departify will update this document when approved information or strategy exists.";
+  const documents = [
+    { name: "Perfil de empresa", parentFolderName: "01 — Empresa", content: `Empresa: ${companyName}\n\n${dna?.description?.trim() || honest}` },
+    { name: "Objetivos actuales", parentFolderName: "02 — Estrategia", content: `Objetivo actual: ${objective}` },
+    { name: "Plan de Marketing", parentFolderName: "03 — Marketing", content: honest },
+    { name: "Estrategia SEO", parentFolderName: "04 — SEO", content: `Web de trabajo: ${website}\n\n${honest}` },
+    { name: "Guía de Marca", parentFolderName: "05 — Branding", content: honest },
+  ];
+  const receipt = startExecutionReceipt({
+    operationId: connectorOperationId("drive_workspace"),
+    intent: "drive.workspace.create",
+    capability: "drive.write",
+    provider: "google",
+    sideEffect: true,
+  });
+  session.state.lastExecutionReceipt = receipt;
+  const result = await new GoogleDriveAdapter({
+    organizationId: session.organizationId,
+    userId: writeIdentity.userId,
+  }).ensureDepartifyWorkspace(documents);
+  if (!result.success || !result.value) {
+    session.state.lastExecutionReceipt = failExecutionReceipt(receipt, result.errorCode ?? "provider_error");
+    return { status: "blocked", reply: driveFailure(result.message, isEs) };
+  }
+  session.state.lastExecutionReceipt = completeExecutionReceipt(receipt, {
+    safeMetadata: {
+      rootName: result.value.root.name,
+      folderCount: result.value.folders.length,
+      documentCount: result.value.documents.length,
+      verified: true,
+    },
+  });
+  const verb = isEs ? "He creado" : "I created";
+  const existingNote = isEs
+    ? "Si ya existía algún elemento, lo he reutilizado para no duplicarlo."
+    : "Existing elements were reused so the workspace is not duplicated.";
+  return {
+    status: "success",
+    reply: isEs
+      ? `${verb} y he comprobado en Google Drive el espacio **Departify**, con sus 10 carpetas de trabajo y ${result.value.documents.length} documentos iniciales. ${existingNote}`
+      : `${verb} and verified the **Departify** workspace in Google Drive, with its 10 work folders and ${result.value.documents.length} initial documents. ${existingNote}`,
+  };
+}
+
 function connectorOperationId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -7601,6 +7767,8 @@ export interface ToolConnectionView {
   readonly action: "prepare" | "connect" | "verify" | "retry" | null;
   readonly verifiedAt?: string;
   readonly blockedReason?: string;
+  /** True when Drive is connected for read but needs incremental write consent. */
+  readonly writeUpgradeRequired?: boolean;
   /** How the customer can obtain this connection, if at all. */
   readonly connectionMethod?: ConnectionMethod;
   /** Declarative customer-owned setup instructions; absent for OAuth/platform config. */
@@ -7761,6 +7929,24 @@ export async function buildCanonicalConnectionViews(
       ? {
           ...entry,
           accountLabel: googleIdentity.email,
+          ...(entry.toolId === "google_drive" || entry.toolId === "google_workspace"
+            ? {
+                capabilities: [
+                  ...(hasOperationalGoogleCapability(googleIdentity, "drive.search") ? ["drive.search"] : []),
+                  ...(hasOperationalGoogleCapability(googleIdentity, "drive.read") ? ["drive.read"] : []),
+                  ...(hasOperationalGoogleCapability(googleIdentity, "drive.create_folder") ? ["drive.create_folder"] : []),
+                  ...(hasOperationalGoogleCapability(googleIdentity, "drive.create_file") ? ["drive.create_file"] : []),
+                  ...(hasOperationalGoogleCapability(googleIdentity, "drive.write") ? ["drive.write"] : []),
+                ],
+              }
+            : {}),
+          ...(entry.toolId === "google_drive" || entry.toolId === "google_workspace"
+            ? {
+                writeUpgradeRequired:
+                  hasOperationalGoogleCapability(googleIdentity, "drive.read") &&
+                  !hasOperationalGoogleCapability(googleIdentity, "drive.write"),
+              }
+            : {}),
           ...(entry.verifiedAt || !googleIdentity.operationalVerifiedAt
             ? {}
             : { verifiedAt: googleIdentity.operationalVerifiedAt }),

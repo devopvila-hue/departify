@@ -119,7 +119,7 @@ describe("Engine 02 — Runtime Business Context + Capability Bridge", () => {
     expect(isRuntimeCapabilityAvailable(manifest, "email.business.read")).toBe(true);
     expect(isRuntimeCapabilityAvailable(manifest, "drive.search")).toBe(false);
     expect(isRuntimeCapabilityAvailable(manifest, "drive.write")).toBe(false);
-    expect(manifest.capabilities.find((entry) => entry.id === "drive.write")?.reason).toBe("unsupported");
+    expect(manifest.capabilities.find((entry) => entry.id === "drive.write")?.reason).toBe("not_verified");
     expect(toolsForManifest(manifest).some((tool) => tool.name === "departify.email.list")).toBe(true);
     expect(toolsForManifest(manifest).some((tool) => tool.name === "departify.drive.search")).toBe(false);
 

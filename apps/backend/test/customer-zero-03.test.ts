@@ -25,6 +25,7 @@ import {
   completeGmailOAuth,
   GMAIL_SCOPES,
   GOOGLE_DRIVE_SCOPES,
+  GOOGLE_DRIVE_WRITE_SCOPES,
 } from "../src/customer-zero/gmail-adapter.js";
 import { resolveCredentials } from "../src/customer-zero/credential-resolver.js";
 
@@ -488,6 +489,17 @@ describe("GoogleDriveAdapter", () => {
     });
   }
 
+  function seedWriteTokens() {
+    gmailTokenStore.put("org_a", "ceo_a", {
+      accessToken: "tok-write",
+      refreshToken: "ref-write",
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      scopes: [...GMAIL_SCOPES, ...GOOGLE_DRIVE_WRITE_SCOPES],
+      email: "ceo_a@example.com",
+      displayName: "CEO A",
+    });
+  }
+
   it("15 Drive search normalizes results", async () => {
     seedTokens();
     globalThis.fetch = (async (input: string | URL) => {
@@ -577,6 +589,67 @@ describe("GoogleDriveAdapter", () => {
     expect(out.success).toBe(false);
     expect(out.errorCode).toBe("auth");
     expect(calls).toBe(0);
+  });
+
+  it("creates nested folders with the narrow Drive write scope", async () => {
+    seedWriteTokens();
+    let receivedBody = "";
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      receivedBody = String(init?.body ?? "");
+      return jsonResponse(200, {
+        id: "folder-child",
+        name: "Marketing",
+        mimeType: "application/vnd.google-apps.folder",
+        parents: ["folder-root"],
+        modifiedTime: "2026-08-17T10:00:00Z",
+      });
+    }) as unknown as typeof fetch;
+    const out = await new GoogleDriveAdapter({ organizationId: "org_a", userId: "ceo_a" }).createFolder({
+      name: "Marketing",
+      parentFolderId: "folder-root",
+    });
+    expect(out.success).toBe(true);
+    expect(out.value).toMatchObject({ id: "folder-child", parent: "folder-root" });
+    expect(receivedBody).toContain("application/vnd.google-apps.folder");
+    expect(receivedBody).toContain("folder-root");
+  });
+
+  it("creates a real native Google Doc and writes content through Docs API", async () => {
+    seedWriteTokens();
+    const requests: string[] = [];
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      requests.push(`${init?.method ?? "GET"} ${url}`);
+      if (url.includes("/drive/v3/files?") && init?.method === "POST") {
+        return jsonResponse(200, {
+          id: "doc-1",
+          name: "Plan de Marketing",
+          mimeType: "application/vnd.google-apps.document",
+          parents: ["folder-marketing"],
+          modifiedTime: "2026-08-17T10:00:00Z",
+        });
+      }
+      if (url.includes("/documents/doc-1") && init?.method === "POST") return jsonResponse(200, {});
+      if (url.includes("/documents/doc-1")) return jsonResponse(200, { body: { content: [{ endIndex: 2 }] } });
+      if (url.includes("/export?mimeType=text%2Fplain")) return new Response("contenido real", { status: 200 });
+      if (url.includes("/drive/v3/files/doc-1?")) {
+        return jsonResponse(200, {
+          id: "doc-1",
+          name: "Plan de Marketing",
+          mimeType: "application/vnd.google-apps.document",
+          modifiedTime: "2026-08-17T10:00:00Z",
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as unknown as typeof fetch;
+    const out = await new GoogleDriveAdapter({ organizationId: "org_a", userId: "ceo_a" }).createGoogleDoc({
+      name: "Plan de Marketing",
+      parentFolderId: "folder-marketing",
+      content: "contenido real",
+    });
+    expect(out.success).toBe(true);
+    expect(out.value).toMatchObject({ id: "doc-1", name: "Plan de Marketing", preview: "contenido real" });
+    expect(requests.some((request) => request.includes("batchUpdate"))).toBe(true);
   });
 });
 

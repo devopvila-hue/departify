@@ -61,6 +61,9 @@ export type BusinessCapability =
   | "drive.search"
   | "drive.read"
   | "drive.create"
+  | "drive.create_folder"
+  | "drive.create_file"
+  | "drive.write"
   | "inbox.read"
   | "inbox.classify"
   | "inbox.work.create"
@@ -330,6 +333,30 @@ export const CAPABILITY_REGISTRY: Readonly<Record<string, CapabilityDescriptor>>
       "Crea un documento en Drive a través de la frontera segura de Departify.",
     provider: "google",
     toolIds: ["google.drive.create"],
+  },
+  "drive.create_folder": {
+    id: "drive.create_folder",
+    name: "Create Drive folder",
+    nameEs: "Crear carpeta en Drive",
+    description: "Crea una carpeta privada en el Drive conectado.",
+    provider: "google",
+    toolIds: ["google.drive.create_folder"],
+  },
+  "drive.create_file": {
+    id: "drive.create_file",
+    name: "Create Drive document",
+    nameEs: "Crear documento en Drive",
+    description: "Crea un archivo o documento privado en el Drive conectado.",
+    provider: "google",
+    toolIds: ["google.drive.create_file"],
+  },
+  "drive.write": {
+    id: "drive.write",
+    name: "Update Drive document",
+    nameEs: "Actualizar documento de Drive",
+    description: "Actualiza contenido de un documento creado o usado por Departify.",
+    provider: "google",
+    toolIds: ["google.drive.write"],
   },
   "inbox.read": {
     id: "inbox.read",

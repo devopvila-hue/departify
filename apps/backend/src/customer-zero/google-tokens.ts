@@ -54,10 +54,12 @@ export const GOOGLE_CAPABILITY_SCOPES = {
   "calendar.create": ["https://www.googleapis.com/auth/calendar.events"],
   "drive.search": ["https://www.googleapis.com/auth/drive.readonly"],
   "drive.read": ["https://www.googleapis.com/auth/drive.readonly"],
-  // Full Drive access is deliberately not requested by the current Drive
-  // connection. It is listed so write capability resolution cannot silently
-  // reuse drive.readonly when a future, explicitly-consented flow is added.
-  "drive.create": ["https://www.googleapis.com/auth/drive"],
+  // Drive write is limited to files used by Departify. This is the
+  // non-restricted scope recommended by Google for create/edit operations.
+  "drive.create": ["https://www.googleapis.com/auth/drive.file"],
+  "drive.create_folder": ["https://www.googleapis.com/auth/drive.file"],
+  "drive.create_file": ["https://www.googleapis.com/auth/drive.file"],
+  "drive.write": ["https://www.googleapis.com/auth/drive.file"],
   "youtube.read": ["https://www.googleapis.com/auth/youtube.readonly"],
 } as const;
 
@@ -601,6 +603,7 @@ function normalizeGoogleScope(scope: string): string {
     "calendar.readonly": "https://www.googleapis.com/auth/calendar.readonly",
     "calendar.events": "https://www.googleapis.com/auth/calendar.events",
     "drive.readonly": "https://www.googleapis.com/auth/drive.readonly",
+    "drive.file": "https://www.googleapis.com/auth/drive.file",
     "youtube.readonly": "https://www.googleapis.com/auth/youtube.readonly",
   };
   return aliases[scope] ?? scope;
@@ -969,7 +972,18 @@ export async function completeGoogleOAuthCallback(
                 ...(hasGoogleCapability(merged.scopes, "calendar.create") ? ["calendar.create" as GoogleCapability] : []),
               ]
             : input.provider === "google_drive" || input.provider === "google_workspace"
-              ? ["drive.search" as GoogleCapability, "drive.read" as GoogleCapability]
+              ? [
+                  "drive.search" as GoogleCapability,
+                  "drive.read" as GoogleCapability,
+                  ...(hasGoogleCapability(merged.scopes, "drive.create")
+                    ? [
+                        "drive.create" as GoogleCapability,
+                        "drive.create_folder" as GoogleCapability,
+                        "drive.create_file" as GoogleCapability,
+                        "drive.write" as GoogleCapability,
+                      ]
+                    : []),
+                ]
               : input.provider === "youtube"
                 ? ["youtube.read" as GoogleCapability]
                 : []),
@@ -1080,8 +1094,9 @@ export function hasGrantedScope(
 ): boolean {
   if (granted.includes(scope)) return true;
   // Google's full Drive scope is a strict superset of drive.readonly. This
-  // keeps read/search truthful if a future explicit write consent replaces
-  // the narrower scope in Google's token response.
+  // keeps read/search truthful if a future explicit full-Drive consent
+  // replaces the narrower scope in Google's token response. `drive.file` is
+  // intentionally not a superset of broad Drive read access.
   return scope === "https://www.googleapis.com/auth/drive.readonly" &&
     granted.includes("https://www.googleapis.com/auth/drive");
 }

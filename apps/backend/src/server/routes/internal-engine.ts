@@ -159,6 +159,21 @@ function nativeRuntimeConnections(
                 )
                   ? ["drive.read"]
                   : []),
+                ...(userGoogleSummaries.some((summary) =>
+                  hasOperationalGoogleCapability(summary, "drive.create_folder"),
+                )
+                  ? ["drive.create_folder"]
+                  : []),
+                ...(userGoogleSummaries.some((summary) =>
+                  hasOperationalGoogleCapability(summary, "drive.create_file"),
+                )
+                  ? ["drive.create_file"]
+                  : []),
+                ...(userGoogleSummaries.some((summary) =>
+                  hasOperationalGoogleCapability(summary, "drive.write"),
+                )
+                  ? ["drive.write"]
+                  : []),
               ],
             }
           : connection.capabilities
@@ -783,6 +798,80 @@ export async function registerInternalEngineRoutes(
           summary: outcome.reply,
           ...(outcome.data ? { data: outcome.data } : {}),
         };
+      } else if (
+        toolName === "departify.drive.create_folder" ||
+        toolName === "departify.drive.create_file" ||
+        toolName === "departify.drive.write"
+      ) {
+        const driveCapability = toolName === "departify.drive.create_folder"
+          ? "drive.create_folder"
+          : toolName === "departify.drive.create_file"
+            ? "drive.create_file"
+            : "drive.write";
+        const identityForDrive = await findOperationalGoogleIdentityForOrg(
+          identity.organizationId,
+          driveCapability,
+          identity.userId,
+        );
+        if (!identityForDrive) {
+          result = {
+            status: "blocked",
+            operation: toolName,
+            summary: "Google Drive necesita autorización adicional para crear contenido.",
+          };
+        } else {
+          const adapter = new GoogleDriveAdapter({
+            organizationId: identity.organizationId,
+            userId: identityForDrive.userId,
+          });
+          const receipt = startExecutionReceipt({
+            operationId: `native_${toolName.replaceAll(".", "_")}_${Date.now().toString(36)}`,
+            intent: toolName,
+            capability: driveCapability,
+            provider: "google",
+            sideEffect: true,
+          });
+          session.state.lastExecutionReceipt = receipt;
+          const driveResult = toolName === "departify.drive.create_folder"
+            ? await adapter.createFolder({
+                name: nativeText(args, "name"),
+                ...(nativeText(args, "parentFolderId") ? { parentFolderId: nativeText(args, "parentFolderId") } : {}),
+              })
+            : toolName === "departify.drive.create_file"
+              ? await adapter.createFile({
+                name: nativeText(args, "name"),
+                content: nativeText(args, "content"),
+                ...(nativeText(args, "parentFolderId") ? { parentFolderId: nativeText(args, "parentFolderId") } : {}),
+                ...(nativeText(args, "mimeType") ? { mimeType: nativeText(args, "mimeType") } : {}),
+              })
+              : await adapter.writeContent({
+                fileId: nativeText(args, "fileId"),
+                content: nativeText(args, "content"),
+                ...(nativeText(args, "mimeType") ? { mimeType: nativeText(args, "mimeType") } : {}),
+              });
+          if (!driveResult.success || !driveResult.value) {
+            session.state.lastExecutionReceipt = failExecutionReceipt(receipt, driveResult.errorCode ?? "provider_error");
+            result = {
+              status: "blocked",
+              operation: toolName,
+              summary: driveResult.message ?? "Google Drive no está disponible.",
+            };
+          } else {
+            session.state.lastExecutionReceipt = completeExecutionReceipt(receipt, {
+              providerResourceId: driveResult.value.id,
+              safeMetadata: { name: driveResult.value.name, mimeType: driveResult.value.mimeType },
+            });
+            result = {
+              status: "success",
+              operation: toolName,
+              summary: toolName === "departify.drive.create_folder"
+                ? `He creado la carpeta ${driveResult.value.name} en Google Drive.`
+                : toolName === "departify.drive.create_file"
+                  ? `He creado ${driveResult.value.name} en Google Drive.`
+                  : `He actualizado ${driveResult.value.name} en Google Drive.`,
+            };
+          }
+        }
       } else if (
         toolName === "departify.drive.search" ||
         toolName === "departify.drive.read"

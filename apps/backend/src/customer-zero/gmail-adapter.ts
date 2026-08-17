@@ -66,6 +66,17 @@ export const GOOGLE_DRIVE_SCOPES: readonly string[] = [
   "https://www.googleapis.com/auth/drive.readonly",
 ];
 
+/**
+ * Incremental Drive write consent. `drive.file` is deliberately used instead
+ * of the restricted full-Drive scope: it grants Drive/Docs write access only
+ * to files created or explicitly used by Departify. Existing Drive read
+ * remains covered by GOOGLE_DRIVE_SCOPES.
+ */
+export const GOOGLE_DRIVE_WRITE_SCOPES: readonly string[] = [
+  ...GOOGLE_DRIVE_SCOPES,
+  "https://www.googleapis.com/auth/drive.file",
+];
+
 /** YouTube read-only consent for the Marketing content specialist. */
 export const GOOGLE_YOUTUBE_SCOPES: readonly string[] = [
   "openid",
@@ -79,7 +90,7 @@ export const GOOGLE_YOUTUBE_SCOPES: readonly string[] = [
 export const GOOGLE_FULL_SCOPES: readonly string[] = [
   ...GMAIL_SCOPES,
   ...GOOGLE_CALENDAR_SCOPES,
-  ...GOOGLE_DRIVE_SCOPES,
+  ...GOOGLE_DRIVE_WRITE_SCOPES,
 ];
 
 /* ----------------------------------------------------------------------------

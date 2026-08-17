@@ -21,6 +21,9 @@ export type DepartifyToolName =
   | "departify.facebook.pages.publish"
   | "departify.drive.search"
   | "departify.drive.read"
+  | "departify.drive.create_folder"
+  | "departify.drive.create_file"
+  | "departify.drive.write"
   | "departify.tasks.list"
   | "departify.tasks.create"
   | "departify.approvals.list"
@@ -184,6 +187,54 @@ export const DEPARTIFY_TOOL_DEFINITIONS: readonly DepartifyToolDefinition[] = [
       type: "object",
       required: ["query"],
       properties: { query: stringProperty("File name or search terms") },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "departify.drive.create_folder",
+    description: "Create a private folder in the connected Google Drive.",
+    requiredCapability: "drive.create_folder",
+    sideEffect: true,
+    inputSchema: {
+      type: "object",
+      required: ["name"],
+      properties: {
+        name: stringProperty("Folder name"),
+        parentFolderId: stringProperty("Optional authorized parent folder"),
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "departify.drive.create_file",
+    description: "Create a private text file or Google Doc in the connected Google Drive.",
+    requiredCapability: "drive.create_file",
+    sideEffect: true,
+    inputSchema: {
+      type: "object",
+      required: ["name", "content"],
+      properties: {
+        name: stringProperty("File or document name"),
+        content: stringProperty("Content to write"),
+        parentFolderId: stringProperty("Optional authorized parent folder"),
+        mimeType: stringProperty("Optional MIME type; Google Docs is supported"),
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "departify.drive.write",
+    description: "Update content in a private file or Google Doc already authorized for Departify.",
+    requiredCapability: "drive.write",
+    sideEffect: true,
+    inputSchema: {
+      type: "object",
+      required: ["fileId", "content"],
+      properties: {
+        fileId: stringProperty("Authorized file reference"),
+        content: stringProperty("New content"),
+        mimeType: stringProperty("Optional MIME type"),
+      },
       additionalProperties: false,
     },
   },
