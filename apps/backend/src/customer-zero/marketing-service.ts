@@ -24,9 +24,7 @@ import {
   getMarketingHead,
   type DepartmentHead,
 } from "./department-identity.js";
-import {
-  buildBusinessContext,
-} from "@departify/tool-catalog";
+import { buildBusinessContext } from "@departify/tool-catalog";
 import type { DiscoveryReportRepository } from "@departify/business-discovery";
 import type { CompanyDnaStore } from "./company-dna.js";
 import {
@@ -89,9 +87,17 @@ export interface MarketingOperationalSnapshot {
 const MARKETING_TOOLS: readonly Omit<ConnectedTool, "status" | "note">[] = [
   { toolId: "google_ads", label: "Google Ads", capability: "Publicidad" },
   { toolId: "meta_ads", label: "Meta Ads", capability: "Publicidad" },
-  { toolId: "meta_business", label: "Meta Business", capability: "Publicación y social" },
+  {
+    toolId: "meta_business",
+    label: "Meta Business",
+    capability: "Publicación y social",
+  },
   { toolId: "linkedin_ads", label: "LinkedIn Ads", capability: "Publicidad" },
-  { toolId: "google_analytics", label: "Google Analytics", capability: "Analítica" },
+  {
+    toolId: "google_analytics",
+    label: "Google Analytics",
+    capability: "Analítica",
+  },
   { toolId: "hubspot", label: "HubSpot", capability: "CRM" },
   { toolId: "mautic", label: "Mautic", capability: "CRM" },
   { toolId: "gmail", label: "Gmail", capability: "Email" },
@@ -184,7 +190,9 @@ export class MarketingService {
     const businessContext = this.reportRepository
       ? buildBusinessContext(input.organizationId, this.reportRepository)
       : null;
-    const runtimeCapabilities = await this.runtimeCapabilityManifest(input.organizationId);
+    const runtimeCapabilities = await this.runtimeCapabilityManifest(
+      input.organizationId,
+    );
     const contextBlock = this.buildElviraContext(
       input.locale,
       businessContext,
@@ -193,7 +201,9 @@ export class MarketingService {
     );
 
     // 2. Ensure an engine session for (org, marketing) — real multi-turn memory.
-    const engineSessionId = await this.ensureEngineSession(input.organizationId);
+    const engineSessionId = await this.ensureEngineSession(
+      input.organizationId,
+    );
 
     // 3. Send the CEO message through the engine (OpenClaw → Vertex).
     const engineMessage = `${contextBlock}\n\n${input.message}`;
@@ -447,18 +457,20 @@ export class MarketingService {
       organizationId,
       departmentId: "marketing",
       actor: this.head.name,
-      type: decision === "approve" ? "campana_propuesta" : "objetivo_actualizado",
-      message: decision === "approve"
-        ? t(
-            locale,
-            `Aprobación concedida: ${updated.title}.`,
-            `Approval granted: ${updated.title}.`,
-          )
-        : t(
-            locale,
-            `Aprobación rechazada: ${updated.title}.`,
-            `Approval rejected: ${updated.title}.`,
-          ),
+      type:
+        decision === "approve" ? "campana_propuesta" : "objetivo_actualizado",
+      message:
+        decision === "approve"
+          ? t(
+              locale,
+              `Aprobación concedida: ${updated.title}.`,
+              `Approval granted: ${updated.title}.`,
+            )
+          : t(
+              locale,
+              `Aprobación rechazada: ${updated.title}.`,
+              `Approval rejected: ${updated.title}.`,
+            ),
     });
     return updated;
   }
@@ -532,9 +544,9 @@ export class MarketingService {
       }
       return null;
     }
-    const session = (await import("./customer-zero-session.js")).getCustomerZeroSession(
-      organizationId,
-    );
+    const session = (
+      await import("./customer-zero-session.js")
+    ).getCustomerZeroSession(organizationId);
     if (!session) return null;
     const list = session.departmentService.list();
     return (
@@ -545,7 +557,9 @@ export class MarketingService {
     );
   }
 
-  private employeeIdsForDepartment(department: { employees?: readonly string[] }): Set<string> {
+  private employeeIdsForDepartment(department: {
+    employees?: readonly string[];
+  }): Set<string> {
     const ids = new Set<string>();
     for (const employeeId of department.employees ?? []) {
       ids.add(employeeId);
@@ -564,9 +578,7 @@ export class MarketingService {
       return {
         ...tool,
         status: isConnected ? "connected" : "not_connected",
-        ...(isConnected
-          ? {}
-          : { note: "No conectado" }),
+        ...(isConnected ? {} : { note: "No conectado" }),
       };
     });
   }
@@ -588,9 +600,11 @@ export class MarketingService {
           task.status === "waiting_approval"),
     );
     const assignedEmployeeIds = activeWork.flatMap((task) => {
-      const assignment = (task as DepartmentTask & {
-        readonly assignedEmployeeId?: string;
-      }).assignedEmployeeId;
+      const assignment = (
+        task as DepartmentTask & {
+          readonly assignedEmployeeId?: string;
+        }
+      ).assignedEmployeeId;
       return assignment ? [assignment] : [];
     });
     const [objective, approvals, objectives, storedActivity, department] =
@@ -644,10 +658,7 @@ export class MarketingService {
         (result) => !durableResults.some((durable) => durable.id === result.id),
       ),
     ];
-    const recentActivity = [
-      ...(operational?.activity ?? []),
-      ...storedActivity,
-    ]
+    const recentActivity = [...(operational?.activity ?? []), ...storedActivity]
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
       .slice(0, 8);
 
@@ -680,11 +691,12 @@ export class MarketingService {
       };
     }
 
-    const status: DepartmentStatus = activeWork.length > 0
-      ? approvals.length > 0
-        ? "bloqueado"
-        : "trabajando"
-      : "disponible";
+    const status: DepartmentStatus =
+      activeWork.length > 0
+        ? approvals.length > 0
+          ? "bloqueado"
+          : "trabajando"
+        : "disponible";
 
     return {
       id: "marketing",
@@ -698,11 +710,18 @@ export class MarketingService {
       },
       status,
       employees,
-      employeesWorkingNow: employees.filter((e) => e.status === "trabajando").length,
+      employeesWorkingNow: employees.filter((e) => e.status === "trabajando")
+        .length,
       capabilities: projectDepartmentCapabilities(
         "marketing",
-        operational?.connections ?? connectedToolIds.map((toolId) => ({ toolId, state: "connected" })),
-      ).map(({ id, label, description, state }) => ({ id, label, description, state })),
+        operational?.connections ??
+          connectedToolIds.map((toolId) => ({ toolId, state: "connected" })),
+      ).map(({ id, label, description, state }) => ({
+        id,
+        label,
+        description,
+        state,
+      })),
       tools,
       toolsConnected: tools.filter((t) => t.status === "connected").length,
       activeObjective: objective,
@@ -764,7 +783,10 @@ export class MarketingService {
     const unavailable = runtimeCapabilities.capabilities.filter(
       (capability) => !capability.available,
     );
-    lines.push("", "CAPACIDADES DISPONIBLES (capacidades de negocio, no nombres técnicos):");
+    lines.push(
+      "",
+      "CAPACIDADES DISPONIBLES (capacidades de negocio, no nombres técnicos):",
+    );
     if (readyCapabilities.length === 0) {
       lines.push(
         locale === "en"
@@ -772,7 +794,9 @@ export class MarketingService {
           : "- Ninguna. Si el CEO pide datos del CRM, explica con educación que falta acceso y ofrece conectarlo.",
       );
     } else {
-      const names = readyCapabilities.map((c) => capabilityHumanLabel(c.id, locale));
+      const names = readyCapabilities.map((c) =>
+        capabilityHumanLabel(c.id, locale),
+      );
       lines.push(`- ${names.join(" · ")}`);
     }
     if (unavailable.length > 0) {
@@ -793,9 +817,12 @@ export class MarketingService {
     if (runtimeCapabilities.connectedTools.length > 0) {
       lines.push(
         "",
-        locale === "en" ? "CONNECTED BUSINESS TOOLS:" : "HERRAMIENTAS DE NEGOCIO CONECTADAS:",
-        ...runtimeCapabilities.connectedTools.map((tool) =>
-          `- ${tool.tool}: ${locale === "en" ? "connected" : "conectado"}`,
+        locale === "en"
+          ? "CONNECTED BUSINESS TOOLS:"
+          : "HERRAMIENTAS DE NEGOCIO CONECTADAS:",
+        ...runtimeCapabilities.connectedTools.map(
+          (tool) =>
+            `- ${tool.tool}: ${locale === "en" ? "connected" : "conectado"}`,
         ),
       );
     }
@@ -852,19 +879,24 @@ export class MarketingService {
     const active = await this.activeObjective(input.organizationId);
     const compiled = compileDepartmentContext(input.session);
     const engineContext = renderCompiledContextForEngine(compiled);
-    const [companyDna, runtimeApprovals, runtimeRecentActivity] = await Promise.all([
-      this.companyDna?.get(input.organizationId) ?? Promise.resolve(null),
-      this.approvalsRepo.list(input.organizationId, "marketing"),
-      this.activityRepo.listRecent(input.organizationId, "marketing", 8),
-    ]);
-    const runtimeConnections = [...input.session.state.connections.values()].map((connection) => ({
+    const [companyDna, runtimeApprovals, runtimeRecentActivity] =
+      await Promise.all([
+        this.companyDna?.get(input.organizationId) ?? Promise.resolve(null),
+        this.approvalsRepo.list(input.organizationId, "marketing"),
+        this.activityRepo.listRecent(input.organizationId, "marketing", 8),
+      ]);
+    const runtimeConnections = [
+      ...input.session.state.connections.values(),
+    ].map((connection) => ({
       toolId: connection.toolId,
       label: connection.label,
       state: connection.lifecycle ?? connection.status,
-      capabilities: connection.grantedCapabilities
-        ?? (connection.capability ? [connection.capability] : []),
+      capabilities:
+        connection.grantedCapabilities ??
+        (connection.capability ? [connection.capability] : []),
     }));
-    const runtimeCapabilities = buildRuntimeCapabilityManifest(runtimeConnections);
+    const runtimeCapabilities =
+      buildRuntimeCapabilityManifest(runtimeConnections);
     const runtimeContext = compileRuntimeBusinessContext({
       session: input.session,
       companyDna,
@@ -877,12 +909,17 @@ export class MarketingService {
       recentActivity: runtimeRecentActivity,
     });
 
-    const engineSessionId = await this.ensureEngineSession(input.organizationId);
+    const engineSessionId = await this.ensureEngineSession(
+      input.organizationId,
+    );
     const engineMessage = `${engineContext}\n\nMENSAJE DEL CEO:\n${input.message}`;
     const result = await this.engine.sendMessage({
       sessionId: engineSessionId,
       message: engineMessage,
-      runtimeContext: renderRuntimeBusinessContextForEngine(runtimeContext, "[]"),
+      runtimeContext: renderRuntimeBusinessContextForEngine(
+        runtimeContext,
+        "[]",
+      ),
     });
     const reply = result.text || this.fallbackReply(input.locale);
 
@@ -949,9 +986,7 @@ export class MarketingService {
 
   /** Customer Zero 01 — context readiness check (drives the
    *  progressive-discovery UI). */
-  async getContextReadiness(
-    session: CustomerZeroSession,
-  ): Promise<{
+  async getContextReadiness(session: CustomerZeroSession): Promise<{
     ready: boolean;
     gaps: readonly string[];
     compiledAt: string;
@@ -1015,7 +1050,6 @@ export class MarketingService {
     // provenance, so this remains empty rather than inventing a badge.
     return workingIds;
   }
-
 }
 
 /**

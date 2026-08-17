@@ -50,9 +50,7 @@ import {
   type MarketingDiagnosis,
   type TeamFormationResult,
 } from "@departify/marketing-director";
-import {
-  createInMemoryMemoryRecordStore,
-} from "@departify/memory";
+import { createInMemoryMemoryRecordStore } from "@departify/memory";
 import type { InMemoryMemoryRecordStore } from "@departify/memory";
 import {
   createToolRuntime,
@@ -63,10 +61,7 @@ import {
   DepartmentCapabilityRegistry,
   buildMauticCapability,
 } from "@departify/capability-engine";
-import {
-  WorkflowExecution,
-  type WorkflowResult,
-} from "@departify/workflows";
+import { WorkflowExecution, type WorkflowResult } from "@departify/workflows";
 import { randomUUID } from "node:crypto";
 import { buildLlmRuntime, type LlmRuntime } from "./llm-runtime.js";
 import type { SupportedLocale } from "./locale.js";
@@ -76,7 +71,10 @@ import {
   type DiscoveryConversationState,
 } from "./progressive-discovery.js";
 import type { ConnectionState } from "./connections.js";
-import { TOOL_CATALOG, buildConnectionStateWithLifecycle } from "./connections.js";
+import {
+  TOOL_CATALOG,
+  buildConnectionStateWithLifecycle,
+} from "./connections.js";
 import { resolveMauticCredentials } from "./mautic-adapter.js";
 import {
   InMemoryToolStateStore,
@@ -285,10 +283,14 @@ export function getOrCreateCustomerZeroSession(
     return existing;
   }
 
-  const llm = options.llm ?? buildLlmRuntime({
-    organizationId,
-    ...(options.llmCredentials ? { credentialStore: options.llmCredentials } : {}),
-  });
+  const llm =
+    options.llm ??
+    buildLlmRuntime({
+      organizationId,
+      ...(options.llmCredentials
+        ? { credentialStore: options.llmCredentials }
+        : {}),
+    });
 
   // Discovery report persistence (in-memory for the local slice).
   const reportRepository = createInMemoryDiscoveryReportRepository();
@@ -384,7 +386,9 @@ export function getOrCreateCustomerZeroSession(
       status: "completed",
       output: { organizationId: event.organizationId },
       errors: [],
-      provisioningId: provisioningIdFor(assertOrganizationId(event.organizationId)),
+      provisioningId: provisioningIdFor(
+        assertOrganizationId(event.organizationId),
+      ),
     }),
     provisioningHandler: async (event) => {
       if (
@@ -441,7 +445,9 @@ export function getOrCreateCustomerZeroSession(
     provisioning,
     businessEvents: new BusinessEventService({ catalog }),
     memoryStore: createInMemoryMemoryRecordStore(),
-    ...(options.departmentMemory ? { departmentMemory: options.departmentMemory } : {}),
+    ...(options.departmentMemory
+      ? { departmentMemory: options.departmentMemory }
+      : {}),
     runtime,
     capabilities,
     toolState: options.toolState ?? new InMemoryToolStateStore(),
@@ -517,15 +523,23 @@ export async function hydrateSessionToolState(
     // hydration so disconnects, failed probes, and reauth results are visible
     // on the very next chat turn. An in-flight OAuth handshake is the one
     // intentional exception: its transient state lives only until the callback.
-    if (session.state.connections.get(record.toolId)?.status === "connecting") continue;
+    if (session.state.connections.get(record.toolId)?.status === "connecting")
+      continue;
     const connection = tool
-      ? buildConnectionStateWithLifecycle(tool, session.state.locale, record.status, {
-          ...(record.configSource ? { configSource: record.configSource } : {}),
-          ...(record.verifiedAt ? { verifiedAt: record.verifiedAt } : {}),
-          ...(record.grantedCapabilities
-            ? { grantedCapabilities: record.grantedCapabilities }
-            : {}),
-        })
+      ? buildConnectionStateWithLifecycle(
+          tool,
+          session.state.locale,
+          record.status,
+          {
+            ...(record.configSource
+              ? { configSource: record.configSource }
+              : {}),
+            ...(record.verifiedAt ? { verifiedAt: record.verifiedAt } : {}),
+            ...(record.grantedCapabilities
+              ? { grantedCapabilities: record.grantedCapabilities }
+              : {}),
+          },
+        )
       : buildFallbackConnection(record);
     session.state.connections.set(record.toolId, connection);
   }
@@ -537,8 +551,10 @@ export async function hydrateSessionToolState(
   // affected Google tools here. This keeps /conexiones cards and chat
   // capability answers perfectly aligned with the durable Google token
   // store — no more "Connected in chat but Not Connected in card".
-  await reconcileGoogleConnectionsFromDurableTokens(session, records);
-  await reconcileMetaConnectionFromDurableToken(session, records);
+  await Promise.all([
+    reconcileGoogleConnectionsFromDurableTokens(session, records),
+    reconcileMetaConnectionFromDurableToken(session, records),
+  ]);
 }
 
 /**
@@ -551,41 +567,63 @@ async function reconcileMetaConnectionFromDurableToken(
   session: CustomerZeroSession,
   existingRecords: OrganizationToolState[],
 ): Promise<void> {
-  const existing = existingRecords.find((record) => record.toolId === "meta_business");
-  const summaries = await getExternalOAuthTokenStore().listForOrg(session.organizationId);
+  const existing = existingRecords.find(
+    (record) => record.toolId === "meta_business",
+  );
+  const summaries = await getExternalOAuthTokenStore().listForOrg(
+    session.organizationId,
+  );
   const metaSummaries = summaries.filter(
-    (record) => record.provider === "meta_business" || record.provider === "meta_instagram",
+    (record) =>
+      record.provider === "meta_business" ||
+      record.provider === "meta_instagram",
   );
   if (metaSummaries.length === 0 && !existing) return;
-  if (session.state.connections.get("meta_business")?.status === "connecting") return;
+  if (session.state.connections.get("meta_business")?.status === "connecting")
+    return;
 
   const operationalSummaries = metaSummaries.filter((summary) => {
     const expiresAt = summary.expiresAt ? Date.parse(summary.expiresAt) : null;
     return Boolean(
       summary.hasAccessToken &&
-        summary.operationalVerifiedAt &&
-        !summary.operationalProbeError &&
-        (expiresAt === null || Number.isNaN(expiresAt) || expiresAt > Date.now()),
+      summary.operationalVerifiedAt &&
+      !summary.operationalProbeError &&
+      (expiresAt === null || Number.isNaN(expiresAt) || expiresAt > Date.now()),
     );
   });
   const operational = operationalSummaries.length > 0;
-  const grantedCapabilities = [...new Set(metaSummaries.flatMap((summary) => [
-    ...(summary.provider === "meta_business" && summary.scopes.includes("pages_show_list")
-      ? ["marketing.social.read"]
-      : []),
-    ...(summary.provider === "meta_business" && summary.scopes.includes("pages_manage_posts")
-      ? ["marketing.social.publish"]
-      : []),
-    ...(summary.provider === "meta_instagram" && summary.scopes.includes("instagram_business_basic")
-      ? ["marketing.social.instagram.read"]
-      : []),
-    ...(summary.provider === "meta_instagram" && summary.scopes.includes("instagram_business_content_publish")
-      ? ["marketing.social.instagram.publish"]
-      : []),
-  ]))];
-  const latest = [...metaSummaries]
-    .sort((a, b) => Date.parse(b.operationalVerifiedAt ?? "") - Date.parse(a.operationalVerifiedAt ?? ""))[0];
-  const accountLabel = [...new Set(metaSummaries.map((summary) => summary.accountLabel).filter(Boolean))].join(" · ");
+  const grantedCapabilities = [
+    ...new Set(
+      metaSummaries.flatMap((summary) => [
+        ...(summary.provider === "meta_business" &&
+        summary.scopes.includes("pages_show_list")
+          ? ["marketing.social.read"]
+          : []),
+        ...(summary.provider === "meta_business" &&
+        summary.scopes.includes("pages_manage_posts")
+          ? ["marketing.social.publish"]
+          : []),
+        ...(summary.provider === "meta_instagram" &&
+        summary.scopes.includes("instagram_business_basic")
+          ? ["marketing.social.instagram.read"]
+          : []),
+        ...(summary.provider === "meta_instagram" &&
+        summary.scopes.includes("instagram_business_content_publish")
+          ? ["marketing.social.instagram.publish"]
+          : []),
+      ]),
+    ),
+  ];
+  const latest = [...metaSummaries].sort(
+    (a, b) =>
+      Date.parse(b.operationalVerifiedAt ?? "") -
+      Date.parse(a.operationalVerifiedAt ?? ""),
+  )[0];
+  const accountLabel = [
+    ...new Set(
+      metaSummaries.map((summary) => summary.accountLabel).filter(Boolean),
+    ),
+  ].join(" · ");
   const status: OrganizationToolState["status"] = operational
     ? "connected"
     : "needs_connection";
@@ -626,7 +664,9 @@ async function reconcileMetaConnectionFromDurableToken(
       buildConnectionStateWithLifecycle(tool, session.state.locale, status, {
         configSource: "oauth:meta_business",
         ...(record.verifiedAt ? { verifiedAt: record.verifiedAt } : {}),
-        ...(record.grantedCapabilities ? { grantedCapabilities: record.grantedCapabilities } : {}),
+        ...(record.grantedCapabilities
+          ? { grantedCapabilities: record.grantedCapabilities }
+          : {}),
       }),
     );
   }
@@ -645,7 +685,9 @@ async function reconcileGoogleConnectionsFromDurableTokens(
   session: CustomerZeroSession,
   existingRecords: OrganizationToolState[],
 ): Promise<void> {
-  const summaries = await getGoogleTokenStore().listForOrg(session.organizationId);
+  const summaries = await getGoogleTokenStore().listForOrg(
+    session.organizationId,
+  );
   const capabilityByTool: Readonly<Record<string, GoogleCapability>> = {
     gmail: "email.read",
     google_calendar: "calendar.read",
@@ -654,82 +696,87 @@ async function reconcileGoogleConnectionsFromDurableTokens(
     youtube: "youtube.read",
   };
   const googleToolIds = Object.keys(capabilityByTool);
-  for (const toolId of googleToolIds) {
-    const existing = existingRecords.find((r) => r.toolId === toolId);
-    const capability = capabilityByTool[toolId];
-    if (!capability) continue;
-    // An OAuth handshake is an intentional transient state. Do not let a
-    // background capability reconciliation erase it before the callback has
-    // had a chance to validate its nonce.
-    if (session.state.connections.get(toolId)?.status === "connecting") continue;
-    if (!summaries.length && !existing) continue;
-    const operational = summaries.some(
-      (summary) =>
-        summary.hasRefreshToken &&
-        Boolean(summary.operationalVerifiedAt) &&
-        hasOperationalGoogleCapability(summary, capability),
-    );
-    const matchingSummary = summaries.find((summary) =>
-      summary.hasRefreshToken &&
-      Boolean(summary.operationalVerifiedAt) &&
-      hasOperationalGoogleCapability(summary, capability),
-    );
-    const grantedCapabilities = operational
-      ? (matchingSummary?.operationalCapabilities ?? []).filter((candidate) =>
-          toolId === "gmail"
-            ? candidate.startsWith("email.")
-            : toolId === "google_calendar"
-              ? candidate.startsWith("calendar.")
-              : toolId === "google_workspace" || toolId === "google_drive"
-                ? candidate.startsWith("drive.")
-                : candidate.startsWith("youtube."),
-        )
-      : [];
-    const status: OrganizationToolState["status"] = operational
-      ? "connected"
-      : "needs_connection";
-    const tool = TOOL_CATALOG.find((entry) => entry.id === toolId);
-    const label = tool?.label ?? toolId;
-    const record: OrganizationToolState = {
-      organizationId: session.organizationId,
-      toolId,
-      label,
-      ...(tool?.capability ? { capability: tool.capability } : {}),
-      declared: true,
-      status,
-      configSource: "oauth:google",
-      ...(operational
-        ? (() => {
-            const verifiedAt = matchingSummary?.operationalVerifiedAt;
-            return verifiedAt ? { verifiedAt } : {};
-          })()
-        : {}),
-      ...(matchingSummary?.email
-        ? { providerAccountRef: matchingSummary.email }
-        : {}),
-      grantedCapabilities,
-      health: operational ? "operational" : "down",
-    };
-    try {
-      await session.toolState.upsert(record);
-    } catch {
-      // If the durable tool-state store is unavailable, still patch
-      // the in-memory session so the chat surface and the
-      // /conexiones view agree for the rest of this request.
-    }
-    if (tool) {
-      const connection = buildConnectionStateWithLifecycle(
-        tool,
-        session.state.locale,
-        status,
-        {
-          configSource: "oauth:google",
-          ...(record.verifiedAt ? { verifiedAt: record.verifiedAt } : {}),
-        },
+  await Promise.all(
+    googleToolIds.map(async (toolId) => {
+      const existing = existingRecords.find((r) => r.toolId === toolId);
+      const capability = capabilityByTool[toolId];
+      if (!capability) return;
+      // An OAuth handshake is an intentional transient state. Do not let a
+      // background capability reconciliation erase it before the callback has
+      // had a chance to validate its nonce.
+      if (session.state.connections.get(toolId)?.status === "connecting")
+        return;
+      if (!summaries.length && !existing) return;
+      const operational = summaries.some(
+        (summary) =>
+          summary.hasRefreshToken &&
+          Boolean(summary.operationalVerifiedAt) &&
+          hasOperationalGoogleCapability(summary, capability),
       );
-      session.state.connections.set(toolId, connection);
-    }
-  }
+      const matchingSummary = summaries.find(
+        (summary) =>
+          summary.hasRefreshToken &&
+          Boolean(summary.operationalVerifiedAt) &&
+          hasOperationalGoogleCapability(summary, capability),
+      );
+      const grantedCapabilities = operational
+        ? (matchingSummary?.operationalCapabilities ?? []).filter(
+            (candidate) =>
+              toolId === "gmail"
+                ? candidate.startsWith("email.")
+                : toolId === "google_calendar"
+                  ? candidate.startsWith("calendar.")
+                  : toolId === "google_workspace" || toolId === "google_drive"
+                    ? candidate.startsWith("drive.")
+                    : candidate.startsWith("youtube."),
+          )
+        : [];
+      const status: OrganizationToolState["status"] = operational
+        ? "connected"
+        : "needs_connection";
+      const tool = TOOL_CATALOG.find((entry) => entry.id === toolId);
+      const label = tool?.label ?? toolId;
+      const record: OrganizationToolState = {
+        organizationId: session.organizationId,
+        toolId,
+        label,
+        ...(tool?.capability ? { capability: tool.capability } : {}),
+        declared: true,
+        status,
+        configSource: "oauth:google",
+        ...(operational
+          ? (() => {
+              const verifiedAt = matchingSummary?.operationalVerifiedAt;
+              return verifiedAt ? { verifiedAt } : {};
+            })()
+          : {}),
+        ...(matchingSummary?.email
+          ? { providerAccountRef: matchingSummary.email }
+          : {}),
+        grantedCapabilities,
+        health: operational ? "operational" : "down",
+      };
+      try {
+        await session.toolState.upsert(record);
+      } catch {
+        // If the durable tool-state store is unavailable, still patch
+        // the in-memory session so the chat surface and the
+        // /conexiones view agree for the rest of this request.
+      }
+      if (tool) {
+        const connection = buildConnectionStateWithLifecycle(
+          tool,
+          session.state.locale,
+          status,
+          {
+            configSource: "oauth:google",
+            ...(record.verifiedAt ? { verifiedAt: record.verifiedAt } : {}),
+          },
+        );
+        session.state.connections.set(toolId, connection);
+      }
+    }),
+  );
 }
 
 /** Persists a declaration/connection update to the durable store. */
@@ -800,9 +847,7 @@ export async function runDiscoveryForSession(
   });
 
   if (result.status !== "completed" || !result.report) {
-    throw new Error(
-      result.error?.message ?? "Discovery did not complete.",
-    );
+    throw new Error(result.error?.message ?? "Discovery did not complete.");
   }
 
   session.reports = [...session.reports, result.report];
@@ -816,7 +861,10 @@ export async function runDiscoveryForSession(
  */
 export async function runMarketingPreparationForSession(
   session: CustomerZeroSession,
-): Promise<{ result: BusinessEventResult; workflowResult: WorkflowResult | null }> {
+): Promise<{
+  result: BusinessEventResult;
+  workflowResult: WorkflowResult | null;
+}> {
   const event = buildSimulatedPaymentEvent(session);
   const result = await session.businessEvents.publish(event);
 
@@ -835,7 +883,16 @@ export async function runMarketingPreparationForSession(
 export async function runMarketingPlanForSession(
   session: CustomerZeroSession,
   goal: string,
-): Promise<{ summary: string; items: readonly { id: string; title: string; description: string; kind: string; capability?: string }[] }> {
+): Promise<{
+  summary: string;
+  items: readonly {
+    id: string;
+    title: string;
+    description: string;
+    kind: string;
+    capability?: string;
+  }[];
+}> {
   const outcome = await session.port.executeAction({
     actionId: `act_plan_${shortId()}`,
     agentId: "agent_marketing_director",
@@ -853,13 +910,20 @@ export async function runMarketingPlanForSession(
     throw new Error(
       outcome.status === "rejected"
         ? outcome.reason
-        : outcome.error?.message ?? "Marketing could not create a plan.",
+        : (outcome.error?.message ?? "Marketing could not create a plan."),
     );
   }
 
-  const output = outcome.output as { summary?: string; items?: unknown[] } | undefined;
+  const output = outcome.output as
+    { summary?: string; items?: unknown[] } | undefined;
   const items = (output?.items ?? []).map((raw, index) => {
-    const item = raw as { id?: string; title?: string; description?: string; kind?: string; capability?: string };
+    const item = raw as {
+      id?: string;
+      title?: string;
+      description?: string;
+      kind?: string;
+      capability?: string;
+    };
     const kind =
       item.kind === "external_action" || item.kind === "creation"
         ? item.kind
@@ -935,7 +999,7 @@ export async function executeMarketingWorkItemForSession(
     item.status = "failed";
     return outcome.status === "rejected"
       ? outcome.reason
-      : outcome.error?.message ?? "Marketing could not execute this item.";
+      : (outcome.error?.message ?? "Marketing could not execute this item.");
   }
 
   const output = outcome.output as { result?: string } | undefined;
@@ -1014,7 +1078,7 @@ export function buildSessionExtraContext(session: CustomerZeroSession): string {
             .map((c) => c.capability)
             .join(", ")}`
         : "Todavía no hay ninguna herramienta externa conectada: no puedes " +
-          "ejecutar acciones externas, dilo con honestidad.",
+            "ejecutar acciones externas, dilo con honestidad.",
     );
   }
   if (session.state.unmappedTools.length > 0) {
@@ -1065,18 +1129,24 @@ export function produceDiagnosisForSession(
 
   return produceMarketingDiagnosis(
     {
-      companyName: onboarding?.companyName ?? session.state.companyName ?? "Tu empresa",
+      companyName:
+        onboarding?.companyName ?? session.state.companyName ?? "Tu empresa",
       goal: onboarding?.goal ?? "",
       locale: session.state.locale,
       ...(onboarding?.country ? { country: onboarding.country } : {}),
-      ...(onboarding?.companySize ? { companySize: onboarding.companySize } : {}),
+      ...(onboarding?.companySize
+        ? { companySize: onboarding.companySize }
+        : {}),
       hasWebsite: onboarding?.hasWebsite ?? false,
-      ...(onboarding?.description ? { description: onboarding.description } : {}),
+      ...(onboarding?.description
+        ? { description: onboarding.description }
+        : {}),
       ...(products.length > 0 ? { products } : {}),
       connectedTools,
       declaredTools,
       unmappedTools: session.state.unmappedTools,
-      discoveryGaps: report?.gaps.map((g: { description: string }) => g.description) ?? [],
+      discoveryGaps:
+        report?.gaps.map((g: { description: string }) => g.description) ?? [],
     },
     report,
   );
