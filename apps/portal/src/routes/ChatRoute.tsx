@@ -24,7 +24,10 @@ import {
 
 function visibleAssistantMessage(content: string): string {
   return content
-    .replace(/\bdepartify\.marketing\.delegate\b/gi, "trabajo de Marketing")
+    .replace(
+      /\b(?:departify\.)?marketing\.delegate\b/gi,
+      "trabajo de Marketing",
+    )
     .replace(/\bdrive\.write\b/gi, "cambios en Drive")
     .replace(/\bwork\.deliverable\b/gi, "entregable")
     .replace(/\bplugin approval required\b/gi, "requiere aprobación")

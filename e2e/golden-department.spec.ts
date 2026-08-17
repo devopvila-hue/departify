@@ -168,7 +168,10 @@ test.describe("Golden Department production acceptance", () => {
     await expect(page.locator(".dfy-chat-thinking")).toHaveCount(0, {
       timeout: 60_000,
     });
-    await expect(page.getByTestId("chat-message-assistant")).not.toContainText(
+    const assistantText = (
+      await page.getByTestId("chat-message-assistant").allTextContents()
+    ).join("\n");
+    expect(assistantText).not.toMatch(
       /marketing\.delegate|drive\.write|work\.deliverable|NO_REPLY|plugin approval required|OpenClaw|Activepieces|MCP/i,
     );
     await expect(page.locator(".dfy-thread")).toHaveCount(1);
