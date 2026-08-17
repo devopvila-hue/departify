@@ -21,7 +21,7 @@ type Surface = ToolConnectionView & {
 
 const CATEGORY_ORDER = ["email", "calendar", "documents", "crm", "marketing", "team", "other"] as const;
 const CANONICAL_CONNECTION_NAMES: Record<string, string> = {
-  github_repository: "Proyecto de la web",
+  github_repository: "GitHub",
   hostinger_email: "Correo de empresa",
   google_analytics: "Google Analytics",
   google_ads: "Google Ads",
@@ -102,7 +102,7 @@ export function ConnectionsRoute() {
     ? "/chat"
     : "/conexiones";
 
-  async function startConnect(surface: Surface, reconnect = false) {
+  async function startConnect(surface: Surface, reconnect = false, includeDriveWrite = false) {
     if (!organizationId || !surface.connectToolId || surface.unavailableReason) return;
     if (surface.connectionMethod === "manual" && surface.credentialHelp) {
       setSelected(null);
@@ -113,7 +113,7 @@ export function ConnectionsRoute() {
     setBusy(surface.surfaceId);
     setNotice(null);
     try {
-      const response = await api.connect(organizationId, surface.connectToolId, returnPath, reconnect, surface.oauthChannel);
+      const response = await api.connect(organizationId, surface.connectToolId, returnPath, reconnect, surface.oauthChannel, includeDriveWrite);
       const authorizationUrl = response?.connection?.authorizationUrl;
       if (authorizationUrl) {
         rememberGoogleOAuthReturnPath(returnPath);
@@ -238,7 +238,7 @@ export function ConnectionsRoute() {
           busy={busy === selected.surfaceId}
           onClose={() => setSelected(null)}
           onRefresh={() => void load()}
-          onConnect={(reconnect) => void startConnect(selected, reconnect)}
+          onConnect={(reconnect, includeDriveWrite) => void startConnect(selected, reconnect, includeDriveWrite)}
           onDisconnect={() => setConfirming(selected)}
         />
       )}
@@ -310,7 +310,7 @@ function ManageDialog(props: {
   busy: boolean;
   onClose: () => void;
   onRefresh: () => void;
-  onConnect: (reconnect: boolean) => void;
+  onConnect: (reconnect: boolean, includeDriveWrite?: boolean) => void;
   onDisconnect: () => void;
 }) {
   const { surface } = props;
@@ -344,6 +344,11 @@ function ManageDialog(props: {
           {connected ? (
             <>
               <button type="button" className="dfy-button dfy-button--ghost" disabled={props.busy} onClick={props.onRefresh}>Actualizar estado</button>
+              {surface.writeUpgradeRequired && (surface.toolId === "google_drive" || surface.toolId === "google_workspace") && (
+                <button type="button" className="dfy-button" disabled={props.busy} onClick={() => props.onConnect(true, true)}>
+                  {props.busy ? "Actualizando permisos…" : "Actualizar permisos para crear archivos"}
+                </button>
+              )}
               {surface.connectToolId && !surface.configSource?.startsWith("env:") && <button type="button" className="dfy-button dfy-button--ghost" disabled={props.busy} onClick={() => props.onConnect(true)}>Conectar otra cuenta</button>}
               {canDisconnect ? (
                 <button type="button" className="dfy-button dfy-button--danger-ghost" disabled={props.busy} onClick={props.onDisconnect}>Desconectar</button>
@@ -433,6 +438,7 @@ function normalizeConnectionView(entry: unknown): ToolConnectionView | null {
   const configSource = textValue(raw.configSource);
   const verifiedAt = textValue(raw.verifiedAt);
   const blockedReason = textValue(raw.blockedReason);
+  const writeUpgradeRequired = raw.writeUpgradeRequired === true;
   const connectionMethod = raw.connectionMethod === "oauth"
     || raw.connectionMethod === "manual"
     || raw.connectionMethod === "platform_managed"
@@ -464,6 +470,7 @@ function normalizeConnectionView(entry: unknown): ToolConnectionView | null {
       : null,
     ...(verifiedAt ? { verifiedAt } : {}),
     ...(blockedReason ? { blockedReason } : {}),
+    ...(writeUpgradeRequired ? { writeUpgradeRequired: true } : {}),
     ...(connectionMethod ? { connectionMethod } : {}),
     ...(credentialHelp ? { credentialHelp } : {}),
   };
@@ -608,6 +615,9 @@ function humanCapability(capability: string): string {
     "calendar.create": "Crear eventos",
     "drive.read": "Leer documentos",
     "drive.search": "Buscar documentos",
+    "drive.create_folder": "Crear carpetas",
+    "drive.create_file": "Crear documentos",
+    "drive.write": "Actualizar documentos",
     "marketing.social.read": "Consultar canales sociales",
     "marketing.social.publish": "Preparar publicaciones",
     "marketing.social.instagram.read": "Consultar Instagram",

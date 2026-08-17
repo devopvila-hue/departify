@@ -130,7 +130,7 @@ export interface CapabilityAvailability {
 export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
   {
     id: "github_repository",
-    name: "Proyecto de la web",
+    name: "GitHub",
     category: "marketing",
     categoryEs: "Proyecto web",
     categoryEn: "Web project",
@@ -409,6 +409,9 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
     capabilities: [
       { id: "drive.read", nameEs: "Leer archivos de Drive", nameEn: "Read Drive files" },
       { id: "drive.search", nameEs: "Buscar en Drive", nameEn: "Search Drive" },
+      { id: "drive.create_folder", nameEs: "Crear carpetas", nameEn: "Create folders" },
+      { id: "drive.create_file", nameEs: "Crear documentos", nameEn: "Create documents" },
+      { id: "drive.write", nameEs: "Actualizar documentos", nameEn: "Update documents" },
     ],
   },
   // Customer Zero 03 — Google Calendar.
@@ -452,6 +455,9 @@ export const CONNECTION_DEFINITIONS: readonly ConnectionDefinition[] = [
     capabilities: [
       { id: "drive.read", nameEs: "Leer archivos de Drive", nameEn: "Read Drive files" },
       { id: "drive.search", nameEs: "Buscar en Drive", nameEn: "Search Drive" },
+      { id: "drive.create_folder", nameEs: "Crear carpetas", nameEn: "Create folders" },
+      { id: "drive.create_file", nameEs: "Crear documentos", nameEn: "Create documents" },
+      { id: "drive.write", nameEs: "Actualizar documentos", nameEn: "Update documents" },
     ],
   },
   {

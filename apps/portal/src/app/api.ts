@@ -88,6 +88,7 @@ export interface ToolConnectionView {
   action: "prepare" | "connect" | "verify" | "retry" | null;
   verifiedAt?: string;
   blockedReason?: string;
+  writeUpgradeRequired?: boolean;
   connectionMethod?: ConnectionMethod;
   credentialHelp?: CredentialHelpDefinition;
 }
@@ -1308,6 +1309,7 @@ export const api = {
     returnPath?: GoogleOAuthReturnPath,
     reconnect = false,
     channel?: "facebook" | "instagram",
+    includeDriveWrite = false,
   ) => {
     const result = postJson<{ connection: ConnectionCard }>(
       `/api/customer-zero/${org}/connections/${toolId}/connect`,
@@ -1316,6 +1318,7 @@ export const api = {
             ...(returnPath ? { returnPath } : {}),
             ...(reconnect ? { reconnect: true } : {}),
             ...(channel ? { channel } : {}),
+            ...(includeDriveWrite ? { includeDriveWrite: true } : {}),
           }
         : undefined,
     );

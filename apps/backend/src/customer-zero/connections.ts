@@ -134,7 +134,7 @@ export interface ToolDescriptor {
 export const TOOL_CATALOG: readonly ToolDescriptor[] = [
   {
     id: "github_repository",
-    label: "Proyecto de la web",
+    label: "GitHub",
     capability: "repository.read",
     categoryEs: "Proyecto web",
     categoryEn: "Web project",

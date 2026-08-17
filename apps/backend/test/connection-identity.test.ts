@@ -126,12 +126,12 @@ describe("Connection identity contract — Customer Zero tools", () => {
   it("L. GitHub repository is a canonical connectable connection", () => {
     const def = getConnectionDefinition("github_repository");
     expect(def).not.toBeNull();
-    expect(def!.name).toBe("Proyecto de la web");
+    expect(def!.name).toBe("GitHub");
     expect(def!.capabilities.map((capability) => capability.id)).toContain("repository.read");
     expect(def!.logoMark).toBeTruthy();
     const card = renderConnectionCard(null, "es", def!);
     expect(card.id).toBe("github_repository");
-    expect(card.name).toBe("Proyecto de la web");
+    expect(card.name).toBe("GitHub");
     expect(card.state).toBe("not_connected");
     expect(card.logoMark).not.toBe("?");
   });
