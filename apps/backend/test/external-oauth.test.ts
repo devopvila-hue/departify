@@ -5,6 +5,7 @@ import {
   META_INSTAGRAM_SCOPES,
   META_SOCIAL_SCOPES,
   TIKTOK_SCOPES,
+  externalOAuthRedirectUri,
   startExternalOAuth,
 } from "../src/customer-zero/external-oauth.js";
 import {
@@ -31,6 +32,7 @@ describe("provider-backed marketing OAuth", () => {
     delete process.env.TIKTOK_BUSINESS_APP_ID;
     delete process.env.TIKTOK_BUSINESS_APP_SECRET;
     delete process.env.TIKTOK_BUSINESS_SCOPES;
+    delete process.env.PUBLIC_API_BASE_URL;
     installGoogleOAuthStateStore(null);
     installExternalOAuthTokenStoreForTest(null);
   });
@@ -48,6 +50,15 @@ describe("provider-backed marketing OAuth", () => {
       "GITHUB_OAUTH_CLIENT_ID",
       "GITHUB_OAUTH_CLIENT_SECRET",
     ]);
+  });
+
+  it("uses the production API callback bridge for TikTok OAuth", () => {
+    process.env.NODE_ENV = "production";
+    expect(externalOAuthRedirectUri("tiktok", "https://app.departify.app"))
+      .toBe("https://api.departify.app/connections/tiktok/callback");
+    expect(externalOAuthRedirectUri("tiktok_business", "https://app.departify.app"))
+      .toBe("https://api.departify.app/connections/tiktok_ads/callback");
+    delete process.env.NODE_ENV;
   });
 
   it("creates a GitHub repository authorization state without exposing write capability", async () => {

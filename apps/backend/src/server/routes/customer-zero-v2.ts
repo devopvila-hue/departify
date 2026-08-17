@@ -2422,6 +2422,28 @@ export async function registerCustomerZeroV2Routes(
     },
   );
 
+  // TikTok sends the provider callback to the API host. Keep the browser
+  // callback in the portal so it can preserve the authenticated return path,
+  // while allowing the API to control and whitelist every forwarded OAuth
+  // parameter. Tokens never pass through this redirect.
+  for (const callbackToolId of ["tiktok", "tiktok_ads"] as const) {
+    server.get<{
+      Querystring: Partial<Record<"code" | "auth_code" | "state" | "error" | "error_description", string>>;
+    }>(
+      `/connections/${callbackToolId}/callback`,
+      async (request, reply) => {
+        const portalBase = (deps.publicBaseUrl ?? publicBaseUrl()).replace(/\/+$/, "");
+        const query = new URLSearchParams();
+        for (const key of ["code", "auth_code", "state", "error", "error_description"] as const) {
+          const value = request.query[key];
+          if (typeof value === "string" && value.length > 0) query.set(key, value);
+        }
+        const suffix = query.toString() ? `?${query.toString()}` : "";
+        return reply.redirect(`${portalBase}/connections/${callbackToolId}/callback${suffix}`);
+      },
+    );
+  }
+
   // Customer Zero Email P0 — "Otro correo de empresa" (IMAP + SMTP).
   // Configure + bounded probe. The password NEVER leaves the request
   // boundary and is NEVER returned in the response.

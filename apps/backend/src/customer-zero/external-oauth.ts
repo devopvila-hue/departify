@@ -105,9 +105,16 @@ export function externalOAuthRedirectUri(
   provider: ExternalOAuthProvider,
   publicBaseUrl?: string,
 ): string {
-  const base = (
+  const fallbackBase = (
     publicBaseUrl?.trim() || process.env.PUBLIC_BASE_URL?.trim() || "http://localhost:3000"
   ).replace(/\/+$/, "");
+  const isTikTok = provider === "tiktok" || provider === "tiktok_business";
+  const base = isTikTok
+    ? (
+        process.env.PUBLIC_API_BASE_URL?.trim()
+        || (process.env.NODE_ENV === "production" ? "https://api.departify.app" : fallbackBase)
+      ).replace(/\/+$/, "")
+    : fallbackBase;
   const callbackTool = provider === "meta_instagram"
     ? "meta_business"
     : provider === "github"
