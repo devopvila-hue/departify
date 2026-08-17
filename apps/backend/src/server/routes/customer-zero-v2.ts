@@ -1131,9 +1131,11 @@ export async function registerCustomerZeroV2Routes(
             ? "tiktok_business"
             : toolId === "tiktok"
               ? "tiktok"
-          : toolId === "ticktick"
-            ? "ticktick"
-            : null;
+              : toolId === "github_repository"
+                ? "github"
+                : toolId === "ticktick"
+                  ? "ticktick"
+                  : null;
       if (!externalProvider) {
         return reply.code(409).send({
           error: {

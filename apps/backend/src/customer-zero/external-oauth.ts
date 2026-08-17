@@ -39,7 +39,12 @@ export const META_SOCIAL_SCOPES = META_FACEBOOK_SCOPES;
 
 const TICKTICK_SCOPES = ["tasks:read", "tasks:write"] as const;
 /** TikTok Login Kit / Display API read permissions. */
-export const TIKTOK_SCOPES = ["user.info.basic", "video.list"] as const;
+export const TIKTOK_SCOPES = [
+  "user.info.basic",
+  "user.info.profile",
+  "user.info.stats",
+  "video.list",
+] as const;
 
 function tiktokBusinessScopes(): readonly string[] {
   return (process.env.TIKTOK_BUSINESS_SCOPES ?? "")
@@ -72,33 +77,45 @@ export function externalOAuthCredentials(provider: ExternalOAuthProvider): {
   clientId: string;
   clientSecret: string;
 } | null {
-  const names: readonly [string, string] = provider === "meta_business" || provider === "meta_instagram"
-    ? ["META_APP_ID", "META_APP_SECRET"]
-    : provider === "github"
-      ? ["GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET"]
-      : provider === "ticktick"
-        ? ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"]
-        : provider === "tiktok"
-          ? ["TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"]
-          : ["TIKTOK_BUSINESS_APP_ID", "TIKTOK_BUSINESS_APP_SECRET"];
-  const clientId = process.env[names[0]]?.trim() ?? "";
-  const clientSecret = process.env[names[1]]?.trim() ?? "";
+  const names = externalOAuthCredentialNames(provider);
+  const clientId = names.clientId.map((name) => process.env[name]?.trim() ?? "").find(Boolean) ?? "";
+  const clientSecret = names.clientSecret.map((name) => process.env[name]?.trim() ?? "").find(Boolean) ?? "";
   return clientId && clientSecret ? { clientId, clientSecret } : null;
 }
 
 export function externalOAuthMissingCredentials(
   provider: ExternalOAuthProvider,
 ): string[] {
-  const names: readonly [string, string] = provider === "meta_business" || provider === "meta_instagram"
-    ? ["META_APP_ID", "META_APP_SECRET"]
-    : provider === "github"
-      ? ["GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET"]
-      : provider === "ticktick"
-        ? ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"]
-        : provider === "tiktok"
-          ? ["TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"]
-          : ["TIKTOK_BUSINESS_APP_ID", "TIKTOK_BUSINESS_APP_SECRET"];
-  return names.filter((name) => !(process.env[name]?.trim()));
+  const names = externalOAuthCredentialNames(provider);
+  const missing: string[] = [];
+  if (!names.clientId.some((name) => process.env[name]?.trim())) missing.push(names.clientId[0]!);
+  if (!names.clientSecret.some((name) => process.env[name]?.trim())) missing.push(names.clientSecret[0]!);
+  return missing;
+}
+
+function externalOAuthCredentialNames(provider: ExternalOAuthProvider): {
+  clientId: readonly string[];
+  clientSecret: readonly string[];
+} {
+  if (provider === "meta_business" || provider === "meta_instagram") {
+    return { clientId: ["META_APP_ID"], clientSecret: ["META_APP_SECRET"] };
+  }
+  if (provider === "github") {
+    // Both names exist in deployed environments. Keep the original names as
+    // the preferred contract while accepting the provider-neutral aliases
+    // already used by the production service configuration.
+    return {
+      clientId: ["GITHUB_OAUTH_CLIENT_ID", "GITHUB_CLIENT_ID"],
+      clientSecret: ["GITHUB_OAUTH_CLIENT_SECRET", "GITHUB_CLIENT_SECRET"],
+    };
+  }
+  if (provider === "ticktick") {
+    return { clientId: ["TICKTICK_CLIENT_ID"], clientSecret: ["TICKTICK_CLIENT_SECRET"] };
+  }
+  if (provider === "tiktok") {
+    return { clientId: ["TIKTOK_CLIENT_KEY"], clientSecret: ["TIKTOK_CLIENT_SECRET"] };
+  }
+  return { clientId: ["TIKTOK_BUSINESS_APP_ID"], clientSecret: ["TIKTOK_BUSINESS_APP_SECRET"] };
 }
 
 export function externalOAuthRedirectUri(
@@ -678,7 +695,20 @@ async function probeGithub(accessToken: string): Promise<{ label: string; scopes
 }
 
 async function probeTikTok(accessToken: string): Promise<{ label: string; scopes: string[] }> {
-  const query = new URLSearchParams({ fields: "open_id,display_name" });
+  const query = new URLSearchParams({
+    fields: [
+      "open_id",
+      "display_name",
+      "profile_deep_link",
+      "bio_description",
+      "is_verified",
+      "username",
+      "follower_count",
+      "following_count",
+      "likes_count",
+      "video_count",
+    ].join(","),
+  });
   const response = await fetch(`https://open.tiktokapis.com/v2/user/info/?${query.toString()}`, {
     headers: { authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS),

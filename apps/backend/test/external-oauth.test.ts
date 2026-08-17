@@ -27,6 +27,8 @@ describe("provider-backed marketing OAuth", () => {
     delete process.env.TICKTICK_CLIENT_SECRET;
     delete process.env.GITHUB_OAUTH_CLIENT_ID;
     delete process.env.GITHUB_OAUTH_CLIENT_SECRET;
+    delete process.env.GITHUB_CLIENT_ID;
+    delete process.env.GITHUB_CLIENT_SECRET;
     delete process.env.TIKTOK_CLIENT_KEY;
     delete process.env.TIKTOK_CLIENT_SECRET;
     delete process.env.TIKTOK_BUSINESS_APP_ID;
@@ -81,6 +83,24 @@ describe("provider-backed marketing OAuth", () => {
     expect(authorizationUrl.searchParams.get("client_id")).toBe("github-client-test");
     expect(authorizationUrl.searchParams.get("scope")?.split(" ")).toEqual(["read:user", "repo"]);
     expect((await stateStore.get(out.state))?.requestedToolId).toBe("github_repository");
+  });
+
+  it("accepts the deployed provider-neutral GitHub credential aliases", async () => {
+    process.env.GITHUB_CLIENT_ID = "github-client-deployed";
+    process.env.GITHUB_CLIENT_SECRET = "github-secret-deployed";
+    const stateStore = createInMemoryOAuthStateStore();
+    installGoogleOAuthStateStore(stateStore);
+
+    const out = await startExternalOAuth({
+      organizationId: "org-seo",
+      userId: "user-seo",
+      provider: "github",
+      returnPath: "/seo",
+      redirectUri: "https://app.departify.app/connections/github_repository/callback",
+    });
+
+    expect(new URL(out.authorizationUrl).searchParams.get("client_id")).toBe("github-client-deployed");
+    expect(externalOAuthMissingCredentials("github")).toEqual([]);
   });
 
   it("creates a durable, provider-specific Meta authorization state", async () => {
@@ -345,6 +365,10 @@ describe("provider-backed marketing OAuth", () => {
       }
       if (url.startsWith("https://open.tiktokapis.com/v2/user/info/")) {
         expect((init?.headers as Record<string, string>).authorization).toBe("Bearer tiktok-access-token");
+        const fields = new URL(url).searchParams.get("fields") ?? "";
+        expect(fields).toContain("profile_deep_link");
+        expect(fields).toContain("username");
+        expect(fields).toContain("follower_count");
         return new Response(JSON.stringify({ data: { user: { display_name: "Departify" } } }), { status: 200 });
       }
       throw new Error(`unexpected ${url}`);
