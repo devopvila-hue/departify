@@ -8497,9 +8497,12 @@ async function runConnectedMarketingConnectorMessage(
         kind: tiktokKind,
       });
       if (result.kind === "profile") {
+        const metrics = result.metrics ?? {};
+        const followers = metrics.follower_count;
+        const videos = metrics.video_count;
         return session.state.locale === "en"
-          ? `TikTok is connected as ${result.accountLabel}.`
-          : `TikTok está conectado como ${result.accountLabel}.`;
+          ? `TikTok is connected as ${result.accountLabel}${followers !== undefined ? ` with ${followers} followers` : ""}${videos !== undefined ? ` and ${videos} public videos` : ""}.`
+          : `TikTok está conectado como ${result.accountLabel}${followers !== undefined ? ` con ${followers} seguidores` : ""}${videos !== undefined ? ` y ${videos} vídeos públicos` : ""}.`;
       }
       if (result.kind === "videos") {
         return session.state.locale === "en"

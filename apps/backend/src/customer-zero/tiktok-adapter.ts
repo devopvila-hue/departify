@@ -161,7 +161,7 @@ export class TikTokAdapter {
       const record = await getToken(input.organizationId, input.userId, "tiktok");
       if (input.kind === "profile") {
         const response = await fetch(
-          "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name",
+          "https://open.tiktokapis.com/v2/user/info/?fields=open_id,display_name,profile_deep_link,bio_description,is_verified,username,follower_count,following_count,likes_count,video_count",
           {
             headers: { authorization: `Bearer ${record.accessToken}` },
             signal: AbortSignal.timeout(TIKTOK_TIMEOUT_MS),
@@ -170,7 +170,17 @@ export class TikTokAdapter {
         const body = await jsonResponse(response);
         const user = objectValue(objectValue(body.data)?.user);
         const displayName = safeText(user?.display_name) || record.accountLabel || "TikTok";
-        return { provider: "tiktok", kind: "profile", accountLabel: displayName };
+        const metrics: Record<string, string | number> = {};
+        for (const key of ["follower_count", "following_count", "likes_count", "video_count"]) {
+          const value = user?.[key];
+          if (typeof value === "number" || typeof value === "string") metrics[key] = value;
+        }
+        return {
+          provider: "tiktok",
+          kind: "profile",
+          accountLabel: displayName,
+          ...(Object.keys(metrics).length > 0 ? { metrics } : {}),
+        };
       }
       const response = await fetch(
         "https://open.tiktokapis.com/v2/video/list/?fields=id,title,video_description,duration,cover_image_url,embed_link",
