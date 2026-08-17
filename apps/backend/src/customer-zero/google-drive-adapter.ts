@@ -296,7 +296,7 @@ export class GoogleDriveAdapter {
     const params = driveListParams({
       q: clauses.join(" and "),
       pageSize: input.pageSize ?? 20,
-      fields: driveFields(),
+      fields: driveListFields(),
     });
     const diagnostics = driveDiagnostics(params, "GET", "/drive/v3/files");
     const response = await googleApiFetch(
@@ -674,6 +674,10 @@ function normalizeDriveFile(file: DriveRawFile): DriveFile | null {
 
 function driveFields(): string {
   return "id,name,mimeType,size,modifiedTime,webViewLink,parents,owners(emailAddress)";
+}
+
+function driveListFields(): string {
+  return `files(${driveFields()})`;
 }
 
 interface DriveListParamsInput {

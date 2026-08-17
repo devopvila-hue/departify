@@ -590,6 +590,27 @@ describe("GoogleDriveAdapter", () => {
     );
   });
 
+  it("wraps fields correctly when finding an exact folder through files.list", async () => {
+    seedTokens();
+    let requestedUrl = "";
+    vi.stubGlobal("fetch", (async (input: string | URL) => {
+      requestedUrl = String(input);
+      return jsonResponse(200, {
+        files: [{
+          id: "folder-departify",
+          name: "Departify",
+          mimeType: "application/vnd.google-apps.folder",
+          modifiedTime: "2026-08-17T10:00:00Z",
+        }],
+      });
+    }) as typeof fetch);
+    const out = await new GoogleDriveAdapter({ organizationId: "org_a", userId: "ceo_a" })
+      .findFilesByName({ name: "Departify", mimeType: "application/vnd.google-apps.folder" });
+    expect(out.success).toBe(true);
+    expect(out.value?.[0]).toMatchObject({ id: "folder-departify", name: "Departify" });
+    expect(new URL(requestedUrl).searchParams.get("fields")).toMatch(/^files\(id,name,mimeType/);
+  });
+
   it("lists real PDFs by MIME type without making a write request", async () => {
     seedTokens();
     let requestedUrl = "";
