@@ -199,7 +199,9 @@ export async function registerDepartmentRoutes(server: FastifyInstance, deps: Se
       deps.companyDna?.get(organizationId) ?? Promise.resolve(null),
       workStoreForRoutes().listTasksForOrg(organizationId, 100),
       workStoreForRoutes().listResultsForOrg(organizationId, 100),
-      buildCanonicalConnectionViews(session, session.state.locale),
+      buildCanonicalConnectionViews(session, session.state.locale, undefined, {
+        probeExternal: false,
+      }),
     ]);
     const seoTasks = tasks.filter((task) => task.departmentId === "seo");
     const seoResults = results.filter((result) => result.departmentId === "seo");

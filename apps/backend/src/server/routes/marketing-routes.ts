@@ -222,7 +222,9 @@ async function loadMarketingOperationalState(
 ) {
   const session = await requireSession(organizationId, deps);
   const [connections, tasks, results] = await Promise.all([
-    buildCanonicalConnectionViews(session, locale),
+    buildCanonicalConnectionViews(session, locale, undefined, {
+      probeExternal: false,
+    }),
     workStoreForRoutes().listTasksForOrg(organizationId, 100),
     workStoreForRoutes().listResultsForOrg(organizationId, 50),
   ]);
