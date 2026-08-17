@@ -2,7 +2,8 @@ import { chromium } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 
 const baseURL = "https://app.departify.app";
-const authStatePath = new URL("./.auth/production.json", import.meta.url);
+const authStatePath = new URL("./.auth/production.json", import.meta.url)
+  .pathname;
 const email = process.env.DEPARTIFY_E2E_EMAIL;
 const password = process.env.DEPARTIFY_E2E_PASSWORD;
 
@@ -34,6 +35,11 @@ if (await loginHeading.isVisible().catch(() => false)) {
   }
 }
 
+await page.getByRole("navigation", { name: "Navegación principal" }).waitFor({
+  state: "visible",
+  timeout: 300_000,
+});
+
 await context.storageState({ path: authStatePath });
-console.log(`Sesión guardada localmente en ${authStatePath.pathname}.`);
+console.log(`Sesión guardada localmente en ${authStatePath}.`);
 await browser.close();
