@@ -952,8 +952,15 @@ export function setApiAccessToken(token: string | null): void {
 
 function buildHeaders(init?: RequestInit): Headers {
   const headers = new Headers(init?.headers);
-  if (accessToken) {
-    headers.set("authorization", `Bearer ${accessToken}`);
+  // Re-read localStorage on every request: the in-memory `accessToken` can
+  // be stale if Supabase refreshed it in the background, if the user is in
+  // a tab that loaded before sign-in hydrated, or after a top-level redirect
+  // (OAuth callback). Sending the freshest JWT prevents the `missing_token`
+  // 401 from the backend auth boundary. The in-memory value is the fast path;
+  // localStorage is the durable fallback. No secret is logged.
+  const token = accessToken ?? readPersistedSupabaseAccessToken();
+  if (token) {
+    headers.set("authorization", `Bearer ${token}`);
   }
   return headers;
 }

@@ -159,6 +159,28 @@ export function AppShell(props: {
     setOpen(false);
   }, [location.pathname]);
 
+  // Close the drawer when the user taps outside the sidebar or the hamburger.
+  // The scrim itself is `pointer-events: none` so the tap reaches the page
+  // content underneath (e.g. the "Ver SEO" button on mobile). We still close
+  // the menu on every outside tap via this document listener, preserving the
+  // original drawer UX.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (event: MouseEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Element &&
+        (target.closest(".dfy-sidebar") ||
+          target.closest(".dfy-topbar__menu"))
+      ) {
+        return;
+      }
+      setOpen(false);
+    };
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  }, [open]);
+
   async function handleLogout() {
     await signOut();
     setOrganizationId(null);
@@ -201,11 +223,7 @@ export function AppShell(props: {
   return (
     <div className="dfy-shell">
       {open && (
-        <div
-          className="dfy-shell__scrim"
-          role="presentation"
-          onClick={() => setOpen(false)}
-        />
+        <div className="dfy-shell__scrim" role="presentation" />
       )}
 
       <nav

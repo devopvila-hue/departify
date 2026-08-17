@@ -116,6 +116,94 @@ test.describe("Golden Department production acceptance", () => {
     });
   });
 
+  test("Connections OAuth start navigates to GitHub authorize (real button click)", async ({
+    page,
+  }) => {
+    // Regression: a previous E2E report claimed "Inicio OAuth real: PASS"
+    // for GitHub. The previous spec only clicked "+ Añadir" and read the
+    // "GitHub" string from the catalog — it never clicked a Conectar button.
+    // Manual production reproduction showed the API replying 401
+    // `missing_token` and the browser never reaching github.com. This test
+    // clicks the real button, observes the live navigation, and verifies
+    // the browser lands on GitHub's official authorize endpoint. No
+    // Authorization header is injected and no redirect is mocked.
+    await openRoute(page, "/conexiones", /Conexiones|GitHub/i);
+    await page.getByRole("button", { name: "+ Añadir", exact: true }).click();
+    // Open the GitHub manage dialog from the catalog row.
+    await page
+      .getByRole("button", { name: /^GitHub/ })
+      .first()
+      .click();
+    // The manage dialog exposes the Conectar CTA only when the tool is
+    // actually connectable; if the backend reports a missing credential the
+    // label becomes "No disponible todavía" and the button is disabled.
+    const conectar = page.getByRole("button", { name: /^Conectar$/ });
+    await expect(conectar).toBeEnabled({ timeout: 10_000 });
+    await conectar.click();
+    await page.waitForURL(/^https:\/\/github\.com\/login\/oauth\/authorize/, {
+      timeout: 20_000,
+    });
+    expect(page.url()).toMatch(/^https:\/\/github\.com\/login\/oauth\/authorize/);
+    expect(page.url()).toMatch(/[?&](client_id|state)=/);
+  });
+
+  test("Connections OAuth start navigates to TikTok authorize (real button click)", async ({
+    page,
+  }) => {
+    // Same regression as GitHub above but for TikTok. The backend maps
+    // `tiktok` → `startExternalOAuth(provider = "tiktok")` which produces
+    // https://www.tiktok.com/v2/auth/authorize/. Same code path, same
+    // `requireSession` boundary, same Authorization header.
+    await openRoute(page, "/conexiones", /Conexiones|TikTok/i);
+    await page.getByRole("button", { name: "+ Añadir", exact: true }).click();
+    await page
+      .getByRole("button", { name: /^TikTok/ })
+      .first()
+      .click();
+    const conectar = page.getByRole("button", { name: /^Conectar$/ });
+    await expect(conectar).toBeEnabled({ timeout: 10_000 });
+    await conectar.click();
+    await page.waitForURL(/^https:\/\/www\.tiktok\.com\/v2\/auth\/authorize/, {
+      timeout: 20_000,
+    });
+    expect(page.url()).toMatch(
+      /^https:\/\/www\.tiktok\.com\/v2\/auth\/authorize/,
+    );
+    expect(page.url()).toMatch(/[?&](client_key|state)=/);
+  });
+
+  test("Mobile drawer does not intercept the page content underneath (Ver SEO)", async ({
+    page,
+  }) => {
+    // Regression: on a mobile viewport the `.dfy-shell__scrim` (z-index 40,
+    // fixed, inset 0) used to swallow every tap while the drawer was open,
+    // so tapping "Ver SEO" closed the menu but never navigated. The scrim
+    // is now `pointer-events: none` and a document-level listener closes the
+    // drawer on outside taps. Tapping "Ver SEO" must reach /seo in one
+    // gesture, regardless of drawer state.
+    test.skip(
+      (page.viewportSize()?.width ?? 1440) >= 600,
+      "Mobile-only regression; desktop drawer does not apply.",
+    );
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect(
+      page.getByRole("navigation", { name: "Navegación principal" }),
+    ).toBeVisible();
+    // Open the mobile drawer first.
+    await page
+      .getByRole("button", { name: "Abrir navegación" })
+      .click({ force: true });
+    // Tap "Ver SEO" while the drawer is open — must navigate to /seo AND
+    // close the drawer in the same gesture.
+    await page
+      .getByRole("button", { name: /^Ver SEO$/ })
+      .click({ force: true });
+    await expect(page).toHaveURL(/\/seo(?:[?#].*)?$/, { timeout: 10_000 });
+    await expect(
+      page.locator(".dfy-sidebar--open"),
+    ).toHaveCount(0, { timeout: 5_000 });
+  });
+
   test("Configuration exposes the provider-neutral capability setup", async ({
     page,
   }) => {

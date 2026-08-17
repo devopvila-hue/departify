@@ -630,6 +630,10 @@ select {
   inset: 0;
   z-index: 40;
   background: rgba(0, 0, 0, 0.6);
+  /* Transparent to pointer events so a tap on the dimmed area reaches the
+     page content underneath (e.g. mobile "Ver SEO" button). The drawer
+     still closes via a document-level click listener in AppShell. */
+  pointer-events: none;
 }
 
 .dfy-shell__main {
