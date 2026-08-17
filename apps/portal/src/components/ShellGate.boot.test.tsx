@@ -16,9 +16,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OrgProvider } from "@/app/org-context";
 
-const authRef: { current: { user: { id: string } | null; loading: boolean } } = {
-  current: { user: null, loading: true },
-};
+const authRef: { current: { user: { id: string } | null; loading: boolean } } =
+  {
+    current: { user: null, loading: true },
+  };
 vi.mock("@/app/auth-context", () => ({
   useAuth: () => authRef.current,
 }));
@@ -111,10 +112,12 @@ describe("ShellGate — URL preservation across hydration (P0)", () => {
     await flush(250);
     // The user must still be on /conexiones, not "/".
     expect(lastPath).toBe("/conexiones");
-    // The ShellGate child should not have been rendered yet (still loading).
-    expect(screen.queryByTestId("conexiones-page")).toBeNull();
+    // The shell must not wait for a non-critical overview projection.
+    expect(screen.queryByTestId("conexiones-page")).toBeInTheDocument();
     // No onboarding flash.
-    expect(screen.queryByText(/cuéntame lo mínimo sobre tu empresa/i)).toBeNull();
+    expect(
+      screen.queryByText(/cuéntame lo mínimo sobre tu empresa/i),
+    ).toBeNull();
   });
 
   it("happy path: refreshing /conexiones with a healthy backend stays on /conexiones and renders the page", async () => {
@@ -137,14 +140,18 @@ describe("ShellGate — URL preservation across hydration (P0)", () => {
 
     let lastPath = "";
     mountGate("/conexiones", (p) => (lastPath = p));
-    expect(await screen.findByTestId("conexiones-page", {}, { timeout: 1500 }))
-      .toBeInTheDocument();
+    expect(
+      await screen.findByTestId("conexiones-page", {}, { timeout: 1500 }),
+    ).toBeInTheDocument();
     expect(lastPath).toBe("/conexiones");
   });
 
   it("redirects to '/' ONLY when there is positively no authenticated user", async () => {
     authRef.current = { user: null, loading: false };
-    vi.stubGlobal("fetch", vi.fn(async () => okJson({})));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => okJson({})),
+    );
     let lastPath = "/conexiones";
     render(
       <MemoryRouter initialEntries={["/conexiones"]}>
