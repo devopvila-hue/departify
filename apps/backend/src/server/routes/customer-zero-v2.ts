@@ -3506,6 +3506,13 @@ function currentQuestion(
  */
 export const MAX_ACTIVE_CONVERSATIONS_VALUE = 5;
 
+/**
+ * Several shell requests can arrive together on the first authenticated
+ * render. Share the durable session hydration across that burst instead of
+ * issuing the same Supabase/tool-state reads once per request.
+ */
+const activeSessionHydrations = new Map<string, Promise<void>>();
+
 /** The 6th active conversation is REFUSED, never silently deleted. The
  *  portal renders a friendly archive-first dialog from this error. */
 export class MaxActiveConversationsError extends Error {
@@ -3529,20 +3536,35 @@ export async function requireSession(
     ...(deps.departmentMemory ? { departmentMemory: deps.departmentMemory } : {}),
     ...(deps.llmCredentials ? { llmCredentials: deps.llmCredentials } : {}),
   });
-  await hydrateSessionToolState(session);
-  // Customer Zero P0 — rebuild the company understanding from DURABLE
-  // storage. After a Railway restart the session Map is empty; without
-  // this the department context compiler would rebuild an empty company
-  // and Elvira would greet a CEO she no longer recognises.
-  await hydrateSessionFromCompanyDna(session, resolveCompanyDnaStore(deps));
-  await hydrateDepartmentMemory(session);
-  // STATE-MACHINE INVARIANT: "connecting" is only valid while the OAuth
-  // state nonce is alive (10 minutes). If a Google connection is still
-  // "connecting" with a missing/expired/consumed nonce (the callback
-  // never arrived — e.g. the browser dropped the callback page), the
-  // connection MUST leave "connecting" and surface an actionable
-  // terminal state. Never "connecting" forever.
-  await reapStaleGoogleHandshakes(session);
+  const runningHydration = activeSessionHydrations.get(organizationId);
+  if (runningHydration) {
+    await runningHydration;
+    return session;
+  }
+  const hydration = (async () => {
+    await hydrateSessionToolState(session);
+    // Customer Zero P0 — rebuild the company understanding from DURABLE
+    // storage. After a Railway restart the session Map is empty; without
+    // this the department context compiler would rebuild an empty company
+    // and Elvira would greet a CEO she no longer recognises.
+    await hydrateSessionFromCompanyDna(session, resolveCompanyDnaStore(deps));
+    await hydrateDepartmentMemory(session);
+    // STATE-MACHINE INVARIANT: "connecting" is only valid while the OAuth
+    // state nonce is alive (10 minutes). If a Google connection is still
+    // "connecting" with a missing/expired/consumed nonce (the callback
+    // never arrived — e.g. the browser dropped the callback page), the
+    // connection MUST leave "connecting" and surface an actionable
+    // terminal state. Never "connecting" forever.
+    await reapStaleGoogleHandshakes(session);
+  })();
+  activeSessionHydrations.set(organizationId, hydration);
+  try {
+    await hydration;
+  } finally {
+    if (activeSessionHydrations.get(organizationId) === hydration) {
+      activeSessionHydrations.delete(organizationId);
+    }
+  }
   return session;
 }
 
