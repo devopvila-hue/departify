@@ -4766,7 +4766,6 @@ export async function processCeoMessage(
       session,
       operationalMessage,
       session.state.locale !== "en",
-      deps,
     );
     return completeDeterministicOperationTurn(
       session,
@@ -6687,7 +6686,6 @@ async function runDriveWriteTurn(
   session: CustomerZeroSession,
   message: string,
   isEs: boolean,
-  deps: ServerDeps,
 ): Promise<{ reply: string; status: "success" | "blocked" }> {
   const readIdentity = await findOperationalGoogleIdentityForOrg(session.organizationId, "drive.read");
   if (!readIdentity) {

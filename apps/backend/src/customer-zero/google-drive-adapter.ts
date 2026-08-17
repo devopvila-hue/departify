@@ -606,40 +606,53 @@ export class GoogleDriveAdapter {
       { name: "06_Equipo", children: ["Docs internos", "Onboarding nuevos"] },
       { name: "99_Archive", children: [] },
     ];
-    const folders: DriveFile[] = [];
-    for (const branch of tree) {
-      const folder = await this.ensureFolder(branch.name, root.value.id);
-      if (!folder.success || !folder.value) return propagateFailure(folder);
-      folders.push(folder.value);
-      for (const childName of branch.children) {
-        const child = await this.ensureFolder(childName, folder.value.id);
-        if (!child.success || !child.value) return propagateFailure(child);
-        folders.push(child.value);
-      }
-    }
+    const rootFolderId = root.value.id;
+    const branchResults = await Promise.all(
+      tree.map(async (branch): Promise<DriveAdapterResult<{ folder: DriveFile; children: readonly DriveFile[] }>> => {
+        const folder = await this.ensureFolder(branch.name, rootFolderId);
+        if (!folder.success || !folder.value) return propagateFailure(folder);
+        const folderFile = folder.value;
+        const children = await Promise.all(
+          branch.children.map((childName) => this.ensureFolder(childName, folderFile.id)),
+        );
+        const failedChild = children.find((child): child is Extract<typeof child, { success: false }> => !child.success);
+        if (failedChild) return propagateFailure(failedChild);
+        return ok({
+          folder: folder.value,
+          children: children.flatMap((child) => child.success && child.value ? [child.value] : []),
+        });
+      }),
+    );
+    const failedBranch = branchResults.find((branch): branch is Extract<typeof branch, { success: false }> => !branch.success);
+        if (failedBranch) return propagateFailure(failedBranch);
+    const folders = branchResults.flatMap((branch) =>
+      branch.value ? [branch.value.folder, ...branch.value.children] : [],
+    );
     const createdDocuments: DriveFile[] = [];
-    for (const document of documents) {
+    const documentResults = await Promise.all(documents.map(async (document): Promise<DriveAdapterResult<DriveFile | null>> => {
       const parent = folders.find((folder) => folder.name === document.parentFolderName);
-      if (!parent) continue;
+      if (!parent) return ok<DriveFile | null>(null);
       const existing = await this.findFilesByName({
         name: document.name,
         parentFolderId: parent.id,
         mimeType: GoogleDriveAdapter.GOOGLE_DOC_MIME_TYPE,
       });
-      if (!existing.success) return propagateFailure(existing);
-      if (existing.value?.[0]) {
-        createdDocuments.push(existing.value[0]);
-        continue;
-      }
+      if (!existing.success) return fail(existing.message ?? "No he podido buscar el documento.", existing.errorCode);
+      if (existing.value?.[0]) return ok(existing.value[0]);
       const created = await this.createGoogleDoc({
         name: document.name,
         parentFolderId: parent.id,
         content: document.content,
         appProperties: { departifyWorkspace: "v1" },
       });
-      if (!created.success || !created.value) return propagateFailure(created);
-      createdDocuments.push(created.value);
-    }
+      if (!created.success || !created.value) return fail(created.message ?? "Google no ha confirmado el documento.", created.errorCode);
+      return ok(created.value);
+    }));
+    const failedDocument = documentResults.find((document): document is Extract<typeof document, { success: false }> => !document.success);
+    if (failedDocument) return propagateFailure(failedDocument);
+    createdDocuments.push(
+      ...documentResults.flatMap((document) => document.value ? [document.value] : []),
+    );
     return ok({ root: root.value, folders, documents: createdDocuments });
   }
 
