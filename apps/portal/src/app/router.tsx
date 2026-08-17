@@ -9,6 +9,7 @@ import { DepartmentsRoute } from "@/routes/DepartmentsRoute";
 import { GoogleOAuthCallbackRoute } from "@/routes/GoogleOAuthCallbackRoute";
 import { MetaOAuthCallbackRoute } from "@/routes/MetaOAuthCallbackRoute";
 import { GitHubOAuthCallbackRoute } from "@/routes/GitHubOAuthCallbackRoute";
+import { TikTokOAuthCallbackRoute } from "@/routes/TikTokOAuthCallbackRoute";
 import { InboxRoute } from "@/routes/InboxRoute";
 import { MarketingRoute } from "@/routes/MarketingRoute";
 import { ResultsRoute } from "@/routes/ResultsRoute";
@@ -72,6 +73,16 @@ export const router = createBrowserRouter([
   {
     path: "/connections/github_repository/callback",
     element: <GitHubOAuthCallbackRoute />,
+    errorElement: <RouteErrorFallback />,
+  },
+  {
+    path: "/connections/tiktok/callback",
+    element: <TikTokOAuthCallbackRoute />,
+    errorElement: <RouteErrorFallback />,
+  },
+  {
+    path: "/connections/tiktok_ads/callback",
+    element: <TikTokOAuthCallbackRoute business />,
     errorElement: <RouteErrorFallback />,
   },
   {

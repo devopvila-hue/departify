@@ -9,7 +9,19 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { AuthConfig } from "@departify/config";
 
-export type ExternalOAuthProvider = "meta_business" | "meta_instagram" | "ticktick" | "github";
+export type ExternalOAuthProvider =
+  | "meta_business"
+  | "meta_instagram"
+  | "ticktick"
+  | "github"
+  | "tiktok"
+  | "tiktok_business";
+
+export interface ExternalOAuthAccountOption {
+  readonly id: string;
+  readonly label: string;
+  readonly kind: "advertiser" | "business" | "profile";
+}
 
 export interface ExternalOAuthTokenRecord {
   readonly organizationId: string;
@@ -18,8 +30,11 @@ export interface ExternalOAuthTokenRecord {
   readonly accessToken: string;
   readonly refreshToken: string | null;
   readonly expiresAt: string | null;
+  readonly refreshExpiresAt?: string | null;
   readonly scopes: readonly string[];
   readonly accountLabel: string | null;
+  readonly accountOptions?: readonly ExternalOAuthAccountOption[];
+  readonly selectedAccountRef?: string | null;
   readonly operationalVerifiedAt: string | null;
   readonly operationalProbeError: string | null;
 }
@@ -31,8 +46,11 @@ export interface ExternalOAuthTokenSummary {
   readonly hasAccessToken: boolean;
   readonly hasRefreshToken: boolean;
   readonly expiresAt: string | null;
+  readonly refreshExpiresAt?: string | null;
   readonly scopes: readonly string[];
   readonly accountLabel: string | null;
+  readonly accountOptions?: readonly ExternalOAuthAccountOption[];
+  readonly selectedAccountRef?: string | null;
   readonly operationalVerifiedAt: string | null;
   readonly operationalProbeError: string | null;
 }
@@ -62,8 +80,11 @@ export function summarizeExternalOAuthToken(
     hasAccessToken: Boolean(record.accessToken),
     hasRefreshToken: Boolean(record.refreshToken),
     expiresAt: record.expiresAt,
+    ...(record.refreshExpiresAt !== undefined ? { refreshExpiresAt: record.refreshExpiresAt } : {}),
     scopes: record.scopes,
     accountLabel: record.accountLabel,
+    ...(record.accountOptions ? { accountOptions: record.accountOptions } : {}),
+    ...(record.selectedAccountRef !== undefined ? { selectedAccountRef: record.selectedAccountRef } : {}),
     operationalVerifiedAt: record.operationalVerifiedAt,
     operationalProbeError: record.operationalProbeError,
   };
@@ -114,8 +135,11 @@ interface ExternalOAuthTokenRow {
   access_token: string;
   refresh_token: string | null;
   expires_at: string | null;
+  refresh_expires_at?: string | null;
   scopes: string[];
   account_label: string | null;
+  account_options?: ExternalOAuthAccountOption[] | null;
+  selected_account_ref?: string | null;
   operational_verified_at: string | null;
   operational_probe_error: string | null;
 }
@@ -128,8 +152,11 @@ function fromRow(row: ExternalOAuthTokenRow): ExternalOAuthTokenRecord {
     accessToken: row.access_token,
     refreshToken: row.refresh_token,
     expiresAt: row.expires_at,
+    refreshExpiresAt: row.refresh_expires_at ?? null,
     scopes: row.scopes ?? [],
     accountLabel: row.account_label,
+    accountOptions: row.account_options ?? [],
+    selectedAccountRef: row.selected_account_ref ?? null,
     operationalVerifiedAt: row.operational_verified_at,
     operationalProbeError: row.operational_probe_error,
   };
@@ -157,8 +184,11 @@ export class SupabaseExternalOAuthTokenStore implements ExternalOAuthTokenStore 
         access_token: record.accessToken,
         refresh_token: record.refreshToken,
         expires_at: record.expiresAt,
+        refresh_expires_at: record.refreshExpiresAt ?? null,
         scopes: [...record.scopes],
         account_label: record.accountLabel,
+        account_options: record.accountOptions ?? [],
+        selected_account_ref: record.selectedAccountRef ?? null,
         operational_verified_at: record.operationalVerifiedAt,
         operational_probe_error: record.operationalProbeError,
         updated_at: new Date().toISOString(),
@@ -187,7 +217,7 @@ export class SupabaseExternalOAuthTokenStore implements ExternalOAuthTokenStore 
   async listForOrg(organizationId: string): Promise<readonly ExternalOAuthTokenSummary[]> {
     const { data, error } = await this.admin
       .from("external_oauth_tokens")
-      .select("organization_id,user_id,provider,access_token,refresh_token,expires_at,scopes,account_label,operational_verified_at,operational_probe_error")
+      .select("organization_id,user_id,provider,access_token,refresh_token,expires_at,refresh_expires_at,scopes,account_label,account_options,selected_account_ref,operational_verified_at,operational_probe_error")
       .eq("organization_id", organizationId);
     if (error) throw error;
     return (data as ExternalOAuthTokenRow[]).map(summarizeExternalOAuthTokenFromRow);

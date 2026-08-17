@@ -151,6 +151,23 @@ export function ConnectionsRoute() {
     }
   }
 
+  async function selectAccount(surface: Surface, accountRef: string) {
+    if (!organizationId || !surface.connectToolId) return;
+    setBusy(surface.surfaceId);
+    setNotice(null);
+    try {
+      const response = await api.selectConnectionAccount(organizationId, surface.connectToolId, accountRef);
+      if (response?.selectedAccountRef) {
+        setNotice(`${surface.name} utilizará ${response.accountLabel ?? "la cuenta seleccionada"}.`);
+        await load();
+      }
+    } catch {
+      setNotice("No hemos podido seleccionar esa cuenta. Vuelve a intentarlo.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <div className="dfy-page dfy-connections-page">
       <header className="dfy-connections-header">
@@ -239,6 +256,7 @@ export function ConnectionsRoute() {
           onClose={() => setSelected(null)}
           onRefresh={() => void load()}
           onConnect={(reconnect, includeDriveWrite) => void startConnect(selected, reconnect, includeDriveWrite)}
+          onSelectAccount={(accountRef) => void selectAccount(selected, accountRef)}
           onDisconnect={() => setConfirming(selected)}
         />
       )}
@@ -311,6 +329,7 @@ function ManageDialog(props: {
   onClose: () => void;
   onRefresh: () => void;
   onConnect: (reconnect: boolean, includeDriveWrite?: boolean) => void;
+  onSelectAccount: (accountRef: string) => void;
   onDisconnect: () => void;
 }) {
   const { surface } = props;
@@ -332,6 +351,18 @@ function ManageDialog(props: {
           <button type="button" className="dfy-icon-button" aria-label="Cerrar gestión" onClick={props.onClose}>×</button>
         </div>
         {surface.accountLabel && <p className="dfy-account-label">Cuenta: <strong>{surface.accountLabel}</strong></p>}
+        {surface.accountOptions && surface.accountOptions.length > 1 && (
+          <label className="dfy-manage-block">
+            <span className="dfy-field-label">Cuenta publicitaria</span>
+            <select
+              value={surface.selectedAccountRef ?? surface.accountOptions[0]?.id}
+              disabled={props.busy}
+              onChange={(event) => props.onSelectAccount(event.target.value)}
+            >
+              {surface.accountOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+            </select>
+          </label>
+        )}
         <div className="dfy-manage-block">
           <h3>Lo que puede hacer Elvira</h3>
           {surface.capabilityNames.length > 0 ? (
@@ -435,6 +466,21 @@ function normalizeConnectionView(entry: unknown): ToolConnectionView | null {
     : [];
   const description = textValue(raw.description);
   const accountLabel = textValue(raw.accountLabel);
+  const accountOptions = Array.isArray(raw.accountOptions)
+    ? raw.accountOptions.flatMap((value) => {
+        if (!value || typeof value !== "object") return [];
+        const option = value as Record<string, unknown>;
+        const id = textValue(option.id);
+        const optionLabel = textValue(option.label);
+        const kind = option.kind === "advertiser" || option.kind === "business" || option.kind === "profile"
+          ? option.kind
+          : null;
+        return id && optionLabel && kind
+          ? [{ id, label: optionLabel, kind: kind as "advertiser" | "business" | "profile" }]
+          : [];
+      })
+    : undefined;
+  const selectedAccountRef = textValue(raw.selectedAccountRef);
   const configSource = textValue(raw.configSource);
   const verifiedAt = textValue(raw.verifiedAt);
   const blockedReason = textValue(raw.blockedReason);
@@ -459,6 +505,8 @@ function normalizeConnectionView(entry: unknown): ToolConnectionView | null {
     brandColor: textValue(raw.brandColor) ?? "#6b7280",
     ...(description ? { description } : {}),
     ...(accountLabel ? { accountLabel } : {}),
+    ...(accountOptions ? { accountOptions } : {}),
+    ...(selectedAccountRef ? { selectedAccountRef } : {}),
     ...(configSource ? { configSource } : {}),
     ...(raw.userVisible === false ? { userVisible: false } : {}),
     domains,

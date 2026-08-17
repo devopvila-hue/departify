@@ -211,6 +211,10 @@ import {
   type ExternalOAuthProvider,
 } from "../../customer-zero/external-oauth-tokens.js";
 import {
+  resolveTikTokReadKind,
+  tiktokAdapter,
+} from "../../customer-zero/tiktok-adapter.js";
+import {
   createPendingEmailWork,
   extractRecipient,
   extractObjective,
@@ -795,6 +799,30 @@ export async function registerCustomerZeroV2Routes(
         google: await buildGoogleIdentityView(organizationId),
         unmappedTools: session.state.unmappedTools,
       });
+    },
+  );
+
+  server.post<{
+    Params: { organizationId: string; toolId: string };
+    Body: { accountRef: string };
+  }>(
+    "/api/customer-zero/:organizationId/connections/:toolId/account",
+    async (request, reply) => {
+      const { organizationId, toolId } = request.params;
+      await requireSession(organizationId, deps);
+      const accountRef = request.body?.accountRef?.trim();
+      if (toolId !== "tiktok_ads" || !accountRef) {
+        return reply.code(400).send({ error: { code: "INVALID_ACCOUNT_SELECTION", message: "La cuenta seleccionada no es válida." } });
+      }
+      const userId = request.authUser?.id ?? organizationId;
+      const store = getExternalOAuthTokenStore();
+      const record = await store.get(organizationId, userId, "tiktok_business");
+      const selected = record?.accountOptions?.find((option) => option.id === accountRef);
+      if (!record || !selected) {
+        return reply.code(404).send({ error: { code: "ACCOUNT_NOT_FOUND", message: "No hemos encontrado esa cuenta publicitaria." } });
+      }
+      await store.put({ ...record, selectedAccountRef: selected.id });
+      return reply.code(200).send({ organizationId, toolId, selectedAccountRef: selected.id, accountLabel: selected.label });
     },
   );
 
@@ -1790,12 +1818,21 @@ export async function registerCustomerZeroV2Routes(
         "meta_instagram",
         "ticktick",
         "github",
+        "tiktok",
+        "tiktok_business",
       ]);
-      if (externalOAuthTools.has(tool.id as ExternalOAuthProvider) || tool.id === "meta_business" || tool.id === "github_repository") {
+      if (
+        externalOAuthTools.has(tool.id as ExternalOAuthProvider) ||
+        tool.id === "meta_business" ||
+        tool.id === "github_repository" ||
+        tool.id === "tiktok_ads"
+      ) {
         const provider: ExternalOAuthProvider = tool.id === "meta_business" && requestedChannel === "instagram"
           ? "meta_instagram"
           : tool.id === "github_repository"
             ? "github"
+            : tool.id === "tiktok_ads"
+              ? "tiktok_business"
             : tool.id as ExternalOAuthProvider;
         const missing = externalOAuthMissingCredentials(provider);
         if (missing.length > 0 || !externalOAuthCredentials(provider)) {
@@ -2184,9 +2221,13 @@ export async function registerCustomerZeroV2Routes(
         "meta_instagram",
         "ticktick",
         "github",
+        "tiktok",
+        "tiktok_business",
       ]);
       let provider: ExternalOAuthProvider | null = effectiveToolId === "github_repository"
         ? "github"
+        : effectiveToolId === "tiktok_ads"
+          ? "tiktok_business"
         : externalOAuthTools.has(effectiveToolId as ExternalOAuthProvider)
         ? effectiveToolId as ExternalOAuthProvider
         : null;
@@ -8056,6 +8097,9 @@ export interface ToolConnectionView {
   readonly description?: string;
   /** Safe account label only; never a token or provider credential. */
   readonly accountLabel?: string;
+  /** Safe account choices discovered during provider authorization. */
+  readonly accountOptions?: readonly { id: string; label: string; kind: "advertiser" | "business" | "profile" }[];
+  readonly selectedAccountRef?: string;
   /** Internal lifecycle source; never rendered as primary UI copy. */
   readonly configSource?: string;
   /** Technical catalog entries can stay canonical without duplicating UI tiles. */
@@ -8115,6 +8159,8 @@ async function buildCatalogConnectionViews(
 ): Promise<ToolConnectionView[]> {
   const durableStates = await listToolStatesForSession(session);
   const durableByTool = new Map(durableStates.map((state) => [state.toolId, state]));
+  const externalTokens = await getExternalOAuthTokenStore().listForOrg(session.organizationId);
+  const tiktokAdsToken = externalTokens.find((token) => token.provider === "tiktok_business");
   return TOOL_CATALOG.map((tool) => {
     const durable = durableByTool.get(tool.id);
     const definition = CONNECTION_DEFINITIONS.find((entry) => entry.id === tool.id);
@@ -8123,6 +8169,9 @@ async function buildCatalogConnectionViews(
     const connectedCapabilities = durable
       ? [...(durable.grantedCapabilities ?? [])]
       : catalogCapabilities;
+    const accountOptions = tool.id === "tiktok_ads" ? tiktokAdsToken?.accountOptions : undefined;
+    const selectedAccountRef = tool.id === "tiktok_ads" ? tiktokAdsToken?.selectedAccountRef ?? undefined : undefined;
+    const selectedAccountLabel = accountOptions?.find((option) => option.id === selectedAccountRef)?.label;
     const connection = durable
       ? {
           toolId: durable.toolId,
@@ -8191,6 +8240,9 @@ async function buildCatalogConnectionViews(
       ...(durable?.providerAccountRef
         ? { accountLabel: durable.providerAccountRef }
         : {}),
+      ...(selectedAccountLabel ? { accountLabel: selectedAccountLabel } : {}),
+      ...(accountOptions ? { accountOptions } : {}),
+      ...(selectedAccountRef ? { selectedAccountRef } : {}),
       ...(durable?.configSource ? { configSource: durable.configSource } : {}),
       ...(tool.id === "google_workspace" ? { userVisible: false } : {}),
       domains: domainsFor(tool.id),
@@ -8327,9 +8379,11 @@ function toolStateFromConnection(
     ...(connection.toolId === "meta_business" || connection.toolId === "meta_ads"
       ? { provider: "meta_business" }
       : connection.toolId === "tiktok_ads"
-        ? { provider: "tiktok_ads" }
-        : connection.toolId === "google_ads"
+        ? { provider: "tiktok_business" }
+      : connection.toolId === "google_ads"
           ? { provider: "google_ads_mcp" }
+          : connection.toolId === "tiktok"
+            ? { provider: "tiktok" }
           : {}),
     grantedCapabilities: [...(grantedCapabilities ?? [])],
     ...(connection.verifiedAt ? { verifiedAt: connection.verifiedAt } : {}),
@@ -8387,6 +8441,63 @@ async function runConnectedMarketingConnectorMessage(
   message: string,
   userId?: string,
 ): Promise<string | null> {
+  const tiktokKind = resolveTikTokReadKind(message);
+  if (tiktokKind && userId) {
+    const providerToolId = tiktokKind === "profile" || tiktokKind === "videos"
+      ? "tiktok"
+      : "tiktok_ads";
+    const state = await session.toolState.get(session.organizationId, providerToolId);
+    const requiredCapability = tiktokKind === "report"
+      ? "marketing.tiktok.ads.report"
+      : tiktokKind === "campaigns"
+        ? "marketing.tiktok.ads.read"
+        : "marketing.tiktok";
+    if (state?.status !== "connected" || !state.verifiedAt || !state.grantedCapabilities?.includes(requiredCapability)) {
+      return session.state.locale === "en"
+        ? `Connect TikTok${providerToolId === "tiktok_ads" ? " Ads" : ""} in Connections to read this information.`
+        : `Conecta TikTok${providerToolId === "tiktok_ads" ? " Ads" : ""} en Conexiones para consultar esta información.`;
+    }
+    try {
+      const result = await tiktokAdapter.read({
+        organizationId: session.organizationId,
+        userId,
+        kind: tiktokKind,
+      });
+      if (result.kind === "profile") {
+        return session.state.locale === "en"
+          ? `TikTok is connected as ${result.accountLabel}.`
+          : `TikTok está conectado como ${result.accountLabel}.`;
+      }
+      if (result.kind === "videos") {
+        return session.state.locale === "en"
+          ? `TikTok has ${result.videos?.length ?? 0} recent public videos.`
+          : `TikTok tiene ${result.videos?.length ?? 0} vídeos públicos recientes.`;
+      }
+      if (result.kind === "campaigns") {
+        const count = result.campaigns?.length ?? 0;
+        return session.state.locale === "en"
+          ? `TikTok Ads has ${count} campaigns available in ${result.accountLabel}.`
+          : `TikTok Ads tiene ${count} campañas disponibles en ${result.accountLabel}.`;
+      }
+      const metrics = result.metrics ?? {};
+      const spend = metrics.spend;
+      const impressions = metrics.impressions;
+      const clicks = metrics.clicks;
+      return session.state.locale === "en"
+        ? `TikTok Ads performance is available for the last 30 days${spend !== undefined ? `: spend ${spend}` : ""}${impressions !== undefined ? `, ${impressions} impressions` : ""}${clicks !== undefined ? ` and ${clicks} clicks` : ""}.`
+        : `Ya tengo el rendimiento de TikTok Ads de los últimos 30 días${spend !== undefined ? `: gasto ${spend}` : ""}${impressions !== undefined ? `, ${impressions} impresiones` : ""}${clicks !== undefined ? ` y ${clicks} clics` : ""}.`;
+    } catch (cause) {
+      const code = cause instanceof Error ? cause.message : "";
+      if (code === "TIKTOK_NOT_CONNECTED" || code === "TIKTOK_REAUTH_REQUIRED") {
+        return session.state.locale === "en"
+          ? "TikTok needs to be connected again before I can read this information."
+          : "TikTok necesita volver a conectarse antes de poder consultar esta información.";
+      }
+      return session.state.locale === "en"
+        ? "I could not read TikTok right now. No advertising action was changed."
+        : "No he podido consultar TikTok ahora mismo. No se ha cambiado ninguna acción publicitaria.";
+    }
+  }
   const runtime = deps.marketingConnectorRuntime;
   if (!runtime) return null;
   const definition = resolveMarketingConnectorCapability(message);

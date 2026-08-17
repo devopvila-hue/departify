@@ -52,7 +52,9 @@ export type OAuthRequestedToolId =
   | "meta_business"
   | "meta_instagram"
   | "ticktick"
-  | "github_repository";
+  | "github_repository"
+  | "tiktok"
+  | "tiktok_ads";
 
 /** Durable OAuth state boundary. Async: the durable adapter needs I/O. */
 export interface OAuthStateStore {

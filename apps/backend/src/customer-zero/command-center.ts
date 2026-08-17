@@ -361,6 +361,16 @@ const ROUTING_RULES: readonly RoutingRule[] = [
         /\b(cu[áa]ntos\s+contactos?|cu[áa]ntas?\s+personas?|how many contacts|lista de contactos|busca\s+(en\s+mautic\s+)?(contactos?|clientes?)|search\s+contacts|qu[ée]\s+(hay|tenemos|tiene|cu[aá]ntos)\s+(en\s+)?mautic)\b/i.test(
           input.message,
         );
+      const isTikTokQuery = /tiktok|tik\s+tok/i.test(input.message) &&
+        !/publica|publicar|crear|crea|pausa|reanuda|presupuesto|audiencia|modifica|gestiona|write|create|pause|resume|budget/i.test(input.message) &&
+        /(campa[ñn]a|anuncio|ads|publicidad|rendimiento|resultado|gasto|gastado|impresiones|clics|ctr|v[ií]deo|contenido|publicaci[oó]n|post|cu[aá]ntos|qu[eé])/i.test(input.message);
+      if (isTikTokQuery) {
+        return input.connections.some(
+          (connection) =>
+            connection.status === "connected" &&
+            (connection.toolId === "tiktok" || connection.toolId === "tiktok_ads"),
+        );
+      }
       const deliverable = classifyDeliverableRequest(input.message);
       const asksForConnectedMauticWork =
         deliverable.requested &&

@@ -87,6 +87,14 @@ export function availableConfigForTool(toolId: string): string | null {
       return hasEnv(["GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET"])
         ? "oauth:github"
         : null;
+    case "tiktok":
+      return hasEnv(["TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"])
+        ? "oauth:tiktok"
+        : null;
+    case "tiktok_ads":
+      return hasEnv(["TIKTOK_BUSINESS_APP_ID", "TIKTOK_BUSINESS_APP_SECRET"])
+        ? "oauth:tiktok_business"
+        : null;
     default:
       return null;
   }
@@ -126,6 +134,8 @@ export function hasWorkingConnector(toolId: string): boolean {
     || toolId === "wordpress"
     || toolId === "shopify"
     || toolId === "github_repository"
+    || toolId === "tiktok"
+    || toolId === "tiktok_ads"
   );
 }
 

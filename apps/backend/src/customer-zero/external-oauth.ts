@@ -1,4 +1,4 @@
-/** Provider-owned OAuth flows for Meta Business and TickTick. */
+/** Provider-owned OAuth flows for Meta, TikTok and the smaller connectors. */
 
 import { randomBytes } from "node:crypto";
 import { getGoogleOAuthStateStore } from "./oauth-state.js";
@@ -17,6 +17,8 @@ export const EXTERNAL_OAUTH_PROVIDERS: readonly ExternalOAuthProvider[] = [
   "meta_instagram",
   "ticktick",
   "github",
+  "tiktok",
+  "tiktok_business",
 ];
 
 /** Facebook Login / Facebook Login for Business permissions for Pages. */
@@ -36,6 +38,15 @@ export const META_INSTAGRAM_SCOPES = [
 export const META_SOCIAL_SCOPES = META_FACEBOOK_SCOPES;
 
 const TICKTICK_SCOPES = ["tasks:read", "tasks:write"] as const;
+/** TikTok Login Kit / Display API read permissions. */
+export const TIKTOK_SCOPES = ["user.info.basic", "video.list"] as const;
+
+function tiktokBusinessScopes(): readonly string[] {
+  return (process.env.TIKTOK_BUSINESS_SCOPES ?? "")
+    .split(/[ ,]+/)
+    .map((scope) => scope.trim())
+    .filter(Boolean);
+}
 
 /** Provider-side revoke for Meta; local deletion remains authoritative if it fails. */
 export async function revokeExternalProviderAccess(
@@ -65,7 +76,11 @@ export function externalOAuthCredentials(provider: ExternalOAuthProvider): {
     ? ["META_APP_ID", "META_APP_SECRET"]
     : provider === "github"
       ? ["GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET"]
-      : ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"];
+      : provider === "ticktick"
+        ? ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"]
+        : provider === "tiktok"
+          ? ["TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"]
+          : ["TIKTOK_BUSINESS_APP_ID", "TIKTOK_BUSINESS_APP_SECRET"];
   const clientId = process.env[names[0]]?.trim() ?? "";
   const clientSecret = process.env[names[1]]?.trim() ?? "";
   return clientId && clientSecret ? { clientId, clientSecret } : null;
@@ -78,7 +93,11 @@ export function externalOAuthMissingCredentials(
     ? ["META_APP_ID", "META_APP_SECRET"]
     : provider === "github"
       ? ["GITHUB_OAUTH_CLIENT_ID", "GITHUB_OAUTH_CLIENT_SECRET"]
-      : ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"];
+      : provider === "ticktick"
+        ? ["TICKTICK_CLIENT_ID", "TICKTICK_CLIENT_SECRET"]
+        : provider === "tiktok"
+          ? ["TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"]
+          : ["TIKTOK_BUSINESS_APP_ID", "TIKTOK_BUSINESS_APP_SECRET"];
   return names.filter((name) => !(process.env[name]?.trim()));
 }
 
@@ -93,6 +112,8 @@ export function externalOAuthRedirectUri(
     ? "meta_business"
     : provider === "github"
       ? "github_repository"
+      : provider === "tiktok_business"
+        ? "tiktok_ads"
       : provider;
   return `${base}/connections/${callbackTool}/callback`;
 }
@@ -119,6 +140,22 @@ function providerConfig(provider: ExternalOAuthProvider, redirectUri: string) {
       authorizationEndpoint: "https://github.com/login/oauth/authorize",
       tokenEndpoint: "https://github.com/login/oauth/access_token",
       scopes: ["read:user", "repo"],
+      redirectUri,
+    };
+  }
+  if (provider === "tiktok") {
+    return {
+      authorizationEndpoint: "https://www.tiktok.com/v2/auth/authorize/",
+      tokenEndpoint: "https://open.tiktokapis.com/v2/oauth/token/",
+      scopes: TIKTOK_SCOPES,
+      redirectUri,
+    };
+  }
+  if (provider === "tiktok_business") {
+    return {
+      authorizationEndpoint: "https://ads.tiktok.com/marketing_api/auth",
+      tokenEndpoint: "https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/",
+      scopes: tiktokBusinessScopes(),
       redirectUri,
     };
   }
@@ -149,18 +186,32 @@ export async function startExternalOAuth(input: {
     organizationId: input.organizationId,
     userId: input.userId,
     connectionIntent: "marketing",
-    requestedToolId: input.provider === "github" ? "github_repository" : input.provider,
+    requestedToolId: input.provider === "github"
+      ? "github_repository"
+      : input.provider === "tiktok_business"
+        ? "tiktok_ads"
+        : input.provider,
     returnPath: input.returnPath,
     createdAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + 10 * 60 * 1000).toISOString(),
   });
-  const params = new URLSearchParams({
-    client_id: credentials.clientId,
-    redirect_uri: config.redirectUri,
-    response_type: "code",
-    scope: config.scopes.join(input.provider === "meta_instagram" ? "," : " "),
-    state,
-  });
+  if (input.provider === "tiktok_business" && config.scopes.length === 0) {
+    throw new Error("TIKTOK_BUSINESS_SCOPES_NOT_CONFIGURED");
+  }
+  const params = input.provider === "tiktok_business"
+    ? new URLSearchParams({
+        app_id: credentials.clientId,
+        redirect_uri: config.redirectUri,
+        scope: config.scopes.join(","),
+        state,
+      })
+    : new URLSearchParams({
+        ...(input.provider === "tiktok" ? { client_key: credentials.clientId } : { client_id: credentials.clientId }),
+        redirect_uri: config.redirectUri,
+        response_type: "code",
+        scope: config.scopes.join(input.provider === "meta_instagram" || input.provider === "tiktok" ? "," : " "),
+        state,
+      });
   return {
     authorizationUrl: `${config.authorizationEndpoint}?${params.toString()}`,
     state,
@@ -183,6 +234,23 @@ async function readJson(response: Response, provider: ExternalOAuthProvider): Pr
     throw new Error(`${provider.toUpperCase()}_OAUTH_INVALID_RESPONSE`);
   }
   return body as Record<string, unknown>;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function tokenData(body: Record<string, unknown>): Record<string, unknown> {
+  const nested = recordValue(body.data);
+  return nested && typeof nested.access_token === "string" ? nested : body;
+}
+
+function expiresAtFromSeconds(value: unknown): string | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? new Date(Date.now() + value * 1000).toISOString()
+    : null;
 }
 
 function parseScopes(value: unknown, fallback: readonly string[]): string[] {
@@ -322,6 +390,168 @@ async function exchangeGithubCode(
   };
 }
 
+async function exchangeTikTokCode(
+  code: string,
+  credentials: { clientId: string; clientSecret: string },
+  redirectUri: string,
+): Promise<{
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: string | null;
+  refreshExpiresAt: string | null;
+  scopes: string[];
+}> {
+  const form = new URLSearchParams({
+    client_key: credentials.clientId,
+    client_secret: credentials.clientSecret,
+    code,
+    grant_type: "authorization_code",
+    redirect_uri: redirectUri,
+  });
+  const response = await fetch("https://open.tiktokapis.com/v2/oauth/token/", {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      "cache-control": "no-cache",
+    },
+    body: form,
+    signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS),
+  });
+  const body = tokenData(await readJson(response, "tiktok"));
+  const accessToken = typeof body.access_token === "string" ? body.access_token : "";
+  if (!accessToken) throw new Error("TIKTOK_MISSING_ACCESS_TOKEN");
+  return {
+    accessToken,
+    refreshToken: typeof body.refresh_token === "string" ? body.refresh_token : null,
+    expiresAt: expiresAtFromSeconds(body.expires_in),
+    refreshExpiresAt: expiresAtFromSeconds(body.refresh_expires_in),
+    scopes: parseScopes(body.scope, TIKTOK_SCOPES),
+  };
+}
+
+interface TikTokBusinessProbe {
+  readonly label: string;
+  readonly scopes: string[];
+  readonly accountOptions: readonly {
+    id: string;
+    label: string;
+    kind: "advertiser";
+  }[];
+}
+
+function businessApiSuccess(body: Record<string, unknown>): void {
+  if (typeof body.code === "number" && body.code !== 0) {
+    throw new Error(`TIKTOK_BUSINESS_API_${body.code}`);
+  }
+}
+
+function businessData(body: Record<string, unknown>): Record<string, unknown> {
+  businessApiSuccess(body);
+  return recordValue(body.data) ?? {};
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+    : [];
+}
+
+async function probeTikTokBusiness(
+  accessToken: string,
+  scopes: readonly string[],
+  advertiserIds: readonly string[],
+): Promise<TikTokBusinessProbe> {
+  const ids = [...new Set(advertiserIds.filter(Boolean))];
+  const list = [...ids];
+  if (list.length === 0) {
+    const response = await fetch(
+      "https://business-api.tiktok.com/open_api/v1.3/oauth2/advertiser/get/?page=1&page_size=100",
+      {
+        headers: { "Access-Token": accessToken },
+        signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS),
+      },
+    );
+    const data = businessData(await readJson(response, "tiktok_business"));
+    const discovered = [
+      ...stringArray(data.advertiser_ids),
+      ...(Array.isArray(data.list)
+        ? data.list.flatMap((entry) => {
+            const item = recordValue(entry);
+            return typeof item?.advertiser_id === "string" ? [item.advertiser_id] : [];
+          })
+        : []),
+    ];
+    list.push(...discovered);
+  }
+  if (list.length === 0) throw new Error("TIKTOK_BUSINESS_NO_ADVERTISERS");
+  const query = new URLSearchParams({
+    advertiser_ids: JSON.stringify(list),
+    fields: JSON.stringify(["advertiser_id", "name", "company", "status"]),
+  });
+  const response = await fetch(
+    `https://business-api.tiktok.com/open_api/v1.3/advertiser/info/?${query.toString()}`,
+    {
+      headers: { "Access-Token": accessToken },
+      signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS),
+    },
+  );
+  const data = businessData(await readJson(response, "tiktok_business"));
+  const rawList = Array.isArray(data.list) ? data.list : [];
+  const accountOptions = rawList.flatMap((entry) => {
+    const item = recordValue(entry);
+    const id = typeof item?.advertiser_id === "string" ? item.advertiser_id.trim() : "";
+    if (!id) return [];
+    const name = typeof item?.name === "string" ? item.name.trim() : "";
+    const company = typeof item?.company === "string" ? item.company.trim() : "";
+    return [{ id, label: name || company || `TikTok Ads · ${id.slice(-4)}`, kind: "advertiser" as const }];
+  });
+  const normalized = accountOptions.length > 0
+    ? accountOptions
+    : list.map((id) => ({ id, label: `TikTok Ads · ${id.slice(-4)}`, kind: "advertiser" as const }));
+  return {
+    label: normalized[0]?.label ?? "TikTok Ads",
+    scopes: [...scopes],
+    accountOptions: normalized,
+  };
+}
+
+async function exchangeTikTokBusinessCode(
+  authCode: string,
+  credentials: { clientId: string; clientSecret: string },
+): Promise<{
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: string | null;
+  refreshExpiresAt: string | null;
+  scopes: string[];
+  advertiserIds: string[];
+}> {
+  const response = await fetch("https://business-api.tiktok.com/open_api/v1.3/oauth2/access_token/", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      app_id: credentials.clientId,
+      secret: credentials.clientSecret,
+      auth_code: authCode,
+    }),
+    signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS),
+  });
+  const body = await readJson(response, "tiktok_business");
+  const data = businessData(body);
+  const accessToken = typeof data.access_token === "string" ? data.access_token : "";
+  if (!accessToken) throw new Error("TIKTOK_BUSINESS_MISSING_ACCESS_TOKEN");
+  return {
+    accessToken,
+    // The current Marketing API long-lived token has no refresh flow. Keep
+    // the fields nullable so the common store remains compatible with Login Kit.
+    refreshToken: null,
+    expiresAt: null,
+    refreshExpiresAt: null,
+    scopes: parseScopes(data.scope, []),
+    advertiserIds: stringArray(data.advertiser_ids),
+  };
+}
+
 interface MetaSocialAsset {
   readonly id: string;
   readonly name: string;
@@ -440,6 +670,20 @@ async function probeGithub(accessToken: string): Promise<{ label: string; scopes
   return { label: `GitHub · ${login}`, scopes: [] };
 }
 
+async function probeTikTok(accessToken: string): Promise<{ label: string; scopes: string[] }> {
+  const query = new URLSearchParams({ fields: "open_id,display_name" });
+  const response = await fetch(`https://open.tiktokapis.com/v2/user/info/?${query.toString()}`, {
+    headers: { authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(EXTERNAL_OAUTH_TIMEOUT_MS),
+  });
+  const body = await readJson(response, "tiktok");
+  const data = recordValue(body.data);
+  const user = recordValue(data?.user);
+  const displayName = typeof user?.display_name === "string" ? user.display_name.trim() : "";
+  if (!displayName) throw new Error("TIKTOK_NO_PROFILE");
+  return { label: `TikTok · ${displayName}`, scopes: [] };
+}
+
 export async function completeExternalOAuth(input: {
   organizationId: string;
   userId: string;
@@ -453,7 +697,13 @@ export async function completeExternalOAuth(input: {
   if (
     stateRecord.organizationId !== input.organizationId ||
     stateRecord.userId !== input.userId ||
-    stateRecord.requestedToolId !== (input.provider === "github" ? "github_repository" : input.provider)
+    stateRecord.requestedToolId !== (
+      input.provider === "github"
+        ? "github_repository"
+        : input.provider === "tiktok_business"
+          ? "tiktok_ads"
+          : input.provider
+    )
   ) {
     throw new Error("org_or_user_mismatch");
   }
@@ -466,16 +716,32 @@ export async function completeExternalOAuth(input: {
     : input.provider === "meta_instagram"
       ? await exchangeMetaInstagramCode(input.code, credentials, input.redirectUri)
       : input.provider === "github"
-        ? await exchangeGithubCode(input.code, credentials, input.redirectUri)
-        : await exchangeTickTickCode(input.code, credentials, input.redirectUri);
+      ? await exchangeGithubCode(input.code, credentials, input.redirectUri)
+        : input.provider === "tiktok"
+          ? await exchangeTikTokCode(input.code, credentials, input.redirectUri)
+          : input.provider === "tiktok_business"
+            ? await exchangeTikTokBusinessCode(input.code, credentials)
+            : await exchangeTickTickCode(input.code, credentials, input.redirectUri);
+  const advertiserIds = input.provider === "tiktok_business" && "advertiserIds" in exchanged && Array.isArray(exchanged.advertiserIds)
+    ? exchanged.advertiserIds.filter((value): value is string => typeof value === "string")
+    : [];
+  const refreshExpiresAt = "refreshExpiresAt" in exchanged &&
+    (typeof exchanged.refreshExpiresAt === "string" || exchanged.refreshExpiresAt === null)
+    ? exchanged.refreshExpiresAt
+    : null;
   const metaProbe = input.provider === "meta_business"
     ? await probeMeta(exchanged.accessToken)
     : input.provider === "meta_instagram"
       ? await probeMetaInstagram(exchanged.accessToken)
       : null;
-  const probe = metaProbe ?? (input.provider === "github"
+  const tiktokBusinessProbe = input.provider === "tiktok_business"
+    ? await probeTikTokBusiness(exchanged.accessToken, exchanged.scopes, advertiserIds)
+    : null;
+  const probe = metaProbe ?? tiktokBusinessProbe ?? (input.provider === "github"
     ? await probeGithub(exchanged.accessToken)
-    : await probeTickTick(exchanged.accessToken));
+    : input.provider === "tiktok"
+      ? await probeTikTok(exchanged.accessToken)
+      : await probeTickTick(exchanged.accessToken));
   const record: ExternalOAuthTokenRecord = {
     organizationId: input.organizationId,
     userId: input.userId,
@@ -483,8 +749,10 @@ export async function completeExternalOAuth(input: {
     accessToken: exchanged.accessToken,
     refreshToken: exchanged.refreshToken,
     expiresAt: exchanged.expiresAt,
+    refreshExpiresAt,
     scopes: [...new Set([...exchanged.scopes, ...probe.scopes])],
     accountLabel: probe.label,
+    ...(tiktokBusinessProbe ? { accountOptions: tiktokBusinessProbe.accountOptions, selectedAccountRef: tiktokBusinessProbe.accountOptions[0]?.id ?? null } : {}),
     operationalVerifiedAt: new Date().toISOString(),
     operationalProbeError: null,
   };
@@ -507,6 +775,10 @@ export async function completeExternalOAuth(input: {
         ]
     : input.provider === "github"
       ? ["repository.read"]
-      : ["tasks.read", "tasks.write"];
+      : input.provider === "tiktok"
+        ? ["marketing.tiktok", "marketing.tiktok.content.read"]
+        : input.provider === "tiktok_business"
+          ? ["marketing.tiktok.ads.read", "marketing.tiktok.ads.report", "marketing.tiktok.ads.analyze"]
+          : ["tasks.read", "tasks.write"];
   return { record, returnPath: stateRecord.returnPath, grantedCapabilities };
 }

@@ -4,10 +4,12 @@ import {
   externalOAuthMissingCredentials,
   META_INSTAGRAM_SCOPES,
   META_SOCIAL_SCOPES,
+  TIKTOK_SCOPES,
   startExternalOAuth,
 } from "../src/customer-zero/external-oauth.js";
 import {
   createInMemoryOAuthStateStore,
+  getGoogleOAuthStateStore,
   installGoogleOAuthStateStore,
 } from "../src/customer-zero/oauth-state.js";
 import {
@@ -24,6 +26,11 @@ describe("provider-backed marketing OAuth", () => {
     delete process.env.TICKTICK_CLIENT_SECRET;
     delete process.env.GITHUB_OAUTH_CLIENT_ID;
     delete process.env.GITHUB_OAUTH_CLIENT_SECRET;
+    delete process.env.TIKTOK_CLIENT_KEY;
+    delete process.env.TIKTOK_CLIENT_SECRET;
+    delete process.env.TIKTOK_BUSINESS_APP_ID;
+    delete process.env.TIKTOK_BUSINESS_APP_SECRET;
+    delete process.env.TIKTOK_BUSINESS_SCOPES;
     installGoogleOAuthStateStore(null);
     installExternalOAuthTokenStoreForTest(null);
   });
@@ -279,6 +286,129 @@ describe("provider-backed marketing OAuth", () => {
     expect(authorizationUrl.searchParams.get("scope")).toBe("tasks:read tasks:write");
   });
 
+  it("creates TikTok Login Kit authorization with the approved read scopes", async () => {
+    process.env.TIKTOK_CLIENT_KEY = "tiktok-client-test";
+    process.env.TIKTOK_CLIENT_SECRET = "tiktok-secret-test";
+    installGoogleOAuthStateStore(createInMemoryOAuthStateStore());
+    const out = await startExternalOAuth({
+      organizationId: "org-tiktok",
+      userId: "user-tiktok",
+      provider: "tiktok",
+      returnPath: "/marketing",
+      redirectUri: "https://app.departify.app/connections/tiktok/callback",
+    });
+    const url = new URL(out.authorizationUrl);
+    expect(url.origin).toBe("https://www.tiktok.com");
+    expect(url.pathname).toBe("/v2/auth/authorize/");
+    expect(url.searchParams.get("client_key")).toBe("tiktok-client-test");
+    expect(url.searchParams.get("scope")?.split(",")).toEqual([...TIKTOK_SCOPES]);
+    expect((await getStateRecord(out.state))?.requestedToolId).toBe("tiktok");
+  });
+
+  it("exchanges TikTok Login Kit and probes the real profile without granting Ads write", async () => {
+    process.env.TIKTOK_CLIENT_KEY = "tiktok-client-test";
+    process.env.TIKTOK_CLIENT_SECRET = "tiktok-secret-test";
+    const stateStore = createInMemoryOAuthStateStore();
+    installGoogleOAuthStateStore(stateStore);
+    const tokenStore = { put: vi.fn(), get: vi.fn(), listForOrg: vi.fn(), remove: vi.fn() };
+    installExternalOAuthTokenStoreForTest(tokenStore);
+    const started = await startExternalOAuth({
+      organizationId: "org-tiktok",
+      userId: "user-tiktok",
+      provider: "tiktok",
+      returnPath: "/marketing",
+      redirectUri: "https://app.departify.app/connections/tiktok/callback",
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "https://open.tiktokapis.com/v2/oauth/token/") {
+        expect(init?.method).toBe("POST");
+        return new Response(JSON.stringify({
+          access_token: "tiktok-access-token",
+          refresh_token: "tiktok-refresh-token",
+          expires_in: 86400,
+          refresh_expires_in: 31536000,
+          scope: [...TIKTOK_SCOPES].join(","),
+        }), { status: 200 });
+      }
+      if (url.startsWith("https://open.tiktokapis.com/v2/user/info/")) {
+        expect((init?.headers as Record<string, string>).authorization).toBe("Bearer tiktok-access-token");
+        return new Response(JSON.stringify({ data: { user: { display_name: "Departify" } } }), { status: 200 });
+      }
+      throw new Error(`unexpected ${url}`);
+    }) as typeof fetch;
+    try {
+      const completed = await completeExternalOAuth({
+        organizationId: "org-tiktok",
+        userId: "user-tiktok",
+        provider: "tiktok",
+        code: "tiktok-code",
+        state: started.state,
+        redirectUri: "https://app.departify.app/connections/tiktok/callback",
+      });
+      expect(completed.record.accountLabel).toBe("TikTok · Departify");
+      expect(completed.grantedCapabilities).toEqual([
+        "marketing.tiktok",
+        "marketing.tiktok.content.read",
+      ]);
+      expect(completed.grantedCapabilities).not.toContain("marketing.tiktok.ads.create");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("uses TikTok for Business Marketing API auth and discovers advertiser accounts", async () => {
+    process.env.TIKTOK_BUSINESS_APP_ID = "tiktok-business-app";
+    process.env.TIKTOK_BUSINESS_APP_SECRET = "tiktok-business-secret";
+    process.env.TIKTOK_BUSINESS_SCOPES = "advertiser.read,campaign.read,report.read";
+    const stateStore = createInMemoryOAuthStateStore();
+    installGoogleOAuthStateStore(stateStore);
+    const tokenStore = { put: vi.fn(), get: vi.fn(), listForOrg: vi.fn(), remove: vi.fn() };
+    installExternalOAuthTokenStoreForTest(tokenStore);
+    const started = await startExternalOAuth({
+      organizationId: "org-tiktok-ads",
+      userId: "user-tiktok",
+      provider: "tiktok_business",
+      returnPath: "/marketing",
+      redirectUri: "https://app.departify.app/connections/tiktok_ads/callback",
+    });
+    const authUrl = new URL(started.authorizationUrl);
+    expect(authUrl.searchParams.get("app_id")).toBe("tiktok-business-app");
+    expect(authUrl.searchParams.get("scope")).toBe("advertiser.read,campaign.read,report.read");
+    expect((await getStateRecord(started.state))?.requestedToolId).toBe("tiktok_ads");
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes("/oauth2/access_token/")) {
+        return new Response(JSON.stringify({ code: 0, message: "OK", data: { access_token: "ads-token", advertiser_ids: ["adv-1"] } }), { status: 200 });
+      }
+      if (url.includes("/advertiser/info/")) {
+        return new Response(JSON.stringify({ code: 0, message: "OK", data: { list: [{ advertiser_id: "adv-1", name: "Departify Ads", status: "STATUS_ENABLE" }] } }), { status: 200 });
+      }
+      throw new Error(`unexpected ${url}`);
+    }) as typeof fetch;
+    try {
+      const completed = await completeExternalOAuth({
+        organizationId: "org-tiktok-ads",
+        userId: "user-tiktok",
+        provider: "tiktok_business",
+        code: "business-auth-code",
+        state: started.state,
+        redirectUri: "https://app.departify.app/connections/tiktok_ads/callback",
+      });
+      expect(completed.record.accountLabel).toBe("Departify Ads");
+      expect(completed.record.accountOptions).toEqual([{ id: "adv-1", label: "Departify Ads", kind: "advertiser" }]);
+      expect(completed.grantedCapabilities).toEqual([
+        "marketing.tiktok.ads.read",
+        "marketing.tiktok.ads.report",
+        "marketing.tiktok.ads.analyze",
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("summaries never expose raw OAuth tokens", () => {
     const record: ExternalOAuthTokenRecord = {
       organizationId: "org-a",
@@ -302,3 +432,7 @@ describe("provider-backed marketing OAuth", () => {
     expect(JSON.stringify(summary)).not.toContain("raw-refresh-token");
   });
 });
+
+async function getStateRecord(state: string) {
+  return getGoogleOAuthStateStore().get(state);
+}

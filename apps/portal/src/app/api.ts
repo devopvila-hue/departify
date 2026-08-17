@@ -77,6 +77,8 @@ export interface ToolConnectionView {
   brandColor: string;
   description?: string;
   accountLabel?: string;
+  accountOptions?: { id: string; label: string; kind: "advertiser" | "business" | "profile" }[];
+  selectedAccountRef?: string;
   configSource?: string;
   userVisible?: boolean;
   /** Business domains this tool belongs to (primary first). */
@@ -1341,6 +1343,16 @@ export const api = {
     }>(`/api/customer-zero/${org}/connections/${toolId}/disconnect`, {});
     if (result)
       invalidateOrg(org, ["connections", "overview", "seo-department"]);
+    return result;
+  },
+  selectConnectionAccount: async (org: string, toolId: string, accountRef: string) => {
+    const result = await postJson<{
+      organizationId: string;
+      toolId: string;
+      selectedAccountRef: string;
+      accountLabel: string;
+    }>(`/api/customer-zero/${org}/connections/${toolId}/account`, { accountRef });
+    if (result) invalidateOrg(org, ["connections", "overview"]);
     return result;
   },
   finishGoogleConnect: (org: string, code: string, state: string) =>
