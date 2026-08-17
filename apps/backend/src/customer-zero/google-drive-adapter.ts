@@ -85,6 +85,10 @@ export interface DriveWorkspaceResult {
   readonly documents: readonly DriveFile[];
 }
 
+export const DRIVE_VALIDATION_DOCUMENT_NAME = "Prueba Departify";
+export const DRIVE_VALIDATION_DOCUMENT_CONTENT =
+  "Documento creado por Departify para validar Google Drive WRITE.";
+
 /* ----------------------------------------------------------------------------
  * Adapter.
  * --------------------------------------------------------------------------*/
@@ -195,15 +199,19 @@ export class GoogleDriveAdapter {
     if (!accessToken) return fail("Google no está conectado.", "auth");
     const sanitized = (input.query ?? "").replace(/[\r\n]/g, " ").trim();
     const clauses = ["trashed = false"];
-    if (sanitized) clauses.push(`(name contains '${sanitized.replace(/'/g, "\\'")}' or fullText contains '${sanitized.replace(/'/g, "\\'")}')`);
-    if (input.parentId) clauses.push(`'${input.parentId.replace(/'/g, "\\'")}' in parents`);
+    if (sanitized) {
+      const escaped = escapeDriveQuery(sanitized);
+      clauses.push(`(name contains '${escaped}' or fullText contains '${escaped}')`);
+    }
+    if (input.parentId) clauses.push(`'${escapeDriveQuery(input.parentId)}' in parents`);
     if (input.mimeType) clauses.push(`mimeType = '${escapeDriveQuery(input.mimeType)}'`);
     if (clauses.length === 1) return fail("Búsqueda vacía.", "invalid_response");
-    const params = new URLSearchParams({
+    const params = driveListParams({
       q: clauses.join(" and "),
-      pageSize: String(input.pageSize ?? 20),
+      pageSize: input.pageSize ?? 20,
       fields: "files(id,name,mimeType,size,modifiedTime,webViewLink,owners(emailAddress))",
     });
+    const diagnostics = driveDiagnostics(params, "GET", "/drive/v3/files");
     const response = await googleApiFetch(
       `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
@@ -212,7 +220,7 @@ export class GoogleDriveAdapter {
       if (response.status === 401) return fail("Google rechazó la autorización.", "auth");
       if (response.status === 429) return fail("Google aplicó rate limit.", "rate_limit");
       if (response.status >= 500) return fail("Google no responde.", "unavailable");
-      return fail(`Google devolvió ${response.status}.`, "invalid_response");
+      return driveFailureFromResponse(response, "No he podido buscar en Drive.", diagnostics);
     }
     const data = (await response.json()) as {
       files?: Array<{
@@ -245,14 +253,15 @@ export class GoogleDriveAdapter {
     const accessToken = await this.getAccessToken();
     if (!accessToken) return fail("Google no está conectado.", "auth");
     const clauses = ["trashed = false"];
-    if (input.mimeType) clauses.push(`mimeType = '${input.mimeType.replace(/'/g, "\\'")}'`);
-    if (input.parentId) clauses.push(`'${input.parentId.replace(/'/g, "\\'")}' in parents`);
-    const params = new URLSearchParams({
+    if (input.mimeType) clauses.push(`mimeType = '${escapeDriveQuery(input.mimeType)}'`);
+    if (input.parentId) clauses.push(`'${escapeDriveQuery(input.parentId)}' in parents`);
+    const params = driveListParams({
       q: clauses.join(" and "),
-      pageSize: String(input.pageSize ?? 100),
+      pageSize: input.pageSize ?? 100,
       orderBy: "modifiedTime desc",
       fields: "files(id,name,mimeType,size,modifiedTime,webViewLink,owners(emailAddress))",
     });
+    const diagnostics = driveDiagnostics(params, "GET", "/drive/v3/files");
     const response = await googleApiFetch(
       `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
@@ -261,7 +270,7 @@ export class GoogleDriveAdapter {
       if (response.status === 401) return fail("Google rechazó la autorización.", "auth");
       if (response.status === 429) return fail("Google aplicó rate limit.", "rate_limit");
       if (response.status >= 500) return fail("Google no responde.", "unavailable");
-      return fail(`Google devolvió ${response.status}.`, "invalid_response");
+      return driveFailureFromResponse(response, "No he podido listar Drive.", diagnostics);
     }
     const data = (await response.json()) as { files?: DriveRawFile[] };
     return ok(normalizeDriveFiles(data.files ?? []));
@@ -284,16 +293,17 @@ export class GoogleDriveAdapter {
     ];
     if (input.parentFolderId) clauses.push(`'${escapeDriveQuery(input.parentFolderId)}' in parents`);
     if (input.mimeType) clauses.push(`mimeType = '${escapeDriveQuery(input.mimeType)}'`);
-    const params = new URLSearchParams({
+    const params = driveListParams({
       q: clauses.join(" and "),
-      pageSize: String(input.pageSize ?? 20),
+      pageSize: input.pageSize ?? 20,
       fields: driveFields(),
     });
+    const diagnostics = driveDiagnostics(params, "GET", "/drive/v3/files");
     const response = await googleApiFetch(
       `https://www.googleapis.com/drive/v3/files?${params.toString()}`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
-    if (!response.ok) return driveFailure(response.status, "No he podido buscar en Drive.");
+    if (!response.ok) return driveFailureFromResponse(response, "No he podido buscar en Drive.", diagnostics);
     const data = (await response.json()) as { files?: DriveRawFile[] };
     return ok(normalizeDriveFiles(data.files ?? []));
   }
@@ -547,23 +557,25 @@ export class GoogleDriveAdapter {
   ): Promise<DriveAdapterResult<DriveWorkspaceResult>> {
     const root = await this.ensureFolder("Departify");
     if (!root.success || !root.value) return propagateFailure(root);
-    const names = [
-      "01 — Empresa",
-      "02 — Estrategia",
-      "03 — Marketing",
-      "04 — SEO",
-      "05 — Branding",
-      "06 — Ventas",
-      "07 — Operaciones",
-      "08 — Finanzas",
-      "09 — Legal",
-      "10 — Resultados",
+    const tree = [
+      { name: "01_Marketing", children: ["Brand", "Copies", "Campañas", "Assets"] },
+      { name: "02_Ventas", children: ["Propuestas", "CRM exports", "Casos de uso"] },
+      { name: "03_Producto", children: ["Briefs", "Roadmap", "Specs"] },
+      { name: "04_Operaciones", children: ["Procesos", "Checklists", "Proveedores"] },
+      { name: "05_Clientes", children: ["Activos", "Onboarding", "Soporte"] },
+      { name: "06_Equipo", children: ["Docs internos", "Onboarding nuevos"] },
+      { name: "99_Archive", children: [] },
     ];
     const folders: DriveFile[] = [];
-    for (const name of names) {
-      const folder = await this.ensureFolder(name, root.value.id);
+    for (const branch of tree) {
+      const folder = await this.ensureFolder(branch.name, root.value.id);
       if (!folder.success || !folder.value) return propagateFailure(folder);
       folders.push(folder.value);
+      for (const childName of branch.children) {
+        const child = await this.ensureFolder(childName, folder.value.id);
+        if (!child.success || !child.value) return propagateFailure(child);
+        folders.push(child.value);
+      }
     }
     const createdDocuments: DriveFile[] = [];
     for (const document of documents) {
@@ -589,6 +601,28 @@ export class GoogleDriveAdapter {
       createdDocuments.push(created.value);
     }
     return ok({ root: root.value, folders, documents: createdDocuments });
+  }
+
+  /** Small, idempotent live validation used before creating the full tree. */
+  async ensureDriveValidationWorkspace(): Promise<DriveAdapterResult<DriveWorkspaceResult>> {
+    const root = await this.ensureFolder("Departify");
+    if (!root.success || !root.value) return propagateFailure(root);
+    const marketing = await this.ensureFolder("01_Marketing", root.value.id);
+    if (!marketing.success || !marketing.value) return propagateFailure(marketing);
+    const existing = await this.findFilesByName({
+      name: DRIVE_VALIDATION_DOCUMENT_NAME,
+      parentFolderId: marketing.value.id,
+      mimeType: GoogleDriveAdapter.GOOGLE_DOC_MIME_TYPE,
+    });
+    if (!existing.success) return propagateFailure(existing);
+    const document = existing.value?.[0] ?? (await this.createGoogleDoc({
+      name: DRIVE_VALIDATION_DOCUMENT_NAME,
+      parentFolderId: marketing.value.id,
+      content: DRIVE_VALIDATION_DOCUMENT_CONTENT,
+      appProperties: { departifyWorkspace: "validation-v1" },
+    })).value;
+    if (!document) return fail("Google no ha confirmado el documento de validación.", "invalid_response");
+    return ok({ root: root.value, folders: [marketing.value], documents: [document] });
   }
 
   private async ensureFolder(name: string, parentFolderId?: string): Promise<DriveAdapterResult<DriveFile>> {
@@ -642,8 +676,82 @@ function driveFields(): string {
   return "id,name,mimeType,size,modifiedTime,webViewLink,parents,owners(emailAddress)";
 }
 
+interface DriveListParamsInput {
+  readonly q: string;
+  readonly pageSize: number;
+  readonly fields: string;
+  readonly orderBy?: string;
+}
+
+function driveListParams(input: DriveListParamsInput): URLSearchParams {
+  // Drive files.list supports only the `drive` and `appDataFolder` spaces.
+  // Keep the collection explicit so searches behave the same for My Drive and
+  // files shared with the authenticated user after incremental consent.
+  return new URLSearchParams({
+    q: input.q,
+    spaces: "drive",
+    corpora: "user",
+    includeItemsFromAllDrives: "true",
+    supportsAllDrives: "true",
+    pageSize: String(Math.min(Math.max(input.pageSize, 1), 1000)),
+    fields: input.fields,
+    ...(input.orderBy ? { orderBy: input.orderBy } : {}),
+  });
+}
+
+interface DriveDiagnostics {
+  readonly endpoint: string;
+  readonly method: string;
+  readonly q?: string;
+  readonly spaces?: string;
+  readonly corpora?: string;
+  readonly fields?: string;
+  readonly pageSize?: string;
+}
+
+function driveDiagnostics(
+  params: URLSearchParams,
+  method: string,
+  endpoint: string,
+): DriveDiagnostics {
+  return {
+    endpoint,
+    method,
+    ...(params.get("q") ? { q: params.get("q")! } : {}),
+    ...(params.get("spaces") ? { spaces: params.get("spaces")! } : {}),
+    ...(params.get("corpora") ? { corpora: params.get("corpora")! } : {}),
+    ...(params.get("fields") ? { fields: params.get("fields")! } : {}),
+    ...(params.get("pageSize") ? { pageSize: params.get("pageSize")! } : {}),
+  };
+}
+
 function escapeDriveQuery(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/[\r\n]/g, " ");
+}
+
+async function driveFailureFromResponse<T>(
+  response: Response,
+  fallback: string,
+  diagnostics: DriveDiagnostics,
+): Promise<DriveAdapterResult<T>> {
+  let providerCode: string | undefined;
+  let providerMessage: string | undefined;
+  try {
+    const body = (await response.clone().json()) as {
+      error?: { code?: number | string; message?: string };
+    };
+    providerCode = body.error?.code !== undefined ? String(body.error.code) : undefined;
+    providerMessage = typeof body.error?.message === "string" ? body.error.message : undefined;
+  } catch {
+    // Keep the customer response stable when Google returns a non-JSON error.
+  }
+  console.warn("[google-drive-api-error]", {
+    ...diagnostics,
+    status: response.status,
+    ...(providerCode ? { googleCode: providerCode } : {}),
+    ...(providerMessage ? { googleMessage: providerMessage } : {}),
+  });
+  return driveFailure(response.status, fallback);
 }
 
 function driveFailure<T>(status: number, fallback: string): DriveAdapterResult<T> {
@@ -651,7 +759,7 @@ function driveFailure<T>(status: number, fallback: string): DriveAdapterResult<T
   if (status === 403) return fail("Drive necesita autorización adicional para esta acción.", "auth");
   if (status === 429) return fail("Google aplicó rate limit.", "rate_limit");
   if (status >= 500) return fail("Google no responde.", "unavailable");
-  return fail(`${fallback} (${status}).`, "invalid_response");
+  return fail(fallback, "invalid_response");
 }
 
 function propagateFailure<T, U>(result: DriveAdapterResult<T>): DriveAdapterResult<U> {

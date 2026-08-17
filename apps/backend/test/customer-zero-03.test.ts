@@ -552,6 +552,44 @@ describe("GoogleDriveAdapter", () => {
     expect(query).toContain("'root_1' in parents");
   });
 
+  it("builds an escaped Drive query with explicit Drive search parameters and humanizes Google 400s", async () => {
+    seedTokens();
+    let requestedUrl = "";
+    vi.stubGlobal("fetch", (async (input: string | URL) => {
+      requestedUrl = String(input);
+      return jsonResponse(400, {
+        error: { code: 400, message: "Invalid Value", status: "INVALID_ARGUMENT" },
+      });
+    }) as typeof fetch);
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const out = await new GoogleDriveAdapter({ organizationId: "org_a", userId: "ceo_a" })
+      .searchFiles({ query: "O'Brien\\Plans" });
+    expect(out).toEqual({
+      success: false,
+      errorCode: "invalid_response",
+      message: "No he podido buscar en Drive.",
+    });
+    const params = new URL(requestedUrl).searchParams;
+    expect(params.get("q")).toContain("name contains 'O\\'Brien\\\\Plans'");
+    expect(params.get("q")).toContain("trashed = false");
+    expect(params.get("spaces")).toBe("drive");
+    expect(params.get("corpora")).toBe("user");
+    expect(params.get("pageSize")).toBe("20");
+    expect(params.get("fields")).toContain("files(id,name,mimeType");
+    expect(warning).toHaveBeenCalledWith(
+      "[google-drive-api-error]",
+      expect.objectContaining({
+        endpoint: "/drive/v3/files",
+        status: 400,
+        googleCode: "400",
+        googleMessage: "Invalid Value",
+        spaces: "drive",
+        corpora: "user",
+        pageSize: "20",
+      }),
+    );
+  });
+
   it("lists real PDFs by MIME type without making a write request", async () => {
     seedTokens();
     let requestedUrl = "";

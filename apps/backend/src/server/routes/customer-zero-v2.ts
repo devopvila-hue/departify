@@ -107,7 +107,10 @@ import {
   type RoutingDecision,
 } from "../../customer-zero/command-center.js";
 import { GoogleCalendarAdapter } from "../../customer-zero/google-calendar-adapter.js";
-import { GoogleDriveAdapter } from "../../customer-zero/google-drive-adapter.js";
+import {
+  DRIVE_VALIDATION_DOCUMENT_NAME,
+  GoogleDriveAdapter,
+} from "../../customer-zero/google-drive-adapter.js";
 import {
   completeExecutionReceipt,
   failExecutionReceipt,
@@ -4761,6 +4764,7 @@ export async function processCeoMessage(
   if (isDriveWriteRequest(operationalMessage) && /\bdepartify\b/i.test(operationalMessage)) {
     const outcome = await runDriveWriteTurn(
       session,
+      operationalMessage,
       session.state.locale !== "en",
       deps,
     );
@@ -6681,6 +6685,7 @@ export async function runDriveTurn(
  */
 async function runDriveWriteTurn(
   session: CustomerZeroSession,
+  message: string,
   isEs: boolean,
   deps: ServerDeps,
 ): Promise<{ reply: string; status: "success" | "blocked" }> {
@@ -6703,20 +6708,7 @@ async function runDriveWriteTurn(
     };
   }
 
-  const dna = await resolveCompanyDnaStore(deps).get(session.organizationId);
-  const companyName = dna?.companyName?.trim() || (isEs ? "Empresa pendiente de completar" : "Company profile pending");
-  const objective = dna?.objective?.trim() || (isEs ? "Todavía no hay un objetivo aprobado en Departify." : "No approved objective is stored in Departify yet.");
-  const website = dna?.website?.trim() || (isEs ? "Todavía no hay una web configurada." : "No website is configured yet.");
-  const honest = isEs
-    ? "Este documento será actualizado por Departify cuando exista información o una estrategia aprobada."
-    : "Departify will update this document when approved information or strategy exists.";
-  const documents = [
-    { name: "Perfil de empresa", parentFolderName: "01 — Empresa", content: `Empresa: ${companyName}\n\n${dna?.description?.trim() || honest}` },
-    { name: "Objetivos actuales", parentFolderName: "02 — Estrategia", content: `Objetivo actual: ${objective}` },
-    { name: "Plan de Marketing", parentFolderName: "03 — Marketing", content: honest },
-    { name: "Estrategia SEO", parentFolderName: "04 — SEO", content: `Web de trabajo: ${website}\n\n${honest}` },
-    { name: "Guía de Marca", parentFolderName: "05 — Branding", content: honest },
-  ];
+  const validationOnly = isDriveValidationRequest(message);
   const receipt = startExecutionReceipt({
     operationId: connectorOperationId("drive_workspace"),
     intent: "drive.workspace.create",
@@ -6725,10 +6717,13 @@ async function runDriveWriteTurn(
     sideEffect: true,
   });
   session.state.lastExecutionReceipt = receipt;
-  const result = await new GoogleDriveAdapter({
+  const adapter = new GoogleDriveAdapter({
     organizationId: session.organizationId,
     userId: writeIdentity.userId,
-  }).ensureDepartifyWorkspace(documents);
+  });
+  const result = validationOnly
+    ? await adapter.ensureDriveValidationWorkspace()
+    : await adapter.ensureDepartifyWorkspace();
   if (!result.success || !result.value) {
     session.state.lastExecutionReceipt = failExecutionReceipt(receipt, result.errorCode ?? "provider_error");
     return { status: "blocked", reply: driveFailure(result.message, isEs) };
@@ -6748,9 +6743,18 @@ async function runDriveWriteTurn(
   return {
     status: "success",
     reply: isEs
-      ? `${verb} y he comprobado en Google Drive el espacio **Departify**, con sus 10 carpetas de trabajo y ${result.value.documents.length} documentos iniciales. ${existingNote}`
-      : `${verb} and verified the **Departify** workspace in Google Drive, with its 10 work folders and ${result.value.documents.length} initial documents. ${existingNote}`,
+      ? validationOnly
+        ? `${verb} y he comprobado en Google Drive **Departify/01_Marketing** y el documento **${DRIVE_VALIDATION_DOCUMENT_NAME}**. El contenido también se ha verificado. ${existingNote}`
+        : `${verb} y he comprobado en Google Drive el espacio **Departify**, con sus carpetas de trabajo y ${result.value.documents.length} documentos. ${existingNote}`
+      : validationOnly
+        ? `${verb} and verified **Departify/01_Marketing** and the **${DRIVE_VALIDATION_DOCUMENT_NAME}** document in Google Drive. Its content was verified too. ${existingNote}`
+        : `${verb} and verified the **Departify** workspace in Google Drive with its work folders and ${result.value.documents.length} documents. ${existingNote}`,
   };
+}
+
+function isDriveValidationRequest(message: string): boolean {
+  return /01[_\s-]?marketing/i.test(message) &&
+    /prueba|validar|test/i.test(message);
 }
 
 function connectorOperationId(prefix: string): string {
