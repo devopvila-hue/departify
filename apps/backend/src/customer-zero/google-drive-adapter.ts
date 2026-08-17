@@ -414,8 +414,9 @@ export class GoogleDriveAdapter {
       `--${boundary}--`,
       "",
     ].join("\r\n");
+    const url = `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=${encodeURIComponent(driveFields())}`;
     const response = await googleApiFetch(
-      `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=${encodeURIComponent(driveFields())}`,
+      url,
       {
         method: "POST",
         headers: {
@@ -427,7 +428,11 @@ export class GoogleDriveAdapter {
     );
     if (!response.ok) {
       if (response.status === 401) return fail("Google rechazó la autorización.", "auth");
-      return driveFailure(response.status, "Google no pudo crear el archivo.");
+      return driveFailureFromResponse(
+        response,
+        "Google no pudo crear el archivo.",
+        driveDiagnostics(new URL(url).searchParams, "POST", "/upload/drive/v3/files"),
+      );
     }
     const data = (await response.json()) as {
       id?: string;
@@ -472,7 +477,13 @@ export class GoogleDriveAdapter {
         body: input.content,
       },
     );
-    if (!response.ok) return driveFailure(response.status, "Google no pudo actualizar el archivo.");
+    if (!response.ok) {
+      return driveFailureFromResponse(
+        response,
+        "Google no pudo actualizar el archivo.",
+        { endpoint: "/upload/drive/v3/files/:id", method: "PATCH" },
+      );
+    }
     const updated = normalizeDriveFile((await response.json()) as DriveRawFile);
     return updated ? ok(updated) : fail("Google no ha confirmado la actualización.", "invalid_response");
   }
@@ -505,8 +516,9 @@ export class GoogleDriveAdapter {
   private async createMetadataFile(metadata: Readonly<Record<string, unknown>>): Promise<DriveAdapterResult<DriveFile>> {
     const accessToken = await this.getAccessToken(GoogleDriveAdapter.WRITE_SCOPE);
     if (!accessToken) return fail("Drive no tiene autorización de escritura.", "auth");
+    const url = `https://www.googleapis.com/drive/v3/files?fields=${encodeURIComponent(driveFields())}`;
     const response = await googleApiFetch(
-      `https://www.googleapis.com/drive/v3/files?fields=${encodeURIComponent(driveFields())}`,
+      url,
       {
         method: "POST",
         headers: {
@@ -516,8 +528,24 @@ export class GoogleDriveAdapter {
         body: JSON.stringify(metadata),
       },
     );
-    if (!response.ok) return driveFailure(response.status, "Google no pudo crear el elemento.");
-    const result = normalizeDriveFile((await response.json()) as DriveRawFile);
+    if (!response.ok) {
+      return driveFailureFromResponse(
+        response,
+        "Google no pudo crear el elemento.",
+        driveDiagnostics(new URL(url).searchParams, "POST", "/drive/v3/files"),
+      );
+    }
+    const payload = (await response.json()) as DriveRawFile;
+    const result = normalizeDriveFile(payload);
+    if (!result) {
+      console.warn("[google-drive-invalid-response]", {
+        endpoint: "/drive/v3/files",
+        status: response.status,
+        hasId: Boolean(payload.id),
+        hasName: Boolean(payload.name),
+        mimeType: payload.mimeType ?? "",
+      });
+    }
     return result ? ok(result) : fail("Google no ha confirmado el elemento.", "invalid_response");
   }
 
@@ -528,7 +556,13 @@ export class GoogleDriveAdapter {
       `https://docs.googleapis.com/v1/documents/${encodeURIComponent(fileId)}`,
       { headers: { Authorization: `Bearer ${accessToken}` } },
     );
-    if (!current.ok) return driveFailure(current.status, "Google no pudo abrir el documento.");
+    if (!current.ok) {
+      return driveFailureFromResponse(
+        current,
+        "Google no pudo abrir el documento.",
+        { endpoint: "/docs/v1/documents/:id", method: "GET" },
+      );
+    }
     const document = (await current.json()) as { body?: { content?: Array<{ endIndex?: number }> } };
     const endIndex = document.body?.content?.at(-1)?.endIndex ?? 2;
     const requests: Array<Record<string, unknown>> = [];
@@ -547,7 +581,13 @@ export class GoogleDriveAdapter {
         body: JSON.stringify({ requests }),
       },
     );
-    if (!update.ok) return driveFailure(update.status, "Google no pudo escribir el documento.");
+    if (!update.ok) {
+      return driveFailureFromResponse(
+        update,
+        "Google no pudo escribir el documento.",
+        { endpoint: "/docs/v1/documents/:id:batchUpdate", method: "POST" },
+      );
+    }
     return this.readFile({ fileId });
   }
 
@@ -615,12 +655,16 @@ export class GoogleDriveAdapter {
       mimeType: GoogleDriveAdapter.GOOGLE_DOC_MIME_TYPE,
     });
     if (!existing.success) return propagateFailure(existing);
-    const document = existing.value?.[0] ?? (await this.createGoogleDoc({
-      name: DRIVE_VALIDATION_DOCUMENT_NAME,
-      parentFolderId: marketing.value.id,
-      content: DRIVE_VALIDATION_DOCUMENT_CONTENT,
-      appProperties: { departifyWorkspace: "validation-v1" },
-    })).value;
+    const created = existing.value?.[0]
+      ? ok(existing.value[0])
+      : await this.createGoogleDoc({
+          name: DRIVE_VALIDATION_DOCUMENT_NAME,
+          parentFolderId: marketing.value.id,
+          content: DRIVE_VALIDATION_DOCUMENT_CONTENT,
+          appProperties: { departifyWorkspace: "validation-v1" },
+        });
+    if (!created.success) return propagateFailure(created);
+    const document = created.value;
     if (!document) return fail("Google no ha confirmado el documento de validación.", "invalid_response");
     return ok({ root: root.value, folders: [marketing.value], documents: [document] });
   }
