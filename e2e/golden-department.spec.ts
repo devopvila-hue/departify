@@ -260,6 +260,9 @@ test.describe("Golden Department production acceptance", () => {
       "/chat",
       "/conexiones",
     ]) {
+      if ((page.viewportSize()?.width ?? 1440) < 600) {
+        await page.getByRole("button", { name: "Abrir navegación" }).click();
+      }
       const requests: string[] = [];
       const onRequest = (request: { url(): string }) => {
         if (request.url().includes("/api/customer-zero/")) {
