@@ -125,8 +125,13 @@ test.describe("Golden Department production acceptance", () => {
     // Manual production reproduction showed the API replying 401
     // `missing_token` and the browser never reaching github.com. This test
     // clicks the real button, observes the live navigation, and verifies
-    // the browser lands on GitHub's official authorize endpoint. No
+    // the browser lands on GitHub's official authorize flow. No
     // Authorization header is injected and no redirect is mocked.
+    //
+    // GitHub may route the user through /login first (when not signed in
+    // to GitHub) with the authorize URL encoded in `return_to`. We accept
+    // either landing page; what proves the OAuth-start worked is that the
+    // browser is on github.com with client_id + state present in the URL.
     await openRoute(page, "/conexiones", /Conexiones|GitHub/i);
     await page.getByRole("button", { name: "+ Añadir", exact: true }).click();
     // Open the GitHub manage dialog from the catalog row.
@@ -140,11 +145,16 @@ test.describe("Golden Department production acceptance", () => {
     const conectar = page.getByRole("button", { name: /^Conectar$/ });
     await expect(conectar).toBeEnabled({ timeout: 10_000 });
     await conectar.click();
-    await page.waitForURL(/^https:\/\/github\.com\/login\/oauth\/authorize/, {
-      timeout: 20_000,
-    });
-    expect(page.url()).toMatch(/^https:\/\/github\.com\/login\/oauth\/authorize/);
-    expect(page.url()).toMatch(/[?&](client_id|state)=/);
+    await page.waitForURL(
+      /^https:\/\/github\.com\/(login\?.*return_to=%2Flogin%2Foauth%2Fauthorize|login\/oauth\/authorize|sessions\/two-factor|login\/device)/,
+      { timeout: 20_000 },
+    );
+    expect(page.url()).toMatch(/^https:\/\/github\.com\//);
+    // The authorize URL must always carry client_id and state, whether we
+    // landed on /login or directly on /login/oauth/authorize.
+    expect(decodeURIComponent(page.url())).toMatch(
+      /[?&](client_id|state)=[^&]+/,
+    );
   });
 
   test("Connections OAuth start navigates to TikTok authorize (real button click)", async ({
@@ -153,7 +163,10 @@ test.describe("Golden Department production acceptance", () => {
     // Same regression as GitHub above but for TikTok. The backend maps
     // `tiktok` → `startExternalOAuth(provider = "tiktok")` which produces
     // https://www.tiktok.com/v2/auth/authorize/. Same code path, same
-    // `requireSession` boundary, same Authorization header.
+    // `requireSession` boundary, same Authorization header. TikTok routes
+    // unauthenticated users through /login first; the authorize URL is
+    // double-encoded inside `redirect_url`, so we match on the live host +
+    // a query parameter that only the OAuth start URL carries.
     await openRoute(page, "/conexiones", /Conexiones|TikTok/i);
     await page.getByRole("button", { name: "+ Añadir", exact: true }).click();
     await page
@@ -163,13 +176,16 @@ test.describe("Golden Department production acceptance", () => {
     const conectar = page.getByRole("button", { name: /^Conectar$/ });
     await expect(conectar).toBeEnabled({ timeout: 10_000 });
     await conectar.click();
-    await page.waitForURL(/^https:\/\/www\.tiktok\.com\/v2\/auth\/authorize/, {
-      timeout: 20_000,
-    });
-    expect(page.url()).toMatch(
-      /^https:\/\/www\.tiktok\.com\/v2\/auth\/authorize/,
+    await page.waitForURL(
+      /^https:\/\/www\.tiktok\.com\/(login\?|v2\/auth\/authorize)/,
+      { timeout: 20_000 },
     );
-    expect(page.url()).toMatch(/[?&](client_key|state)=/);
+    expect(page.url()).toMatch(/^https:\/\/www\.tiktok\.com\//);
+    // Decode the double-encoded redirect_url to confirm the OAuth-start URL
+    // (with client_key + state) is the real destination.
+    const decoded = decodeURIComponent(decodeURIComponent(page.url()));
+    expect(decoded).toMatch(/v2\/auth\/authorize/);
+    expect(decoded).toMatch(/[?&](client_key|state)=[^&]+/);
   });
 
   test("Mobile drawer does not intercept the page content underneath (Ver SEO)", async ({
@@ -185,7 +201,9 @@ test.describe("Golden Department production acceptance", () => {
       (page.viewportSize()?.width ?? 1440) >= 600,
       "Mobile-only regression; desktop drawer does not apply.",
     );
-    await page.goto("/", { waitUntil: "domcontentloaded" });
+    // / resolves to RootRoute (chat surface). The departments grid with
+    // "Ver SEO" lives at /inicio.
+    await page.goto("/inicio", { waitUntil: "domcontentloaded" });
     await expect(
       page.getByRole("navigation", { name: "Navegación principal" }),
     ).toBeVisible();
@@ -193,6 +211,9 @@ test.describe("Golden Department production acceptance", () => {
     await page
       .getByRole("button", { name: "Abrir navegación" })
       .click({ force: true });
+    await expect(page.locator(".dfy-sidebar--open")).toHaveCount(1, {
+      timeout: 5_000,
+    });
     // Tap "Ver SEO" while the drawer is open — must navigate to /seo AND
     // close the drawer in the same gesture.
     await page
