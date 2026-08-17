@@ -1127,6 +1127,10 @@ export async function registerCustomerZeroV2Routes(
       const externalProvider: ExternalOAuthProvider | null =
         toolId === "meta_business" || toolId === "meta_ads" || toolId === "facebook" || toolId === "instagram"
           ? "meta_business"
+          : toolId === "tiktok_ads"
+            ? "tiktok_business"
+            : toolId === "tiktok"
+              ? "tiktok"
           : toolId === "ticktick"
             ? "ticktick"
             : null;
@@ -1163,7 +1167,12 @@ export async function registerCustomerZeroV2Routes(
           return revoked;
         }),
       )).every(Boolean);
-      for (const id of new Set([externalProvider, "meta_ads"])) {
+      const affectedToolIds = externalProvider === "meta_business"
+        ? ["meta_business", "meta_ads"]
+        : externalProvider === "tiktok_business"
+          ? ["tiktok_ads"]
+          : [toolId];
+      for (const id of new Set(affectedToolIds)) {
         const tool = TOOL_CATALOG.find((entry) => entry.id === id);
         if (!tool) continue;
         await persistToolState(session, {
