@@ -773,6 +773,59 @@ describe("P0 — post-OAuth HTTP: connect → callback → /conexiones", () => {
     expect(typoLink.json().reply).toContain("event-created-1");
   });
 
+  it("Google Drive incremental consent requests drive.file for write without replacing the tenant identity", async () => {
+    const org = await startOrg();
+    await getGoogleTokenStore().put({
+      organizationId: org,
+      userId: "user-a",
+      provider: "gmail",
+      accessToken: "access-drive-read",
+      refreshToken: "refresh-drive-read",
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      scopes: [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/drive.readonly",
+      ],
+      email: "ceo@departify.app",
+      displayName: "CEO",
+      operationalVerifiedAt: new Date().toISOString(),
+      operationalProbeError: null,
+      operationalCapabilities: ["drive.read", "drive.search"],
+    });
+
+    const connect = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/google_drive/connect`,
+      payload: { returnPath: "/conexiones", includeDriveWrite: true },
+    });
+    expect(connect.statusCode).toBe(200);
+    const authorizationUrl = new URL(connect.json().connection.authorizationUrl as string);
+    const requestedScopes = authorizationUrl.searchParams.get("scope")?.split(" ") ?? [];
+    expect(requestedScopes).toContain("https://www.googleapis.com/auth/drive.readonly");
+    expect(requestedScopes).toContain("https://www.googleapis.com/auth/drive.file");
+    const state = connect.json().connection.oauthState as string;
+    expect((await getGoogleOAuthStateStore().get(state))?.requestedToolId).toBe("google_drive");
+
+    mockGoogleFetch({
+      tokenScope: [
+        "openid",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/drive.file",
+      ].join(" "),
+    });
+    const callback = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/connections/google/callback`,
+      payload: { code: "drive-write-code", state },
+    });
+    expect(callback.statusCode).toBe(200);
+    expect(callback.json().connection.toolId).toBe("google_drive");
+    expect(callback.json().connection.status).toBe("connected");
+    expect(callback.json().grantedScopes).toContain("https://www.googleapis.com/auth/drive.file");
+  });
+
   it("YouTube uses incremental Google OAuth and a real channel probe", async () => {
     const org = await startOrg();
     const connect = await authedInject({

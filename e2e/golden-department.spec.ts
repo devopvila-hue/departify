@@ -101,11 +101,11 @@ test.describe("Golden Department production acceptance", () => {
     await openRoute(
       page,
       "/conexiones",
-      /Conexiones|GitHub|Proyecto de la web/i,
+      /Conexiones|GitHub/i,
     );
     await page.getByRole("button", { name: "+ Añadir", exact: true }).click();
     await expect(
-      page.getByText("Proyecto de la web", { exact: true }),
+      page.getByText("GitHub", { exact: true }),
     ).toBeVisible();
     await expect(page.locator("body")).not.toContainText(
       /github_repository|unknown/i,
