@@ -773,8 +773,8 @@ export async function registerCustomerZeroV2Routes(
         const orgState = toolStates.find((s) => s.toolId === def.id) ?? null;
         return renderConnectionCard(orgState, session.state.locale, def);
       });
-      const catalog = await buildCanonicalConnectionViews(session, session.state.locale);
       const hostinger = await probeHostingerEmail();
+      const catalog = await buildCanonicalConnectionViews(session, session.state.locale, hostinger);
       const hostingerCardIndex = cards.findIndex((card) => card.id === "hostinger_email");
       if (hostingerCardIndex >= 0) {
         cards[hostingerCardIndex] = buildHostingerCard(hostinger, session.state.locale);
@@ -2757,7 +2757,14 @@ export async function registerCustomerZeroV2Routes(
       const { organizationId } = request.params as { organizationId: string };
       const session = await requireSession(organizationId, deps);
       const base = buildCeoOverview(session);
-      const connections = await buildCanonicalConnectionViews(session, session.state.locale);
+      // The CEO overview should use durable connection state. Live provider
+      // health probes belong to /conexiones, not the critical shell path.
+      const connections = await buildCanonicalConnectionViews(
+        session,
+        session.state.locale,
+        undefined,
+        { probeExternal: false },
+      );
       const workStore = workStoreForRoutes();
       const [tasks, results, inboxItems, dna, marketingApprovals] = await Promise.all([
         workStore.listTasksForOrg(organizationId, 100),
@@ -4022,7 +4029,12 @@ async function buildRuntimeBridge(
     session.state.currentConversationId
       ? session.conversations.get(session.organizationId, session.state.currentConversationId)
       : Promise.resolve(null),
-    buildCanonicalConnectionViews(session, session.state.locale),
+    buildCanonicalConnectionViews(
+      session,
+      session.state.locale,
+      undefined,
+      { probeExternal: false },
+    ),
     workStore.listTasksForOrg(session.organizationId, 50),
     workStore.listResultsForOrg(session.organizationId, 20),
     resolveCompanyDnaStore(deps).get(session.organizationId),
@@ -7706,9 +7718,12 @@ async function buildCatalogConnectionViews(
 export async function buildCanonicalConnectionViews(
   session: CustomerZeroSession,
   locale: SupportedLocale,
+  hostingerStatus?: HostingerConnectionStatus,
+  options?: { probeExternal?: boolean },
 ): Promise<ToolConnectionView[]> {
   const catalog = await buildCatalogConnectionViews(session, locale);
-  const hostinger = await probeHostingerEmail();
+  if (options?.probeExternal === false && !hostingerStatus) return catalog;
+  const hostinger = hostingerStatus ?? await probeHostingerEmail();
   const index = catalog.findIndex((entry) => entry.toolId === "hostinger_email");
   const hostingerView = buildHostingerCatalogView(hostinger, locale);
   if (index >= 0) {
