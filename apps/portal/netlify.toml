@@ -13,7 +13,7 @@ targetPort = 5173
 [build]
 # The repository is the Netlify build root while the portal package writes its
 # Vite output below apps/portal. Keep this explicit for Git-connected builds.
-publish = "apps/portal/dist"
+publish = "dist"
 publishOrigin = "config"
 commandOrigin = "config"
 command = "pnpm --filter @departify/portal build"
