@@ -475,11 +475,19 @@ export class MarketingService {
     // "Sin equipo todavía" instead of a seeded 12-person roster.
     const department = await this.findDepartmentForOrg(organizationId);
     if (!department) return [];
-    const employeeIds = this.employeeIdsForDepartment(department);
     const objective = await this.activeObjective(organizationId);
     const workingIds = assignedEmployeeIds
       ? new Set(assignedEmployeeIds)
       : await this.workingEmployeeIdsForOrg(organizationId);
+    return this.buildDigitalEmployees(department, objective, workingIds);
+  }
+
+  private buildDigitalEmployees(
+    department: { employees?: readonly string[] },
+    objective: BusinessObjective | null,
+    workingIds: ReadonlySet<string>,
+  ): DigitalEmployee[] {
+    const employeeIds = this.employeeIdsForDepartment(department);
     return MARKETING_ROSTER.filter((e) => employeeIds.has(e.id)).map((e) => ({
       ...e,
       status: workingIds.has(e.id) ? "trabajando" : "disponible",
@@ -571,9 +579,6 @@ export class MarketingService {
     locale: SupportedLocale,
     operational?: MarketingOperationalSnapshot,
   ): Promise<DepartmentStatusView> {
-    const objective = await this.activeObjective(organizationId);
-    const approvals = (await this.approvalsRepo.list(organizationId, "marketing"))
-      .filter((a) => a.status === "pending");
     const activeWork = (operational?.tasks ?? []).filter(
       (task) =>
         task.organizationId === organizationId &&
@@ -588,10 +593,23 @@ export class MarketingService {
       }).assignedEmployeeId;
       return assignment ? [assignment] : [];
     });
-    const employees = await this.getDigitalEmployees(
-      organizationId,
-      assignedEmployeeIds,
-    );
+    const [objective, approvals, objectives, storedActivity, department] =
+      await Promise.all([
+        this.activeObjective(organizationId),
+        this.approvalsRepo
+          .list(organizationId, "marketing")
+          .then((items) => items.filter((a) => a.status === "pending")),
+        this.objectivesRepo.list(organizationId, "marketing"),
+        this.activityRepo.listRecent(organizationId, "marketing", 8),
+        this.findDepartmentForOrg(organizationId),
+      ]);
+    const employees = department
+      ? this.buildDigitalEmployees(
+          department,
+          objective,
+          new Set(assignedEmployeeIds),
+        )
+      : [];
     const tools = operational
       ? operational.connections
           .filter(
@@ -606,7 +624,6 @@ export class MarketingService {
             status: "connected" as const,
           }))
       : await this.getConnectedTools(organizationId, connectedToolIds);
-    const objectives = await this.objectivesRepo.list(organizationId, "marketing");
     const objectiveResults = objectives
       .filter((o) => o.status === "completed")
       .map((o) => ({ id: o.id, title: o.title, summary: o.desiredOutcome }));
@@ -627,11 +644,6 @@ export class MarketingService {
         (result) => !durableResults.some((durable) => durable.id === result.id),
       ),
     ];
-    const storedActivity = await this.activityRepo.listRecent(
-      organizationId,
-      "marketing",
-      8,
-    );
     const recentActivity = [
       ...(operational?.activity ?? []),
       ...storedActivity,
@@ -643,7 +655,6 @@ export class MarketingService {
     // department has not been provisioned, status is "not_provisioned".
     // The UI renders a "Sin equipo todavía" empty state instead of the
     // pre-hotfix "trabajando" badge with a hard-coded 3-working roster.
-    const department = await this.findDepartmentForOrg(organizationId);
     if (!department) {
       return {
         id: "marketing",
