@@ -6888,12 +6888,12 @@ async function runDriveWriteTurn(
   }
 
   const validationOnly = isDriveValidationRequest(message);
-  const operationKey = validationOnly
+  const baseOperationKey = validationOnly
     ? "drive_validation_workspace"
     : "drive_marketing_plan_workspace";
   const store = workStoreForRoutes();
   const existing = (await store.listTasksForOrg(session.organizationId, 50))
-    .find((candidate) => candidate.source?.type === "chat_operation" && candidate.source.operationKey === operationKey);
+    .find((candidate) => candidate.source?.type === "chat_operation" && candidate.source.operationKey === baseOperationKey);
   if (existing && (existing.status === "queued" || existing.status === "running")) {
     return {
       status: "success",
@@ -6927,6 +6927,9 @@ async function runDriveWriteTurn(
     });
     task = retried;
   } else {
+    const operationKey = existing?.status === "cancelled"
+      ? `${baseOperationKey}:${Date.now().toString(36)}`
+      : baseOperationKey;
     task = await store.createTask({
       organizationId: session.organizationId,
       departmentId: "marketing",
