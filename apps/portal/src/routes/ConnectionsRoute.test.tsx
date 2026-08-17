@@ -141,6 +141,32 @@ describe("ConnectionsRoute — lifecycle", () => {
     expect(surface.unavailableReason).toBeUndefined();
   });
 
+  it("keeps TikTok OAuth actions available for both read connectors", () => {
+    const surfaces = buildSurfaces([
+      base({
+        toolId: "tiktok",
+        name: "TikTok",
+        label: "TikTok",
+        category: "Marketing",
+        categoryId: "marketing",
+        connectionMethod: "oauth",
+      }),
+      base({
+        toolId: "tiktok_ads",
+        name: "TikTok Ads",
+        label: "TikTok Ads",
+        category: "Publicidad",
+        categoryId: "marketing",
+        connectionMethod: "oauth",
+      }),
+    ]);
+
+    expect(surfaces.find((surface) => surface.toolId === "tiktok")?.connectToolId).toBe("tiktok");
+    expect(surfaces.find((surface) => surface.toolId === "tiktok_ads")?.connectToolId).toBe("tiktok_ads");
+    expect(surfaces.find((surface) => surface.toolId === "tiktok")?.unavailableReason).toBeUndefined();
+    expect(surfaces.find((surface) => surface.toolId === "tiktok_ads")?.unavailableReason).toBeUndefined();
+  });
+
   it("keeps the complete Marketing catalog visible when connections are unconfigured", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve({
       ok: true,

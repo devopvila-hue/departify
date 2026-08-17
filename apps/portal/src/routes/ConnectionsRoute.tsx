@@ -560,6 +560,8 @@ function surfaceFrom(entry: ToolConnectionView): Surface {
     || entry.toolId === "mautic"
     || entry.toolId === "ticktick"
     || entry.toolId === "meta_ads"
+    || entry.toolId === "tiktok"
+    || entry.toolId === "tiktok_ads"
     || entry.toolId === "wordpress"
     || entry.toolId === "shopify";
   return {
