@@ -618,6 +618,7 @@ function ConversationList(props: {
                 ? " dfy-bubble--user"
                 : " dfy-bubble--assistant"
             }`}
+            data-testid={`chat-message-${turn.role}`}
             data-speaker={turn.speaker ?? "departify"}
           >
             <span className="dfy-bubble__who">{speakerLabel}</span>

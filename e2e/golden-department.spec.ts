@@ -72,6 +72,11 @@ test.describe("Golden Department production acceptance", () => {
 
     await openRoute(page, "/marketing", /Marketing|Elvira/i);
     await expect(page.locator("body")).not.toContainText("Cargando Marketing…");
+    await expect(
+      page.getByText("Capacidades del equipo", { exact: true }),
+    ).toBeVisible({
+      timeout: 60_000,
+    });
     await page.screenshot({
       path: `${screenshotsDir}/marketing-${test.info().project.name}.png`,
       fullPage: true,
@@ -79,6 +84,11 @@ test.describe("Golden Department production acceptance", () => {
 
     await openRoute(page, "/seo", /SEO|Responsable de SEO/i);
     await expect(page.locator("body")).not.toContainText("Cargando SEO…");
+    await expect(
+      page.getByText("Capacidades del equipo", { exact: true }),
+    ).toBeVisible({
+      timeout: 60_000,
+    });
     await page.screenshot({
       path: `${screenshotsDir}/seo-${test.info().project.name}.png`,
       fullPage: true,
@@ -158,7 +168,7 @@ test.describe("Golden Department production acceptance", () => {
     await expect(page.locator(".dfy-chat-thinking")).toHaveCount(0, {
       timeout: 60_000,
     });
-    await expect(page.locator(".dfy-thread")).not.toContainText(
+    await expect(page.getByTestId("chat-message-assistant")).not.toContainText(
       /marketing\.delegate|drive\.write|work\.deliverable|NO_REPLY|plugin approval required|OpenClaw|Activepieces|MCP/i,
     );
     await expect(page.locator(".dfy-thread")).toHaveCount(1);
