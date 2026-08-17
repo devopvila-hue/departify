@@ -22,6 +22,31 @@ import {
   TasksIcon,
 } from "@/components/icons";
 
+function visibleAssistantMessage(content: string): string {
+  return content
+    .replace(/\bdepartify\.marketing\.delegate\b/gi, "trabajo de Marketing")
+    .replace(/\bdrive\.write\b/gi, "cambios en Drive")
+    .replace(/\bwork\.deliverable\b/gi, "entregable")
+    .replace(/\bplugin approval required\b/gi, "requiere aprobación")
+    .replace(/\bNO_REPLY\b/g, "sin respuesta")
+    .replace(/\bOpenClaw\b/gi, "Departify")
+    .replace(/\bActivepieces\b/gi, "la conexión")
+    .replace(/\bMCP\b/g, "la conexión");
+}
+
+function visibleMessage(message: MessageView): {
+  role: "user" | "assistant";
+  content: string;
+} {
+  return {
+    role: message.role,
+    content:
+      message.role === "assistant"
+        ? visibleAssistantMessage(message.content)
+        : message.content,
+  };
+}
+
 /**
  * The Conversation — Sprint 60 (Phase P-B part 15 + 26).
  *
@@ -43,7 +68,11 @@ export function ChatRoute() {
   const navigate = useNavigate();
   const location = useLocation();
   const [transcript, setTranscript] = useState<
-    { role: "user" | "assistant"; content: string; speaker?: "departify" | "elvira" }[]
+    {
+      role: "user" | "assistant";
+      content: string;
+      speaker?: "departify" | "elvira";
+    }[]
   >([]);
   const [events, setEvents] = useState<readonly CommandCenterEvent[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<
@@ -84,12 +113,7 @@ export function ChatRoute() {
       const data = await api.conversation(organizationId!, conversationId);
       if (!data || generation !== loadGenerationRef.current) return;
       if (!options?.preserveEvents) setEvents([]);
-      setTranscript(
-        data.messages.map((message: MessageView) => ({
-          role: message.role,
-          content: message.content,
-        })),
-      );
+      setTranscript(data.messages.map(visibleMessage));
       setCurrentConversationId(conversationId);
       setCurrentSummary(data.conversation.summary ?? null);
       setHasOlderMessages(Boolean(data.hasMore));
@@ -139,7 +163,13 @@ export function ChatRoute() {
   }, [organizationId, loadConversation]);
 
   const loadOlderMessages = useCallback(async () => {
-    if (!organizationId || !currentConversationId || !olderCursor || loadingOlder) return;
+    if (
+      !organizationId ||
+      !currentConversationId ||
+      !olderCursor ||
+      loadingOlder
+    )
+      return;
     const generation = loadGenerationRef.current;
     const requestedOrganizationId = organizationId;
     const requestedConversationId = currentConversationId;
@@ -153,10 +183,7 @@ export function ChatRoute() {
         olderCursor,
       );
       if (!page || generation !== loadGenerationRef.current) return;
-      const older = page.messages.map((message: MessageView) => ({
-        role: message.role,
-        content: message.content,
-      }));
+      const older = page.messages.map(visibleMessage);
       setTranscript((previous) => [...older, ...previous]);
       setHasOlderMessages(Boolean(page.hasMore));
       setOlderCursor(page.nextCursor ?? null);
@@ -276,7 +303,12 @@ export function ChatRoute() {
               ];
             });
             setEvents((prev) => {
-              if (prev.some((event) => event.kind === "result" && event.item.id === result.id)) {
+              if (
+                prev.some(
+                  (event) =>
+                    event.kind === "result" && event.item.id === result.id,
+                )
+              ) {
                 return prev;
               }
               return [...prev, resultEvent(result)];
@@ -286,7 +318,9 @@ export function ChatRoute() {
           // backend. Reload that durable projection instead of appending a
           // second assistant transcript entry from the work feed.
           if (currentConversationId) {
-            await loadConversation(currentConversationId, { preserveEvents: true });
+            await loadConversation(currentConversationId, {
+              preserveEvents: true,
+            });
           }
         }
         lastSeen = feed.serverTime;
@@ -310,9 +344,10 @@ export function ChatRoute() {
     const generation = loadGenerationRef.current;
     const candidates = expectedConversationId
       ? [expectedConversationId]
-      : [((await api.conversations(organizationId))?.conversations ?? [])[0]?.id].filter(
-          (id): id is string => Boolean(id),
-        );
+      : [
+          ((await api.conversations(organizationId))?.conversations ?? [])[0]
+            ?.id,
+        ].filter((id): id is string => Boolean(id));
     for (const conversationId of candidates) {
       const data = await api.conversation(organizationId, conversationId);
       if (generation !== loadGenerationRef.current) return false;
@@ -325,12 +360,7 @@ export function ChatRoute() {
         last?.role === "assistant" &&
         last.content.trim().length > 0
       ) {
-        setTranscript(
-          messages.map((message: MessageView) => ({
-            role: message.role,
-            content: message.content,
-          })),
-        );
+        setTranscript(messages.map(visibleMessage));
         setCurrentConversationId(conversationId);
         setCurrentSummary(data?.conversation.summary ?? null);
         setEvents([]);
@@ -375,23 +405,34 @@ export function ChatRoute() {
     // The 5-active-cap is enforced by the same endpoint via
     // ensureConversation (see customer-zero-v2.ts). When a conversation
     // is already selected, send the message to that conversation.
-    const result: (CommandCenterMessageResult & {
-      conversationId?: string;
-    }) | null = currentConversationId
+    const result:
+      | (CommandCenterMessageResult & {
+          conversationId?: string;
+        })
+      | null = currentConversationId
       ? await api.sendConversationMessage(
           organizationId,
           currentConversationId,
           value,
           correlationId,
         )
-      : await api.commandCenterMessage(organizationId, value, undefined, correlationId);
+      : await api.commandCenterMessage(
+          organizationId,
+          value,
+          undefined,
+          correlationId,
+        );
     if (generation !== loadGenerationRef.current) return;
     setBusy(false);
     setProcessStatus(null);
     // If the transport failed after the backend persisted a valid pair, the
     // durable transcript is the completion gate. Recover it before showing a
     // generic error; an old assistant message is not sufficient evidence.
-    if (!result || typeof result.reply !== "string" || result.reply.trim().length === 0) {
+    if (
+      !result ||
+      typeof result.reply !== "string" ||
+      result.reply.trim().length === 0
+    ) {
       const recovered = await recoverCompletedTurn(
         organizationId,
         currentConversationId ?? result?.conversationId ?? null,
@@ -403,7 +444,8 @@ export function ChatRoute() {
         stage: recovered
           ? "T16_portal_completion_received_via_recovery"
           : "T16_portal_error_received",
-        elapsedMs: Math.round((performance.now() - clientStartedAt) * 100) / 100,
+        elapsedMs:
+          Math.round((performance.now() - clientStartedAt) * 100) / 100,
       });
       if (recovered) {
         return;
@@ -439,7 +481,11 @@ export function ChatRoute() {
     setTranscript((prev) => [
       ...prev,
       { role: "user", content: value },
-      { role: "assistant", content: result!.reply, speaker: inferSpeaker(cleanEvents) },
+      {
+        role: "assistant",
+        content: visibleAssistantMessage(result!.reply),
+        speaker: inferSpeaker(cleanEvents),
+      },
     ]);
     setEvents(cleanEvents);
     if (result.conversationId) setCurrentConversationId(result.conversationId);
@@ -480,7 +526,9 @@ export function ChatRoute() {
       >
         {hasOlderMessages && (
           <div className="dfy-chat-history-more" role="status">
-            {loadingOlder ? "Cargando historial anterior…" : "Desplázate arriba para ver historial anterior"}
+            {loadingOlder
+              ? "Cargando historial anterior…"
+              : "Desplázate arriba para ver historial anterior"}
           </div>
         )}
         <ConversationList
@@ -519,7 +567,6 @@ export function ChatRoute() {
         busy={busy}
         error={error}
       />
-
     </div>
   );
 }
@@ -567,7 +614,9 @@ function ConversationList(props: {
           <div
             key={`turn_${index}_${turn.role}`}
             className={`dfy-bubble${
-              turn.role === "user" ? " dfy-bubble--user" : " dfy-bubble--assistant"
+              turn.role === "user"
+                ? " dfy-bubble--user"
+                : " dfy-bubble--assistant"
             }`}
             data-speaker={turn.speaker ?? "departify"}
           >
@@ -736,7 +785,9 @@ function EventCard(props: {
           <header>
             <ResultsIcon className="dfy-event__icon" />
             <strong>{event.item.title}</strong>
-            <span className="dfy-event__pill dfy-event__pill--success">Terminado</span>
+            <span className="dfy-event__pill dfy-event__pill--success">
+              Terminado
+            </span>
           </header>
           {event.item.result && <p>{event.item.result}</p>}
           <button
@@ -826,9 +877,8 @@ function EventCard(props: {
           </header>
           <p>{event.suggestion.content}</p>
           <p className="dfy-event__note">
-            Detectado por {event.suggestion.fromDepartment}. Esta es solo
-            una propuesta: tu DNA compartido no se modifica sin tu
-            aprobación.
+            Detectado por {event.suggestion.fromDepartment}. Esta es solo una
+            propuesta: tu DNA compartido no se modifica sin tu aprobación.
           </p>
         </article>
       );
