@@ -146,11 +146,12 @@ export function ChatRoute() {
     setOpening(true);
     setError(null);
     setBusy(false);
-    const openingData = await api.commandCenterOpening(organizationId);
+    const [openingData, data] = await Promise.all([
+      api.commandCenterOpening(organizationId),
+      api.conversations(organizationId),
+    ]);
     if (generation !== loadGenerationRef.current) return;
     if (openingData) setEvents(filterContextualEvents(openingData.events));
-
-    const data = await api.conversations(organizationId);
     if (generation !== loadGenerationRef.current) return;
     const first = data?.conversations?.[0];
     if (first) {

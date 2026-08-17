@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactElement } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/app/auth-context";
+import { api } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import {
   ApprovalsIcon,
@@ -30,7 +31,11 @@ import {
  * no decorative fills.
  */
 
-type IconEntry = { to: string; label: string; icon: (props: IconProps) => ReactElement };
+type IconEntry = {
+  to: string;
+  label: string;
+  icon: (props: IconProps) => ReactElement;
+};
 type IconEntryWithBadge = IconEntry & { badgeKey?: "approvals" };
 
 const PRIMARY: IconEntry[] = [
@@ -46,7 +51,12 @@ const SECONDARY: IconEntry[] = [
 ];
 
 const TERTIARY: IconEntryWithBadge[] = [
-  { to: "/aprobaciones", label: "Aprobaciones", icon: ApprovalsIcon, badgeKey: "approvals" },
+  {
+    to: "/aprobaciones",
+    label: "Aprobaciones",
+    icon: ApprovalsIcon,
+    badgeKey: "approvals",
+  },
   { to: "/resultados", label: "Resultados", icon: ResultsIcon },
   { to: "/calendario", label: "Calendario", icon: CalendarIcon },
 ];
@@ -56,12 +66,94 @@ const FOOT: IconEntry[] = [
   { to: "/configuracion", label: "Configuración", icon: SettingsIcon },
 ];
 
-export function AppShell(props: { companyName?: string; pendingApprovals?: number }) {
+function prefetchRoute(path: string, organizationId: string | null): void {
+  if (!organizationId) return;
+  const requests: Promise<unknown>[] = [];
+  switch (path) {
+    case "/inicio":
+      requests.push(
+        api.overview(organizationId),
+        api.commandCenterOpening(organizationId),
+        api.status(organizationId),
+      );
+      break;
+    case "/chat":
+      requests.push(
+        api.commandCenterOpening(organizationId),
+        api.conversations(organizationId),
+      );
+      break;
+    case "/tareas":
+      requests.push(
+        api.status(organizationId),
+        api.handoff(organizationId),
+        api.workFeed(organizationId),
+      );
+      break;
+    case "/inbox":
+      requests.push(api.inbox(organizationId));
+      break;
+    case "/conexiones":
+      requests.push(api.connections(organizationId));
+      break;
+    case "/marketing":
+      requests.push(api.marketingDepartment(organizationId));
+      break;
+    case "/seo":
+      requests.push(api.seoDepartment(organizationId));
+      break;
+    case "/configuracion":
+      requests.push(
+        api.status(organizationId),
+        api.connections(organizationId),
+        api.llmSettings(organizationId),
+      );
+      break;
+    case "/aprobaciones":
+      requests.push(
+        api.overview(organizationId),
+        api.marketingApprovals(organizationId),
+      );
+      break;
+    case "/resultados":
+      requests.push(
+        api.overview(organizationId),
+        api.results(organizationId),
+        api.dashboardSummary(organizationId),
+      );
+      break;
+    case "/calendario":
+      requests.push(api.calendar(organizationId));
+      break;
+    default:
+      break;
+  }
+  void Promise.all(requests);
+}
+
+export function AppShell(props: {
+  companyName?: string;
+  pendingApprovals?: number;
+}) {
   const [open, setOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const { signOut } = useAuth();
-  const { setOrganizationId } = useOrg();
+  const { organizationId, setOrganizationId } = useOrg();
+
+  useEffect(() => {
+    if (!organizationId) return;
+    // Keep the initial warm-up deliberately small. The rest is prefetched
+    // on intent (hover/focus) so login never downloads the whole product.
+    const timer = window.setTimeout(() => {
+      void Promise.all([
+        api.connections(organizationId),
+        api.workFeed(organizationId),
+        api.conversations(organizationId),
+      ]);
+    }, 1_200);
+    return () => window.clearTimeout(timer);
+  }, [organizationId]);
 
   useEffect(() => {
     setOpen(false);
@@ -83,6 +175,8 @@ export function AppShell(props: { companyName?: string; pendingApprovals?: numbe
       <li key={item.to}>
         <NavLink
           to={item.to}
+          onMouseEnter={() => prefetchRoute(item.to, organizationId)}
+          onFocus={() => prefetchRoute(item.to, organizationId)}
           className={({ isActive }) =>
             `dfy-navitem${isActive ? " dfy-navitem--active" : ""}`
           }
@@ -92,7 +186,10 @@ export function AppShell(props: { companyName?: string; pendingApprovals?: numbe
             <span>{item.label}</span>
           </span>
           {badge != null && (
-            <span className="dfy-navitem__count" aria-label={`${badge} pendientes`}>
+            <span
+              className="dfy-navitem__count"
+              aria-label={`${badge} pendientes`}
+            >
               {badge}
             </span>
           )}
@@ -127,13 +224,21 @@ export function AppShell(props: { companyName?: string; pendingApprovals?: numbe
 
         <ul className="dfy-sidebar__nav">{PRIMARY.map(renderItem)}</ul>
 
-        <ul className="dfy-sidebar__nav dfy-sidebar__nav--sub">{SECONDARY.map(renderItem)}</ul>
+        <ul className="dfy-sidebar__nav dfy-sidebar__nav--sub">
+          {SECONDARY.map(renderItem)}
+        </ul>
 
-        <ul className="dfy-sidebar__nav dfy-sidebar__nav--sub">{TERTIARY.map(renderItem)}</ul>
+        <ul className="dfy-sidebar__nav dfy-sidebar__nav--sub">
+          {TERTIARY.map(renderItem)}
+        </ul>
 
-        <ul className="dfy-sidebar__nav dfy-sidebar__nav--foot">{FOOT.map(renderItem)}</ul>
+        <ul className="dfy-sidebar__nav dfy-sidebar__nav--foot">
+          {FOOT.map(renderItem)}
+        </ul>
 
-        <p className="dfy-sidebar__foot">Marketing y SEO trabajan para tus objetivos.</p>
+        <p className="dfy-sidebar__foot">
+          Marketing y SEO trabajan para tus objetivos.
+        </p>
       </nav>
 
       <div className="dfy-shell__main">

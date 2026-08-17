@@ -19,6 +19,7 @@ import {
 
 import { getSupabaseClient } from "@/app/supabase";
 import { setApiAccessToken } from "@/app/api";
+import { clearPortalQueryCache } from "@/app/query-client";
 
 export interface AuthUser {
   id: string;
@@ -43,9 +44,11 @@ const AuthContext = createContext<AuthContextValue>({
   signOut: async () => {},
 });
 
-function toAuthUser(session: {
-  user?: { id: string; email?: string | null };
-} | null): AuthUser | null {
+function toAuthUser(
+  session: {
+    user?: { id: string; email?: string | null };
+  } | null,
+): AuthUser | null {
   if (!session?.user) return null;
   return {
     id: session.user.id,
@@ -110,6 +113,7 @@ export function AuthProvider(props: { children: ReactNode }) {
     }
     setApiAccessToken(null);
     setUser(null);
+    clearPortalQueryCache();
   }, []);
 
   const value = useMemo(
@@ -117,7 +121,9 @@ export function AuthProvider(props: { children: ReactNode }) {
     [user, loading, signIn, signUp, signOut],
   );
 
-  return <AuthContext.Provider value={value}>{props.children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>{props.children}</AuthContext.Provider>
+  );
 }
 
 // eslint-disable-next-line react-refresh/only-export-components

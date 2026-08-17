@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Navigate, useLocation } from "react-router-dom";
+import { Navigate } from "react-router-dom";
 
 import { api } from "@/app/api";
 import { useAuth } from "@/app/auth-context";
@@ -22,9 +22,10 @@ import { AppShell } from "@/components/AppShell";
 export function ShellGate() {
   const { user, loading } = useAuth();
   const { organizationId } = useOrg();
-  const location = useLocation();
   const [state, setState] = useState<
-    { status: "loading" } | { status: "ready"; companyName: string; pendingApprovals: number } | { status: "missing" }
+    | { status: "loading" }
+    | { status: "ready"; companyName: string; pendingApprovals: number }
+    | { status: "missing" }
   >({ status: "loading" });
 
   useEffect(() => {
@@ -45,14 +46,18 @@ export function ShellGate() {
       setState({
         status: "ready",
         companyName: overview.companyName,
-        pendingApprovals: overview.decisions.filter((d) => d.status === "pending").length,
+        pendingApprovals: overview.decisions.filter(
+          (d) => d.status === "pending",
+        ).length,
       });
     })();
     return () => {
       cancelled = true;
     };
-    // Re-read on navigation so the pending count stays truthful.
-  }, [user, organizationId, location.pathname]);
+    // The overview is shared by the portal cache. It is intentionally not
+    // re-read on every route change; route navigation must not be gated by a
+    // second multi-source overview projection.
+  }, [user, organizationId]);
 
   if (loading) {
     return (
@@ -81,5 +86,10 @@ export function ShellGate() {
       </div>
     );
   }
-  return <AppShell companyName={state.companyName} pendingApprovals={state.pendingApprovals} />;
+  return (
+    <AppShell
+      companyName={state.companyName}
+      pendingApprovals={state.pendingApprovals}
+    />
+  );
 }

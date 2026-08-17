@@ -222,4 +222,82 @@ test.describe("Golden Department production acceptance", () => {
       await openRoute(page, path, marker);
     }
   });
+
+  test("repeat navigation reuses warm data instead of rebuilding the shell", async ({
+    page,
+  }, testInfo) => {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect(
+      page.getByRole("navigation", { name: "Navegación principal" }),
+    ).toBeVisible();
+
+    const navLabels: Record<string, string> = {
+      "/empresa": "Empresa",
+      "/chat": "Chat",
+      "/conexiones": "Conexiones",
+      "/tareas": "Tareas",
+      "/inicio": "Tu empresa",
+    };
+    const markers: Record<string, RegExp> = {
+      "/empresa": /Empresa|Tu empresa/i,
+      "/chat": /Conversación continua|¿Qué quieres conseguir|conversación/i,
+      "/conexiones": /Conexiones|GitHub|Proyecto de la web/i,
+      "/tareas": /Tareas/i,
+      "/inicio": /Tu empresa/i,
+    };
+    const measurements: Array<{
+      route: string;
+      elapsedMs: number;
+      apiRequests: number;
+    }> = [];
+
+    for (const path of [
+      "/empresa",
+      "/chat",
+      "/conexiones",
+      "/tareas",
+      "/inicio",
+      "/chat",
+      "/conexiones",
+    ]) {
+      const requests: string[] = [];
+      const onRequest = (request: { url(): string }) => {
+        if (request.url().includes("/api/customer-zero/")) {
+          requests.push(request.url());
+        }
+      };
+      page.on("request", onRequest);
+      const started = Date.now();
+      await page
+        .getByRole("link", { name: navLabels[path], exact: true })
+        .click();
+      await expect(page).toHaveURL(
+        new RegExp(`${path.replaceAll("/", "\\/")}$`),
+      );
+      await expect(page.locator("body")).toContainText(markers[path]);
+      measurements.push({
+        route: path,
+        elapsedMs: Date.now() - started,
+        apiRequests: requests.length,
+      });
+      page.off("request", onRequest);
+    }
+
+    await testInfo.attach("navigation-performance.json", {
+      body: JSON.stringify(measurements, null, 2),
+      contentType: "application/json",
+    });
+
+    const firstConnections = measurements.findIndex(
+      (measurement) => measurement.route === "/conexiones",
+    );
+    const repeatConnections = measurements
+      .map((measurement, index) => ({ measurement, index }))
+      .filter(({ measurement }) => measurement.route === "/conexiones")
+      .at(-1);
+    expect(repeatConnections).toBeDefined();
+    expect(repeatConnections!.measurement.apiRequests).toBeLessThanOrEqual(
+      measurements[firstConnections]?.apiRequests ?? 0,
+    );
+  });
 });

@@ -1,22 +1,9 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
 
 import { AuthProvider } from "@/app/auth-context";
 import { OrgProvider } from "@/app/org-context";
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 30_000,
-      gcTime: 5 * 60_000,
-      refetchOnWindowFocus: false,
-      retry: 1,
-    },
-    mutations: {
-      retry: 0,
-    },
-  },
-});
+import { portalQueryClient } from "@/app/query-client";
 
 interface AppProvidersProps {
   children: ReactNode;
@@ -24,7 +11,7 @@ interface AppProvidersProps {
 
 export function AppProviders({ children }: AppProvidersProps) {
   return (
-    <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={portalQueryClient}>
       <AuthProvider>
         <OrgProvider>{children}</OrgProvider>
       </AuthProvider>

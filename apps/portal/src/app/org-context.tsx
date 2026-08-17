@@ -1,4 +1,13 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
+
+import { clearPortalQueryCache } from "@/app/query-client";
 
 /**
  * The current company (organization) the CEO is running. Persisted in
@@ -37,10 +46,15 @@ export function readStoredOrganizationId(): string | null {
 }
 
 export function OrgProvider(props: { children: ReactNode }) {
-  const [organizationId, setValue] = useState<string | null>(() => readStored());
+  const [organizationId, setValue] = useState<string | null>(() =>
+    readStored(),
+  );
 
   const setOrganizationId = useCallback((next: string | null) => {
-    setValue(next);
+    setValue((current) => {
+      if (current !== next) clearPortalQueryCache();
+      return next;
+    });
     try {
       if (next) {
         window.localStorage.setItem(
@@ -60,7 +74,9 @@ export function OrgProvider(props: { children: ReactNode }) {
     [organizationId, setOrganizationId],
   );
 
-  return <OrgContext.Provider value={value}>{props.children}</OrgContext.Provider>;
+  return (
+    <OrgContext.Provider value={value}>{props.children}</OrgContext.Provider>
+  );
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
