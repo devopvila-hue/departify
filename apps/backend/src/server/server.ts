@@ -16,6 +16,7 @@ import { registerInternalEngineRoutes } from "./routes/internal-engine.js";
 import { registerMarketingRoutes } from "./routes/marketing-routes.js";
 import { registerConnectorRuntimeRoutes } from "./routes/connector-runtime.js";
 import { registerDepartmentRoutes } from "./routes/department-routes.js";
+import { registerVideoRoutes } from "./routes/video.js";
 import type { ServerDeps } from "./deps.js";
 
 export async function buildServer(
@@ -63,6 +64,7 @@ export async function buildServer(
   await registerMarketingRoutes(server, deps);
   await registerConnectorRuntimeRoutes(server, deps);
   await registerDepartmentRoutes(server, deps);
+  await registerVideoRoutes(server, deps);
 
   return server;
 }

@@ -5075,7 +5075,7 @@ export async function processCeoMessage(
 
   const isSeoRequest = SEO_REQUEST_PATTERN.test(operationalMessage);
   if (isSeoRequest) {
-    if (trace) trace.finalResponseSource = "seo_pipeline";
+    if (trace) trace.finalResponseSource = "product_truth";
     const seoOutcome = await runDelegateSeoTurn(
       session,
       organizationId,
