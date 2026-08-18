@@ -125,6 +125,11 @@ import {
   certifySeoCapability,
 } from "@departify/capability-engine";
 import {
+  buildSeoResultContract,
+  renderSeoResultMarkdown,
+  type SeoResultContract,
+} from "../../customer-zero/seo-result-contract.js";
+import {
   isAdminCommandAuthorized,
   parseAdminCommand,
   readAdminModelsView,
@@ -6766,79 +6771,62 @@ export async function runDelegateSeoTurn(
   const critical = report.issues.filter((i) => i.priority === "critical").length;
   const important = report.issues.filter((i) => i.priority === "important").length;
   const opportunities = report.issues.filter((i) => i.priority === "opportunity").length;
+
+  // Build the canonical SEO Result contract. The Portal renders this
+  // without re-parsing the markdown body. The contract preserves the
+  // honest distinction between OBSERVADO (web / repo) and RECOMENDACIÓN.
+  const seoContract: SeoResultContract = buildSeoResultContract({
+    audit: report,
+    repository: repositoryInspection
+      ? {
+          fullName: repositoryInspection.repository.fullName,
+          htmlUrl: repositoryInspection.repository.htmlUrl,
+          defaultBranch: repositoryInspection.repository.defaultBranch,
+        }
+      : null,
+    repositoryFiles: repositoryInspection?.files ?? [],
+    issueFileHints: repositoryInspection?.issueFileHints ?? {},
+  });
+
+  // Group the issues into actionable SEO tasks. Each phase bucket that
+  // has issues becomes its own DepartmentTask (departmentId: "seo") in
+  // the canonical task system, so the CEO can see work in the Portal's
+  // existing task list — no parallel SEO task subsystem.
+  for (const payload of seoContract.tasks) {
+    await store.createTask({
+      organizationId,
+      departmentId: "seo",
+      objectiveId: null,
+      requestedBy: organizationId,
+      assignedEmployeeId: null,
+      title: payload.title,
+      summary: payload.summary,
+      capability: payload.capability as DepartmentWorkCapability,
+      toolId: payload.toolId,
+      status: "queued",
+      statusMessage: isEs ? "Pendiente de trabajo." : "Pending work.",
+      progress: 0,
+      requiredCapabilities: [payload.capability as DepartmentWorkCapability],
+      startedAt: null,
+      completedAt: null,
+      resultId: null,
+      errorCode: null,
+      errorMessage: null,
+      timeoutMs: 7_200_000,
+    });
+  }
+
   const result = await store.createResult({
     organizationId,
     departmentId: "seo",
     relatedWorkItemId: task.id,
     title: "Auditoría SEO",
     summary: `${report.issues.length} hallazgos verificables: ${critical} críticos, ${important} importantes y ${opportunities} oportunidades.`,
-    content: [
-      `## Auditoría SEO`,
-      `Web revisada: ${report.url}`,
-      `Fecha de la auditoría: ${report.fetchedAt}`,
-      ``,
-      `### Observado`,
-      `- title: ${report.page.title || "(vacío)"}`,
-      `- description: ${report.page.description || "(vacío)"}`,
-      `- canonical: ${report.page.canonical ?? "(no detectado)"}`,
-      `- robots: ${report.page.robots ?? "(no detectado)"}`,
-      `- H1 (${report.page.headings.h1.length}): ${report.page.headings.h1.slice(0, 5).join(" | ") || "(sin H1)"}`,
-      `- H2 (${report.page.headings.h2.length}) / H3 (${report.page.headings.h3.length})`,
-      `- Enlaces internos revisados: ${report.page.internalUrls.length}`,
-      `- Enlaces internos rotos: ${report.page.brokenUrls.length}`,
-      `- Imágenes sin alt: ${report.page.imagesWithoutAlt}`,
-      `- Bloques de datos estructurados: ${report.page.structuredDataBlocks}`,
-      `- Metadata social presente: ${report.page.socialMetadata.join(", ") || "(ninguna)"}`,
-      `- sitemap.xml: ${report.page.sitemap}`,
-      ``,
-      `### Hallazgos`,
-      ...report.issues.map(
-        (issue) => `- **${issue.priority}** — ${issue.title}. Impacto: ${issue.impact}. Evidencia: ${issue.evidence}`,
-      ),
-      ``,
-      `### Recomendaciones (derivadas de los hallazgos)`,
-      ...report.issues.slice(0, 6).map(
-        (issue, index) => `- ${index + 1}. Atender "${issue.title}" — ${issue.impact}.`,
-      ),
-      ...(repositoryInspection
-        ? [
-            ``,
-            `### Repositorio conectado`,
-            `- ${repositoryInspection.repository.fullName} (${repositoryInspection.repository.htmlUrl})`,
-            `- Archivos de metadatos localizados: ${repositoryInspection.likelyMetadataFiles.length}.`,
-            ...Object.entries(repositoryInspection.issueFileHints).flatMap(([issueId, files]) =>
-              files.map((file) => `- ${issueId}: ${file}`),
-            ),
-            ``,
-            renderSeoCorrelationMarkdown(
-              buildSeoCorrelation(
-                {
-                  url: report.url,
-                  page: {
-                    title: report.page.title,
-                    description: report.page.description,
-                    canonical: report.page.canonical,
-                    robots: report.page.robots,
-                    headings: report.page.headings,
-                    sitemap: report.page.sitemap,
-                    imagesWithoutAlt: report.page.imagesWithoutAlt,
-                    structuredDataBlocks: report.page.structuredDataBlocks,
-                  },
-                  issues: report.issues.map((issue) => ({
-                    id: issue.id,
-                    title: issue.title,
-                    impact: issue.impact,
-                    evidence: issue.evidence,
-                  })),
-                },
-                repositoryInspection,
-              ),
-            ),
-          ]
-        : []),
-    ].join("\n"),
+    content: renderSeoResultMarkdown(seoContract, isEs),
+    // The Portal renders the dashboard from this canonical contract; it
+    // never has to re-parse the markdown body.
     data: {
-      ...(report as unknown as Record<string, unknown>),
+      seoContract,
       ...(repositoryInspection ? { repository: repositoryInspection } : {}),
     },
     source: "SEO website audit (chat pipeline)",

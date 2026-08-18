@@ -1,14 +1,35 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { api, type SeoAuditReport } from "@/app/api";
+import { api, type DepartmentResult, type SeoResultContract } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import { Badge, Card, EmptyState, HeadBadge } from "@/components/primitives";
 import { DepartmentWorkspaceNav } from "@/components/DepartmentWorkspaceNav";
+import { SeoDashboard } from "@/components/SeoDashboard";
+
+/**
+ * Extract the canonical SEO Result contract from a DepartmentResult.
+ * Returns null when the result is not a canonical SEO contract (e.g.
+ * a different capability produced it). The Portal treats null as "no
+ * SEO dashboard to render" and falls back to the raw result card.
+ */
+function extractSeoContract(
+  result: DepartmentResult | null,
+): SeoResultContract | null {
+  if (!result) return null;
+  const data = result.data;
+  if (!data || typeof data !== "object") return null;
+  const candidate = (data as { seoContract?: unknown }).seoContract;
+  if (!candidate || typeof candidate !== "object") return null;
+  const obj = candidate as { contract?: unknown; version?: unknown };
+  if (obj.contract !== "seo.audit.result") return null;
+  if (obj.version !== 1) return null;
+  return candidate as SeoResultContract;
+}
 
 export function SeoRoute() {
   const { organizationId } = useOrg();
   const [data, setData] = useState<Awaited<ReturnType<typeof api.seoDepartment>>>(null);
-  const [report, setReport] = useState<SeoAuditReport | null>(null);
+  const [result, setResult] = useState<DepartmentResult | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [repositoryBusy, setRepositoryBusy] = useState(false);
@@ -38,9 +59,14 @@ export function SeoRoute() {
     if (!organizationId) return;
     setRunning(true);
     setError(null);
-    const result = await api.seoAudit(organizationId);
-    if (!result?.report) setError("No he podido completar la auditoría. Revisa la web configurada e inténtalo de nuevo.");
-    else setReport(result.report);
+    const audit = await api.seoAudit(organizationId);
+    if (!audit?.result) {
+      setError("No he podido completar la auditoría. Revisa la web configurada e inténtalo de nuevo.");
+    } else {
+      // Surface the persisted DepartmentResult so the dashboard renders
+      // the canonical contract (structured payload), not just markdown.
+      setResult(audit.result);
+    }
     await load();
     setRunning(false);
   }
@@ -71,6 +97,8 @@ export function SeoRoute() {
     setRepositoryBusy(false);
   }
 
+  const seoContract = extractSeoContract(result);
+
   return (
     <div className="dfy-page">
       <section className="dfy-hero dfy-hero--department">
@@ -92,7 +120,7 @@ export function SeoRoute() {
                 {!data.onboarding.repositoryConnected ? (
                   <div className="dfy-seo-onboarding__actions">
                     <button type="button" className="dfy-button" disabled={repositoryBusy} onClick={() => void connectRepository()}>{repositoryBusy ? "Conectando…" : "Conectar proyecto"}</button>
-                    <button type="button" className="dfy-button dfy-button--ghost" onClick={() => setError("Puedes conectar el proyecto más adelante desde SEO.")}>Ahora no</button>
+                    <button type="button" className="dfy-button dfy-button--ghost" onClick={() => void setError("Puedes conectar el proyecto más tarde desde SEO.")}>Ahora no</button>
                   </div>
                 ) : (
                   <select aria-label="Proyecto de la web" disabled={repositoryBusy || data.repositories.length === 0} defaultValue="" onChange={(event) => { const repository = data.repositories.find((item) => item.id === event.target.value); if (repository) void selectRepository(repository); }}>
@@ -109,7 +137,7 @@ export function SeoRoute() {
           <Card title="Capacidades del equipo">
             <ul className="dfy-list">{data.capabilities.roster.map((capability) => <li key={capability.id}><span><strong>{capability.label}</strong><span className="dfy-muted dfy-muted--small">{capability.description}</span></span><Badge tone={capability.state === "disponible" ? "success" : capability.state === "necesita_conexion" ? "warning" : "neutral"}>{capability.state === "disponible" ? "Disponible" : capability.state === "necesita_conexion" ? "Necesita conexión" : "No disponible"}</Badge></li>)}</ul>
           </Card>
-          {report && <SeoReport report={report} />}
+          {seoContract ? <SeoDashboard contract={seoContract} /> : result ? <SeoReport report={result} /> : null}
           <Card title="Trabajo SEO">
             {data.tasks.length === 0 ? <EmptyState title="Todavía no hay trabajo SEO" description="Cuando inicies una revisión, la tarea y su progreso quedarán aquí de forma durable." /> : <ul className="dfy-list">{data.tasks.map((task) => <li key={task.id}><strong>{task.title}</strong><span className="dfy-muted">{task.statusMessage}</span><Badge tone={task.status === "completed" ? "success" : task.status === "failed" ? "danger" : "accent"}>{task.status}</Badge></li>)}</ul>}
           </Card>
@@ -122,7 +150,13 @@ export function SeoRoute() {
   );
 }
 
-function SeoReport(props: { report: SeoAuditReport }) {
-  const counts = { critical: props.report.issues.filter((issue) => issue.priority === "critical").length, important: props.report.issues.filter((issue) => issue.priority === "important").length, opportunity: props.report.issues.filter((issue) => issue.priority === "opportunity").length };
-  return <Card title="Última auditoría"><div className="dfy-dashboard-kpis"><div className="dfy-dashboard-kpi"><span>Críticos</span><strong>{counts.critical}</strong></div><div className="dfy-dashboard-kpi"><span>Importantes</span><strong>{counts.important}</strong></div><div className="dfy-dashboard-kpi"><span>Oportunidades</span><strong>{counts.opportunity}</strong></div></div><ul className="dfy-list">{props.report.issues.map((issue) => <li key={issue.id}><strong>{issue.title}</strong><span>{issue.evidence}</span><Badge tone={issue.priority === "critical" ? "danger" : issue.priority === "important" ? "warning" : "neutral"}>{issue.priority}</Badge></li>)}</ul></Card>;
+function SeoReport(props: { report: DepartmentResult }) {
+  // Fallback rendering when the persisted result does not carry the
+  // canonical SEO contract. Keeps the raw markdown body viewable.
+  return (
+    <Card title={`Resultado ${props.report.title}`}>
+      <p className="dfy-muted">{props.report.summary}</p>
+      <pre className="dfy-muted">{props.report.content.slice(0, 600)}</pre>
+    </Card>
+  );
 }

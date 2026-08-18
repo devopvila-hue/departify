@@ -119,11 +119,23 @@ describe("runDelegateSeoTurn — real SEO execution", () => {
     expect(reply.reply).toMatch(/He auditado/i);
 
     const tasks = await workStoreForRoutes().listTasksForOrg("org_test_seo");
-    expect(tasks).toHaveLength(1);
-    const task = tasks[0]!;
-    expect(task.departmentId).toBe("seo");
-    expect(task.status).toBe("completed");
-    expect(task.capability).toBe("seo.audit.website");
+    // The audit task is the one carrying the actual audit result; the
+    // derived SEO tasks (Ahora/Después/Optimización buckets) are created
+    // separately. Both live in the canonical SEO task list.
+    const auditTask = tasks.find((t) => t.title === "Auditoría SEO de la web");
+    expect(auditTask).toBeDefined();
+    expect(auditTask!.departmentId).toBe("seo");
+    expect(auditTask!.status).toBe("completed");
+
+    const derivedTasks = tasks.filter((t) => t.departmentId === "seo" && t.id !== auditTask!.id);
+    // At least one derived task is created when the audit produces
+    // issues (which the example.com page does — missing-sitemap).
+    expect(derivedTasks.length).toBeGreaterThanOrEqual(1);
+    for (const task of derivedTasks) {
+      expect(task.departmentId).toBe("seo");
+      // Derived tasks are queued — they are pending CEO attention.
+      expect(task.status).toBe("queued");
+    }
 
     const results = await workStoreForRoutes().listResultsForOrg("org_test_seo");
     expect(results).toHaveLength(1);
@@ -132,6 +144,6 @@ describe("runDelegateSeoTurn — real SEO execution", () => {
     expect(result.title).toMatch(/Auditor[ií]a SEO/);
     expect(result.summary).toMatch(/hallazgos/i);
     expect(result.content).toMatch(/Observado/);
-    expect(result.content).toMatch(/Recomendaciones/);
+    expect(result.content).toMatch(/Plan de resolución/);
   }, 20_000);
 });

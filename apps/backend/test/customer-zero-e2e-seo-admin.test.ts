@@ -126,10 +126,28 @@ describe("Customer Zero E2E — Golden Image SEO + admin commands", () => {
     // The audit must have produced a real task + result.
     const tasks: DepartmentTask[] = await workStore.listTasksForOrg(organizationId);
     expect(tasks.length).toBeGreaterThanOrEqual(1);
-    const seoTask = tasks.find((task: DepartmentTask) => task.departmentId === "seo");
+    // The audit task is the one carrying the actual audit result; the
+    // derived SEO tasks (Ahora/Después/Optimización) carry the same
+    // capability, so we identify the audit task by title.
+    const seoTask = tasks.find(
+      (task: DepartmentTask) => task.title === "Auditoría SEO de la web",
+    );
     expect(seoTask).toBeDefined();
+    expect(seoTask!.departmentId).toBe("seo");
     expect(seoTask!.status).toBe("completed");
     expect(seoTask!.capability).toBe("seo.audit.website");
+
+    // Derived SEO tasks (Ahora/Después/Optimización) are queued and live
+    // in the same canonical SEO task list.
+    const derivedTasks = tasks.filter(
+      (task: DepartmentTask) =>
+        task.departmentId === "seo" && task.id !== seoTask!.id,
+    );
+    expect(derivedTasks.length).toBeGreaterThanOrEqual(1);
+    for (const task of derivedTasks) {
+      expect(task.departmentId).toBe("seo");
+      expect(task.status).toBe("queued");
+    }
 
     const results: DepartmentResult[] = await workStore.listResultsForOrg(organizationId);
     expect(results.length).toBeGreaterThanOrEqual(1);
@@ -138,7 +156,7 @@ describe("Customer Zero E2E — Golden Image SEO + admin commands", () => {
     expect(seoResult!.summary).toMatch(/hallazgos/i);
     // Honest separation of observed / recommendation.
     expect(seoResult!.content).toMatch(/### Observado/);
-    expect(seoResult!.content).toMatch(/### Recomendaciones/);
+    expect(seoResult!.content).toMatch(/### Plan de resolución/);
   }, 30_000);
 
   it("B. admin /models returns the live LLM router registry and skips the normal chat", async () => {

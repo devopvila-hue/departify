@@ -225,6 +225,104 @@ export interface ChartData {
   rows?: { label: string; value: string | number }[];
 }
 
+export type SeoIssueSeverity = "critical" | "important" | "opportunity";
+export type SeoResolutionPhase = "now" | "next" | "later";
+
+export interface SeoObservedPage {
+  readonly title: string;
+  readonly description: string;
+  readonly canonical: string | null;
+  readonly robots: string | null;
+  readonly h1: readonly string[];
+  readonly h2Count: number;
+  readonly h3Count: number;
+  readonly internalLinksChecked: number;
+  readonly brokenInternalLinks: number;
+  readonly imagesWithoutAlt: number;
+  readonly structuredDataBlocks: number;
+  readonly socialMetadata: readonly string[];
+  readonly sitemap: "available" | "missing" | "unavailable";
+}
+
+export interface SeoIssueContract {
+  readonly id: string;
+  readonly severity: SeoIssueSeverity;
+  readonly title: string;
+  readonly description: string;
+  readonly evidence: string;
+  readonly recommendation: string;
+  readonly phase: SeoResolutionPhase;
+  readonly repositoryFiles: readonly string[];
+  readonly provenance: {
+    readonly observedFromWeb: true;
+    readonly observedFromRepo: boolean;
+    readonly inferred: boolean;
+    readonly recommended: true;
+  };
+}
+
+export interface SeoCorrelationSectionContract {
+  readonly issueId: string;
+  readonly title: string;
+  readonly observedWebEvidence: string;
+  readonly observedRepositoryFiles: readonly string[];
+  readonly inference: string;
+  readonly recommendation: string;
+}
+
+export interface SeoCorrelationContract {
+  readonly website: string;
+  readonly repository: {
+    readonly fullName: string;
+    readonly htmlUrl: string;
+    readonly defaultBranch: string;
+  } | null;
+  readonly sections: readonly SeoCorrelationSectionContract[];
+}
+
+export interface SeoPlanBucketContract {
+  readonly phase: SeoResolutionPhase;
+  readonly title: string;
+  readonly summary: string;
+  readonly issueIds: readonly string[];
+}
+
+export interface SeoResolutionPlanContract {
+  readonly buckets: readonly SeoPlanBucketContract[];
+  readonly totals: {
+    readonly critical: number;
+    readonly important: number;
+    readonly opportunity: number;
+  };
+}
+
+export interface SeoResolutionTaskPayloadContract {
+  readonly title: string;
+  readonly summary: string;
+  readonly capability: "seo.audit.website" | "seo.repository.read";
+  readonly toolId:
+    | "departify.seo.audit"
+    | "departify.seo.repository.inspect"
+    | "departify.seo.repository.list";
+  readonly severity: SeoIssueSeverity;
+  readonly phase: SeoResolutionPhase;
+  readonly issueIds: readonly string[];
+}
+
+export interface SeoResultContract {
+  readonly contract: "seo.audit.result";
+  readonly version: 1;
+  readonly url: string;
+  readonly fetchedAt: string;
+  readonly page: SeoObservedPage;
+  readonly issues: readonly SeoIssueContract[];
+  readonly correlation: SeoCorrelationContract;
+  readonly plan: SeoResolutionPlanContract;
+  readonly tasks: readonly SeoResolutionTaskPayloadContract[];
+  readonly source: "seo.audit.website";
+  readonly producedByCapability: "seo.audit.website";
+}
+
 export interface DepartmentResult {
   id: string;
   organizationId: string;

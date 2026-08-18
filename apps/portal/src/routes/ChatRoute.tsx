@@ -454,9 +454,15 @@ export function ChatRoute() {
       if (recovered) {
         return;
       }
-      setError(
-        "Departify no ha podido responderte ahora mismo. Vuelve a intentarlo en un momento.",
-      );
+      // Surface the real backend error message when present. The CEO
+      // should never see a generic fallback hiding what went wrong.
+      const backendError =
+        result && typeof result === "object" && "error" in result
+          ? (result as { error?: { message?: string; code?: string } }).error
+          : null;
+      const backendMessage =
+        backendError?.message ?? "Departify no ha podido responderte ahora mismo. Vuelve a intentarlo en un momento.";
+      setError(backendMessage);
       return;
     }
     console.info("[chat-timeline]", {
@@ -469,7 +475,7 @@ export function ChatRoute() {
     // connection_need / process_event cards from the proactive opening
     // payload are filtered out so they don't pollute the visible
     // transcript after every send.
-    const cleanEvents = [...filterContextualEvents(result.events)];
+    const cleanEvents = [...filterContextualEvents(result.events, result.routing?.intent)];
     // Contextual connection cards DO still render, but only when they
     // are genuinely tied to THIS turn: the routing produced a
     // connectionSuggestion because the CEO mentioned the tool or the
@@ -665,15 +671,26 @@ function inferSpeaker(
  * current turn; drop the proactive opening cards and the transient
  * work-state pill (shown once via `processStatus`, not as a durable
  * bubble).
+ *
+ * When the latest routing was to a non-Marketing department (e.g. SEO),
+ * the proactive "Elvira toma la iniciativa" card is filtered out as
+ * well — it would otherwise contaminate the SEO experience with
+ * Marketing identity. SEO has its own department surface.
  */
 function filterContextualEvents(
   events: readonly CommandCenterEvent[],
+  latestIntent?: string,
 ): readonly CommandCenterEvent[] {
+  const isNonMarketingDepartment =
+    latestIntent === "delegate_seo" ||
+    latestIntent === "summarize_company" ||
+    latestIntent === "external_tool_query";
   return events.filter((event) => {
     if (event.kind === "process_event") return false;
     if (event.kind === "work_state") return false;
     if (event.kind === "connection_need") return false;
     if (event.kind === "multiple_departments_note") return false;
+    if (event.kind === "intent_proactive" && isNonMarketingDepartment) return false;
     return true;
   });
 }
