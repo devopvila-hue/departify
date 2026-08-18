@@ -21,7 +21,7 @@ export function GitHubOAuthCallbackRoute() {
     void (async () => {
       const result = await api.finishExternalConnect(organizationId, "github_repository", code, state);
       if (result?.operational) {
-        navigate("/seo", { replace: true });
+        navigate(result?.returnPath || "/conexiones", { replace: true });
         return;
       }
       setMessage(result?.error?.message ?? "No se pudo conectar el proyecto. Puedes volver a SEO e intentarlo de nuevo.");

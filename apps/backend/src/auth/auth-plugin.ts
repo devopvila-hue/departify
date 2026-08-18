@@ -40,6 +40,7 @@ function isPublicPath(pathname: string): boolean {
   // gateway present a Supabase user token. The route handler remains fail
   // closed and validates the scoped token before reading any tenant state.
   if (pathname.startsWith("/internal/native-tools/")) return true;
+  if (pathname.startsWith("/connections/") && pathname.endsWith("/callback")) return true;
   if (pathname === "/documentation" || pathname.startsWith("/documentation/")) {
     return true;
   }
