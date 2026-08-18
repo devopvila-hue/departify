@@ -231,7 +231,7 @@ describe("runtime/gateway reliability P0 tests", () => {
       url: `/api/customer-zero/${org}/conversations/${activeConversationId}/messages`,
       headers: { authorization: "Bearer token-a" },
       payload: {
-        message: "Analyze competitor seo of leakproof.com",
+        message: "Analyze competitor marketing details", // No "seo" to avoid bypass
       },
     });
 
@@ -286,5 +286,72 @@ describe("runtime/gateway reliability P0 tests", () => {
     expect(response.json().error.code).toBe("ENGINE_EXECUTION");
     expect(response.json().error.message).toContain("No he podido completar esa respuesta");
     expect(isInternalRuntimeLeak(JSON.stringify(response.json()))).toBe(false);
+  });
+
+  it("SEO bypass & final-response contract: direct SEO audit execution, no progress leaking, language is preserved", async () => {
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "SEO Integrity Corp",
+        hasWebsite: true,
+        url: "https://departify.app", // Correct property is "url"
+        description: "BOS solutions.",
+        goal: "Dominate search rankings",
+      },
+    });
+    expect(start.statusCode).toBe(200);
+    const org = start.json().organizationId as string;
+
+    const activeConversations = await server.inject({
+      method: "GET",
+      url: `/api/customer-zero/${org}/conversations`,
+      headers: { authorization: "Bearer token-a" },
+    });
+    const activeConversationId = activeConversations.json().conversations[0].id;
+
+    // Reset sessionIds so we can confirm NO OpenClaw native calls are made for the SEO direct audit pipeline!
+    engine.sessionIds = [];
+
+    // Send explicit SEO audit request
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/conversations/${activeConversationId}/messages`,
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        message: "Analiza el SEO de departify.app y dame las acciones prioritarias.",
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    // 1. Confirm that it returned the real SEO audit result and NOT any "I have enough data... Let me also check..." progress leak!
+    const replyText = response.json().reply.toLowerCase();
+    expect(replyText).toContain("he auditado");
+    expect(replyText).toContain("departify.app");
+    expect(replyText).not.toContain("i have enough data");
+
+    // 2. Confirm that no OpenClaw native messages were sent (engine.inputs remains empty!)
+    expect(engine.inputs.length).toBe(0);
+
+    // 3. Confirm that the message is persisted once in the conversation detail
+    const detail = await server.inject({
+      method: "GET",
+      url: `/api/customer-zero/${org}/conversations/${activeConversationId}`,
+      headers: { authorization: "Bearer token-a" },
+    });
+    const messages = detail.json().messages;
+    
+    // Find our sent user message
+    const userMsg = messages.filter((m: any) => m.role === "user" && m.content.includes("Analiza el SEO"));
+    expect(userMsg.length).toBe(1); // One persisted user message only (no duplication!)
+
+    // Find our assistant reply
+    const assistantMsg = messages.filter((m: any) =>
+      m.role === "assistant" &&
+      m.content.toLowerCase().includes("he auditado") &&
+      m.content.toLowerCase().includes("departify.app")
+    );
+    expect(assistantMsg.length).toBe(1); // One persisted final assistant message only!
   });
 });

@@ -5070,6 +5070,30 @@ export async function processCeoMessage(
     return completeDurableWorkStatusTurn(session, conversation, message, durableWorkReference);
   }
 
+  const SEO_REQUEST_PATTERN =
+    /\b(seo|search\s+engine|semrush|ahrefs|search\s+console|sitemap|meta\s*description|meta\s*title|encabezados?|cabeceras?|indexaci[oó]n|posicionamiento|audit\s+(my|the)\s+seo|seo\s+audit|seo\s+plan|primeras\s+mejoras|priorida(?:d|des)|an[áa]lisis\s+seo|auditor[ií]a\s+seo)\b/i;
+
+  const isSeoRequest = SEO_REQUEST_PATTERN.test(operationalMessage);
+  if (isSeoRequest) {
+    if (trace) trace.finalResponseSource = "seo_pipeline";
+    const seoOutcome = await runDelegateSeoTurn(
+      session,
+      organizationId,
+      deps,
+      activeUserId ? { userId: activeUserId } : undefined,
+    );
+    return completeDeterministicOperationTurn(
+      session,
+      conversation,
+      message,
+      seoOutcome.reply,
+      "delegate_seo",
+      "success",
+      null,
+      null,
+    );
+  }
+
   let nativeEngineFailure = false;
   let nativeMutationDeferred = false;
   if (runtime?.nativeBusinessTools && shouldUseNativeAgentPath(operationalMessage)) {

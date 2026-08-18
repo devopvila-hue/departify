@@ -486,17 +486,24 @@ export function ChatRoute() {
         suggestion: result.connectionSuggestion,
       });
     }
-    // Append both the optimistic user line and the assistant reply so the
-    // CEO sees their own message immediately and a continuous history.
-    setTranscript((prev) => [
-      ...prev,
-      { role: "user", content: value },
-      {
-        role: "assistant",
+    // Append the user line (if not already rendered by the polling reload)
+    // and the assistant reply so the CEO sees a continuous history.
+    setTranscript((prev) => {
+      const last = prev.at(-1);
+      const assistantLine = {
+        role: "assistant" as const,
         content: visibleAssistantMessage(result!.reply),
         speaker: inferSpeaker(cleanEvents),
-      },
-    ]);
+      };
+      if (last?.role === "user" && last.content === value) {
+        return [...prev, assistantLine];
+      }
+      return [
+        ...prev,
+        { role: "user" as const, content: value },
+        assistantLine,
+      ];
+    });
     setEvents(cleanEvents);
     if (result.conversationId) setCurrentConversationId(result.conversationId);
   }
