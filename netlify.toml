@@ -1,26 +1,34 @@
 plugins = []
 headers = []
 
+# Monorepo canonical Netlify config.
+# Lives at the REPO ROOT so Netlify runs commands with the full pnpm
+# workspace context (apps/*, packages/*) and resolves the @departify/portal
+# filter. Base directory is then `apps/portal` so Vite + the publish dir
+# resolve to the same physical location.
+
 [dev]
 command = "pnpm --filter @departify/portal dev --host 0.0.0.0"
 port = 8888
 targetPort = 5173
 
-[functions]
-
-[functions."*"]
-
 [build]
-# The repository is the Netlify build root while the portal package writes its
-# Vite output below apps/portal. Keep this explicit for Git-connected builds.
-publish = "dist"
+# Run from the REPO ROOT so pnpm can resolve the workspace filter
+# (@departify/portal). Publish directory is then expressed as a path
+# RELATIVE TO THE REPO ROOT so Netlify finds apps/portal/dist.
+base = "."
+command = "pnpm --filter @departify/portal build"
+publish = "apps/portal/dist"
 publishOrigin = "config"
 commandOrigin = "config"
-command = "pnpm --filter @departify/portal build"
 
 [build.environment]
 NODE_VERSION = "22"
 PNPM_VERSION = "9.15.0"
+
+[functions]
+
+[functions."*"]
 
 [build.processing]
 

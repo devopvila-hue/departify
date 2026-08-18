@@ -26,7 +26,6 @@ import {
   api,
   type BrandingView,
   type ByokProviderView,
-  type ByokProvidersView,
   type CompanyStatus,
   type ConnectionCardView,
   type LlmSettingsView,
