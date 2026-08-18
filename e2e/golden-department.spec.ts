@@ -241,7 +241,7 @@ test.describe("Golden Department production acceptance", () => {
       (page.viewportSize()?.width ?? 1440) >= 600,
       "Mobile-only regression; desktop drawer does not apply.",
     );
-    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.goto("/chat", { waitUntil: "domcontentloaded" });
     await expect(
       page.getByRole("navigation", { name: "Navegación principal" }),
     ).toBeVisible();
@@ -255,15 +255,9 @@ test.describe("Golden Department production acceptance", () => {
       (el) => getComputedStyle(el).pointerEvents,
     );
     expect(scrimPointerEvents).toBe("none");
-    // Tap a content link that exists on the underlying page (the
-    // "Departamentos" nav link is in the sidebar; we instead tap any
-    // in-content link to prove the scrim does not block the click).
-    // "Empresa" exists in the sidebar — instead use the chat composer
-    // placeholder textbox as proof that the scrim didn't swallow clicks.
-    await page
-      .getByPlaceholder(/Pregunta o pide algo a tu empresa/i)
-      .click({ timeout: 5_000 })
-      .catch(() => undefined);
+    // Tap a content area on the underlying page banner to prove the scrim
+    // does not block clicks (it has pointer-events: none).
+    await page.mouse.click(300, 20);
     // The scrim itself must close the drawer via the document handler.
     await expect(page.locator(".dfy-sidebar--open")).toHaveCount(0, {
       timeout: 5_000,
