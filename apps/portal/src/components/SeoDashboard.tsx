@@ -36,35 +36,43 @@ export function SeoDashboard(props: {
   derivedTasks?: readonly DepartmentTask[];
 }) {
   const { contract, derivedTasks = [] } = props;
-  const sortedIssues = [...contract.issues].sort((a, b) => {
+  const issuesList = contract?.issues || [];
+  const sortedIssues = [...issuesList].sort((a, b) => {
     const order = { critical: 0, important: 1, opportunity: 2 } as const;
-    return order[a.severity] - order[b.severity];
+    const priorityA = order[a?.severity as keyof typeof order] ?? 99;
+    const priorityB = order[b?.severity as keyof typeof order] ?? 99;
+    return priorityA - priorityB;
   });
 
   // Index derived tasks by the issues they cover so the plan buckets
   // show their live state (queued / running / completed / failed).
   const tasksByPhase: Record<string, DepartmentTask[]> = { now: [], next: [], later: [] };
   for (const task of derivedTasks) {
-    const phaseMatch = contract.tasks.find((payload) => payload.title === task.title);
-    if (phaseMatch) tasksByPhase[phaseMatch.phase].push(task);
+    const phaseMatch = contract?.tasks?.find((payload) => payload.title === task.title);
+    if (phaseMatch) {
+      const bucket = tasksByPhase[phaseMatch.phase];
+      if (bucket) {
+        bucket.push(task);
+      }
+    }
   }
 
   // Derive "Resueltos" from the live task list — never from a fake score.
   const resolvedCount = derivedTasks.filter(
     (t) => t.status === "completed",
   ).length;
-  const totalCount = contract.issues.length;
+  const totalCount = issuesList.length;
   const unresolvedCount = Math.max(0, totalCount - resolvedCount);
 
   return (
     <div className="dfy-seo-dashboard" data-testid="seo-dashboard">
       <Card title="Auditoría SEO">
-        <p className="dfy-muted">Web auditada: <strong>{contract.url}</strong></p>
-        <p className="dfy-muted">Fecha: {new Date(contract.fetchedAt).toLocaleString()}</p>
+        <p className="dfy-muted">Web auditada: <strong>{contract?.url || "URL desconocida"}</strong></p>
+        <p className="dfy-muted">Fecha: {contract?.fetchedAt ? new Date(contract.fetchedAt).toLocaleString() : "Fecha desconocida"}</p>
         <p className="dfy-muted">
-          Estado: <strong>{contract.issues.length === 0 ? "Sin hallazgos verificables" : "Auditoría completada"}</strong>
+          Estado: <strong>{issuesList.length === 0 ? "Sin hallazgos verificables" : "Auditoría completada"}</strong>
         </p>
-        {contract.issues.length === 0 && (
+        {issuesList.length === 0 && (
           <p className="dfy-muted">
             Revisamos title, description, canonical, robots, encabezados, enlaces
             internos, imágenes, datos estructurados, metadata social y sitemap. No
@@ -75,9 +83,9 @@ export function SeoDashboard(props: {
 
       <Card title="Resumen">
         <div className="dfy-dashboard-kpis">
-          <div className="dfy-dashboard-kpi"><span>Críticos</span><strong>{contract.plan.totals.critical}</strong></div>
-          <div className="dfy-dashboard-kpi"><span>Importantes</span><strong>{contract.plan.totals.important}</strong></div>
-          <div className="dfy-dashboard-kpi"><span>Oportunidades</span><strong>{contract.plan.totals.opportunity}</strong></div>
+          <div className="dfy-dashboard-kpi"><span>Críticos</span><strong>{contract?.plan?.totals?.critical ?? 0}</strong></div>
+          <div className="dfy-dashboard-kpi"><span>Importantes</span><strong>{contract?.plan?.totals?.important ?? 0}</strong></div>
+          <div className="dfy-dashboard-kpi"><span>Oportunidades</span><strong>{contract?.plan?.totals?.opportunity ?? 0}</strong></div>
           <div className="dfy-dashboard-kpi"><span>Resueltos</span><strong>{resolvedCount}</strong></div>
         </div>
       </Card>
@@ -120,35 +128,39 @@ export function SeoDashboard(props: {
 
       <Card title="Plan de resolución">
         <ol className="dfy-plan">
-          {contract.plan.buckets.map((bucket) => (
-            <li key={bucket.phase} className={`dfy-plan__bucket dfy-plan__bucket--${bucket.phase}`}>
-              <div className="dfy-plan__head">
-                <Badge tone={PHASE_LABEL[bucket.phase].tone}>{PHASE_LABEL[bucket.phase].title}</Badge>
-                <strong>{bucket.summary}</strong>
-              </div>
-              <p className="dfy-muted">
-                {bucket.issueIds.length === 0
-                  ? "Sin acciones en esta fase."
-                  : `${bucket.issueIds.length} problema${bucket.issueIds.length === 1 ? "" : "s"} agrupado${bucket.issueIds.length === 1 ? "" : "s"}.`}
-              </p>
-              {tasksByPhase[bucket.phase].length > 0 && (
-                <ul className="dfy-plan__tasks">
-                  {tasksByPhase[bucket.phase].map((task) => (
-                    <li key={task.id} className="dfy-plan__task">
-                      <strong>{task.title}</strong>
-                      <Badge tone={task.status === "completed" ? "success" : task.status === "failed" ? "danger" : "accent"}>
-                        {task.status === "completed" ? "Resuelto" : task.status === "failed" ? "Fallido" : task.status === "running" ? "En progreso" : "Pendiente"}
-                      </Badge>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </li>
-          ))}
+          {(contract?.plan?.buckets || []).map((bucket) => {
+            const phaseInfo = PHASE_LABEL[bucket.phase as keyof typeof PHASE_LABEL] || { title: bucket.phase, tone: "neutral" };
+            const tasksList = tasksByPhase[bucket.phase] || [];
+            return (
+              <li key={bucket.phase} className={`dfy-plan__bucket dfy-plan__bucket--${bucket.phase}`}>
+                <div className="dfy-plan__head">
+                  <Badge tone={phaseInfo.tone}>{phaseInfo.title}</Badge>
+                  <strong>{bucket.summary}</strong>
+                </div>
+                <p className="dfy-muted">
+                  {bucket.issueIds.length === 0
+                    ? "Sin acciones en esta fase."
+                    : `${bucket.issueIds.length} problema${bucket.issueIds.length === 1 ? "" : "s"} agrupado${bucket.issueIds.length === 1 ? "" : "s"}.`}
+                </p>
+                {tasksList.length > 0 && (
+                  <ul className="dfy-plan__tasks">
+                    {tasksList.map((task) => (
+                      <li key={task.id} className="dfy-plan__task">
+                        <strong>{task.title}</strong>
+                        <Badge tone={task.status === "completed" ? "success" : task.status === "failed" ? "danger" : "accent"}>
+                          {task.status === "completed" ? "Resuelto" : task.status === "failed" ? "Fallido" : task.status === "running" ? "En progreso" : "Pendiente"}
+                        </Badge>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            );
+          })}
         </ol>
       </Card>
 
-      {contract.correlation.sections.length > 0 && (
+      {contract?.correlation?.sections && contract.correlation.sections.length > 0 && (
         <Card title="Web ↔ Repositorio — correlación">
           {contract.correlation.repository ? (
             <p className="dfy-muted">
@@ -160,7 +172,7 @@ export function SeoDashboard(props: {
               <li key={section.issueId}>
                 <strong>{section.title}</strong>
                 <p><strong>OBSERVADO (web):</strong> {section.observedWebEvidence}</p>
-                {section.observedRepositoryFiles.length > 0 && (
+                {section.observedRepositoryFiles && section.observedRepositoryFiles.length > 0 && (
                   <p>
                     <strong>OBSERVADO (repo):</strong>{" "}
                     {section.observedRepositoryFiles.map((file, idx) => (

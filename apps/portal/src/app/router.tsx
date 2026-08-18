@@ -23,12 +23,27 @@ import { SeoRoute } from "@/routes/SeoRoute";
 
 export function RouteErrorFallback() {
   const navigate = useNavigate();
+  const path = typeof window !== "undefined" ? window.location.pathname : "";
+  let target = "/inicio";
+  let label = "Volver al inicio";
+
+  if (path === "/resultados") {
+    target = "/inicio";
+    label = "Volver al inicio";
+  } else if (path.startsWith("/resultados/")) {
+    target = "/resultados";
+    label = "Volver a Resultados";
+  } else if (path.startsWith("/conexiones")) {
+    target = "/conexiones";
+    label = "Volver a Conexiones";
+  }
+
   return (
     <main className="dfy-page" role="alert">
       <h1>No hemos podido abrir esta sección</h1>
       <p>Ha ocurrido un problema inesperado. Puedes volver al portal y continuar desde allí.</p>
-      <button type="button" className="dfy-button" onClick={() => navigate("/conexiones", { replace: true })}>
-        Volver a Conexiones
+      <button type="button" className="dfy-button" onClick={() => navigate(target, { replace: true })}>
+        {label}
       </button>
     </main>
   );

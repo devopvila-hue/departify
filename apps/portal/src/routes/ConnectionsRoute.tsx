@@ -687,6 +687,8 @@ function humanCapability(capability: string): string {
     "marketing.shopify.customers.list": "Consultar clientes de Shopify",
     "marketing.shopify.products.create": "Preparar productos de Shopify",
     "marketing.shopify.products.update": "Actualizar productos de Shopify",
+    "seo.audit.website": "Auditar mi web",
+    "seo.repository.read": "Analizar código web",
   };
   return labels[capability] ?? capability.replace(/^[^.]+./, "").replace(/[._]/g, " ");
 }

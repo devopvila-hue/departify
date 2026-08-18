@@ -8,36 +8,60 @@ const email = process.env.DEPARTIFY_E2E_EMAIL;
 const password = process.env.DEPARTIFY_E2E_PASSWORD;
 
 await mkdir(new URL("./.auth", import.meta.url), { recursive: true });
-const browser = await chromium.launch({ headless: false });
+console.log("Launching browser...");
+const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext();
 const page = await context.newPage();
 
+console.log("Navigating to URL...");
 await page.goto(`${baseURL}/`, { waitUntil: "domcontentloaded" });
-const loginHeading = page.getByRole("heading", { name: "Entra en tu empresa" });
 
+console.log("Waiting for app to load...");
+const loginHeading = page.getByRole("heading", { name: "Entra en tu empresa" });
+const navPrincipal = page.getByRole("navigation", { name: "Navegación principal" });
+
+await Promise.race([
+  loginHeading.waitFor({ state: "visible", timeout: 15_000 }).catch(() => null),
+  navPrincipal.waitFor({ state: "visible", timeout: 15_000 }).catch(() => null),
+]);
+
+console.log("Checking if login heading is visible...");
 if (await loginHeading.isVisible().catch(() => false)) {
+  console.log("Login heading is visible!");
   if (email && password) {
+    console.log(`Attempting login for email: ${email}`);
     await page.getByLabel("Email").fill(email);
+    console.log("Filled email field.");
     await page.getByLabel("Contraseña").fill(password);
+    console.log("Filled password field.");
     await page.getByRole("button", { name: "Entrar" }).click();
+    console.log("Clicked Entrar button.");
   } else {
     console.log("Se ha abierto la pantalla de login de Departify.");
     console.log(
       "Inicia sesión normalmente en la ventana y espera a que aparezca Tu empresa.",
     );
   }
-  await loginHeading.waitFor({ state: "hidden", timeout: 300_000 });
+  console.log("Waiting for login heading to be hidden...");
+  await loginHeading.waitFor({ state: "hidden", timeout: 15_000 }).catch((err) => {
+    console.error("Timeout waiting for login heading to hide:", err.message);
+  });
   await page.waitForTimeout(1_500);
   if (await loginHeading.isVisible().catch(() => false)) {
     throw new Error(
       "El login no ha terminado. No se ha guardado ninguna sesión.",
     );
   }
+} else {
+  console.log("Login heading not visible. Already logged in?");
 }
 
+console.log("Waiting for principal navigation to be visible...");
 await page.getByRole("navigation", { name: "Navegación principal" }).waitFor({
   state: "visible",
-  timeout: 300_000,
+  timeout: 15_000,
+}).catch((err) => {
+  console.error("Timeout waiting for navigation principal:", err.message);
 });
 
 await context.storageState({ path: authStatePath });

@@ -111,7 +111,9 @@ export function ResultsRoute() {
                   {grouped.history.map((result) => (
                     <li key={result.id}>
                       <strong>{result.title}</strong>{" "}
-                      <span className="dfy-muted">{result.departmentId} · {new Date(result.createdAt).toLocaleString()}</span>
+                      <span className="dfy-muted">
+                        {result.departmentId} · {result.createdAt ? new Date(result.createdAt).toLocaleString() : "Fecha desconocida"}
+                      </span>
                       <p className="dfy-muted">{result.summary}</p>
                     </li>
                   ))}
@@ -146,7 +148,11 @@ function groupResultsByOperationalKey(results: DepartmentResult[]): GroupedResul
   const active: DepartmentResult[] = [];
   const history: DepartmentResult[] = [];
   for (const bucket of byKey.values()) {
-    bucket.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    bucket.sort((a, b) => {
+      const dateA = a.createdAt ? String(a.createdAt) : "";
+      const dateB = b.createdAt ? String(b.createdAt) : "";
+      return dateB.localeCompare(dateA);
+    });
     if (bucket[0]) active.push(bucket[0]);
     for (let i = 1; i < bucket.length; i += 1) {
       const item = bucket[i];

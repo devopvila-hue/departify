@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { api, type CompanyStatus, type HeadIdentity, type MarketingWorkItem } from "@/app/api";
+import { api, type CompanyStatus, type HeadIdentity, type MarketingWorkItem, type DepartmentTask } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import { readable } from "@/app/readable";
 import { TasksIcon } from "@/components/icons";
+import { Badge } from "@/components/primitives";
 
 /**
  * Tareas — the operational inbox.
@@ -209,9 +210,16 @@ function TaskGroup(props: {
             <li key={item.id} className={`dfy-task${item.id === props.focusedTaskId ? " dfy-task--focused" : ""}`}>
             <div className="dfy-task__head">
               <strong>{item.title}</strong>
-              <span className={`dfy-task__status dfy-task__status--${item.status ?? "pending"}`}>
-                {labelForStatus(item.status ?? "pending")}
-              </span>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                {item.departmentId && (
+                  <Badge tone="neutral">
+                    {item.departmentId.toUpperCase()}
+                  </Badge>
+                )}
+                <span className={`dfy-task__status dfy-task__status--${item.status ?? "pending"}`}>
+                  {labelForStatus(item.status ?? "pending")}
+                </span>
+              </div>
             </div>
             {item.id === props.focusedTaskId && <p className="dfy-muted dfy-muted--small">Tarea vinculada al correo</p>}
             <p className="dfy-muted">{item.description}</p>
@@ -259,20 +267,17 @@ interface TaskListItem {
   status: string;
   result?: string;
   actionable: boolean;
+  departmentId?: string;
 }
 
-function toTaskListItem(task: {
-  id: string;
-  title: string;
-  summary: string;
-  status: string;
-}): TaskListItem {
+function toTaskListItem(task: DepartmentTask): TaskListItem {
   return {
     id: task.id,
     title: task.title,
     description: task.summary,
     status: task.status,
     actionable: false,
+    departmentId: task.departmentId,
   };
 }
 
@@ -284,6 +289,7 @@ function toLegacyTaskListItem(item: MarketingWorkItem): TaskListItem {
     status: item.status ?? "pending",
     ...(item.result ? { result: item.result } : {}),
     actionable: true,
+    departmentId: "marketing",
   };
 }
 
