@@ -10,32 +10,29 @@ import {
   bootstrapLlmRouter,
   type LlmRouter,
 } from "@departify/llm-router";
-import {
-  type LlmCredentialStore,
-  BYOK_PROVIDER,
-} from "./llm-credentials.js";
+import { type LlmCredentialStore } from "./llm-credentials.js";
+import { listByokProviderDescriptors } from "./byok-providers.js";
 
 export interface LlmRuntime {
   readonly router: LlmRouter;
 }
 
 /**
- * Builds the real LLM Router for Customer Zero. The OpenAI provider is
- * OpenAI-compatible, so it can target any compatible endpoint (Sprint 57:
- * the local gateway when configured via OPENAI_BASE_URL). No fake provider,
- * no mocked replies — this is the real inference stack.
+ * Builds the real LLM Router for Customer Zero. Every supported BYOK
+ * provider (openai + minimax today) exposes an OpenAI-compatible
+ * /v1/chat/completions endpoint, so the router is built from the OpenAI
+ * adapter instantiated with the tenant's BYOK key + base URL. We try
+ * providers in registry order and pick the first one with a stored
+ * credential; the rest of the runtime does not need to know which.
  */
 export function buildLlmRuntime(options?: {
   organizationId?: string;
   credentialStore?: LlmCredentialStore;
 }): LlmRuntime {
-  // The router is built lazily: a session (and therefore the whole product
-  // flow) must not fail to exist just because the provider is not configured
-  // in this environment. When it is missing, the calls fail honestly at call
-  // time and the analysis degrades to the deterministic facts.
   let cached: LlmRouter | null = null;
   let tenantCredentialKey: string | null = null;
   let tenantRouter: LlmRouter | null = null;
+
   const resolve = (): LlmRouter => {
     if (!cached) {
       const config: LlmRouterConfig = loadLlmRouterConfig();
@@ -47,32 +44,33 @@ export function buildLlmRuntime(options?: {
 
   const resolveTenant = async (): Promise<LlmRouter> => {
     if (!options?.organizationId || !options.credentialStore) return resolve();
-    const credential = await options.credentialStore.get(
-      options.organizationId,
-      BYOK_PROVIDER,
-    );
-    if (!credential) return resolve();
-    const cacheKey = `${credential.model}:${credential.apiKey}`;
-    if (!tenantRouter || tenantCredentialKey !== cacheKey) {
-      tenantRouter = bootstrapLlmRouter({
+    const store = options.credentialStore;
+    for (const provider of listByokProviderDescriptors()) {
+      if (!provider.enabled) continue;
+      const row = await store.get(options.organizationId, provider.id);
+      if (!row?.apiKey) continue;
+      const cacheKey = `${provider.id}:${row.model}:${row.apiKey}`;
+      if (tenantRouter && tenantCredentialKey === cacheKey) return tenantRouter;
+      const providerRouter = bootstrapLlmRouter({
         config: {
-          defaultProvider: BYOK_PROVIDER,
+          defaultProvider: provider.id,
           defaultStrategy: loadLlmRouterConfig().defaultStrategy,
         },
-        providers: [createOpenAIProviderFromApiKey(credential.apiKey, credential.model)],
+        providers: [
+          createOpenAIProviderFromApiKey(row.apiKey, row.model, row.baseUrl ?? undefined),
+        ],
       }).router;
+      tenantRouter = providerRouter;
       tenantCredentialKey = cacheKey;
+      return tenantRouter;
     }
-    return tenantRouter;
+    return resolve();
   };
 
   const requestMethods = new Set(["chat", "complete", "embed", "stream"]);
 
   const router = new Proxy({} as LlmRouter, {
     get(_target, property) {
-      // Never resolve the provider just because a property is READ (the tool
-      // catalog inspects the router at registration time). Resolution happens
-      // when the method is actually called.
       if (requestMethods.has(String(property))) {
         if (property === "stream") {
           return async function* (...args: unknown[]) {
@@ -101,8 +99,6 @@ export function buildLlmRuntime(options?: {
         try {
           target = resolve() as unknown as Record<string, unknown>;
         } catch (cause) {
-          // Registration-time metadata reads must not break the product flow
-          // when the provider is not configured in this environment.
           if (property === "getDefaultProviderId") {
             return "unconfigured";
           }

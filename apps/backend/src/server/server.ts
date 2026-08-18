@@ -16,7 +16,7 @@ import { registerInternalEngineRoutes } from "./routes/internal-engine.js";
 import { registerMarketingRoutes } from "./routes/marketing-routes.js";
 import { registerConnectorRuntimeRoutes } from "./routes/connector-runtime.js";
 import { registerDepartmentRoutes } from "./routes/department-routes.js";
-import { registerVideoRoutes } from "./routes/video.js";
+import { registerVideoRoutes, recoverAllActiveVideoJobsOnBoot } from "./routes/video.js";
 import type { ServerDeps } from "./deps.js";
 
 export async function buildServer(
@@ -28,6 +28,11 @@ export async function buildServer(
       level: config.logLevel,
     },
     requestIdHeader: "x-request-id",
+    // Branding logo uploads are base64-encoded PNG/JPG/WEBP up to 5 MB;
+    // the encoded payload is ~33% larger, plus JSON envelope, so we
+    // allow 10 MB to keep the request comfortably under the limit and
+    // reject pathological payloads well above the policy.
+    bodyLimit: 10 * 1024 * 1024,
     genReqId: (request) => {
       const header = request.headers["x-request-id"];
       if (typeof header === "string" && header.trim().length > 0) {
@@ -65,6 +70,9 @@ export async function buildServer(
   await registerConnectorRuntimeRoutes(server, deps);
   await registerDepartmentRoutes(server, deps);
   await registerVideoRoutes(server, deps);
+
+  // Recovery: Automatically recover and resume all active VideoJobs on server boot-up
+  void recoverAllActiveVideoJobsOnBoot(deps);
 
   return server;
 }

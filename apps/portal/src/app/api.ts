@@ -132,7 +132,7 @@ export interface ConnectionCardDetailView extends ConnectionCardView {
 
 export interface LlmSettingsView {
   organizationId: string;
-  provider: "openai";
+  provider: string;
   providerName: string;
   model: string;
   modelLabel: string;
@@ -143,8 +143,44 @@ export interface LlmSettingsView {
   help?: {
     actionUrl: string;
     docsUrl: string;
+    apiKeyPlaceholder?: string;
     steps: string[];
-  };
+  } | null;
+}
+
+export interface ByokProviderView {
+  id: string;
+  label: string;
+  enabled: boolean;
+  credentialType: "api_key";
+  requiresBaseUrl: boolean;
+  apiKeyPlaceholder: string;
+  documentationUrl: string;
+  apiKeyUrl: string;
+  models: {
+    id: string;
+    label: string;
+    recommended: boolean;
+    enabled: boolean;
+  }[];
+}
+
+export interface ByokProvidersView {
+  organizationId: string;
+  providers: ByokProviderView[];
+}
+
+export interface BrandingView {
+  organizationId: string;
+  brandName: string | null;
+  logo: {
+    assetPath: string;
+    mimeType: string;
+    sizeBytes: number;
+    signedUrl: string;
+    expiresAt: string;
+  } | null;
+  updatedAt: string | null;
 }
 
 export interface DecisionView {
@@ -1287,14 +1323,65 @@ export const api = {
       `/api/customer-zero/${org}/llm-settings`,
       60_000,
     ),
+  byokProviders: (org: string) =>
+    cachedOrgGetJson<ByokProvidersView>(
+      org,
+      "byok-providers",
+      `/api/customer-zero/${org}/byok/providers`,
+      60_000,
+    ),
   saveLlmSettings: async (
     org: string,
-    payload: { provider: "openai"; model: string; apiKey: string },
+    payload: { provider: string; model: string; apiKey: string; baseUrl?: string },
   ) => {
     const result = await postJson<
       LlmSettingsView & { error?: { code?: string; message?: string } }
     >(`/api/customer-zero/${org}/llm-settings`, payload);
     if (result?.configured) invalidateOrg(org, ["llm-settings", "overview"]);
+    return result;
+  },
+  deleteLlmSettings: async (org: string) => {
+    const result = await fetchJson<{ organizationId: string; configured: boolean } & {
+      error?: { code?: string; message?: string };
+    }>(`/api/customer-zero/${org}/llm-settings`, { method: "DELETE" });
+    if (result && !result.error) invalidateOrg(org, ["llm-settings", "overview"]);
+    return result;
+  },
+  branding: (org: string) =>
+    cachedOrgGetJson<BrandingView>(
+      org,
+      "branding",
+      `/api/customer-zero/${org}/branding`,
+      60_000,
+    ),
+  uploadBrandingLogo: async (
+    org: string,
+    payload: { mimeType: string; dataBase64: string; fileName?: string },
+  ) => {
+    const result = await postJson<BrandingView & {
+      error?: { code?: string; message?: string };
+    }>(`/api/customer-zero/${org}/branding/logo`, payload);
+    if (result && !result.error) invalidateOrg(org, ["branding", "overview"]);
+    return result;
+  },
+  deleteBrandingLogo: async (org: string) => {
+    const result = await fetchJson<BrandingView & {
+      error?: { code?: string; message?: string };
+    }>(`/api/customer-zero/${org}/branding/logo`, { method: "DELETE" });
+    if (result && !result.error) invalidateOrg(org, ["branding", "overview"]);
+    return result;
+  },
+  updateBrandingName: async (
+    org: string,
+    payload: { brandName: string | null },
+  ) => {
+    const result = await fetchJson<BrandingView & {
+      error?: { code?: string; message?: string };
+    }>(`/api/customer-zero/${org}/branding`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    });
+    if (result && !result.error) invalidateOrg(org, ["branding", "overview"]);
     return result;
   },
   workFeed: (org: string, since?: string) =>

@@ -137,11 +137,51 @@ describe("portal shell", () => {
     expect(await screen.findByTestId("settings-route")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /^preferencias operativas$/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /lo que departify sabe/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/todavía no disponible/i)).toBeInTheDocument();
+    // The Logo y branding card no longer says "todavía no disponible";
+    // it shows the new clean empty-state copy that prompts the CEO to
+    // upload a logo.
+    expect(screen.getByText(/logo de tu empresa/i)).toBeInTheDocument();
   });
 
   it("guides and saves the organization BYOK key without rendering the secret", async () => {
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url.includes("/byok/providers")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            organizationId: "org_moon",
+            providers: [
+              {
+                id: "openai",
+                label: "OpenAI",
+                enabled: true,
+                credentialType: "api_key",
+                requiresBaseUrl: false,
+                apiKeyPlaceholder: "sk-…",
+                documentationUrl:
+                  "https://help.openai.com/en/articles/4936850-where-do-i-find-my-openai-api-key",
+                apiKeyUrl: "https://platform.openai.com/api-keys",
+                models: [
+                  { id: "gpt-4o-mini", label: "Recomendado — GPT-4o mini", recommended: true, enabled: true },
+                ],
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.includes("/branding")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            organizationId: "org_moon",
+            brandName: null,
+            logo: null,
+            updatedAt: null,
+          }),
+        } as Response);
+      }
       if (url.includes("/llm-settings") && init?.method === "POST") {
         return Promise.resolve({
           ok: true,
@@ -176,6 +216,7 @@ describe("portal shell", () => {
             help: {
               actionUrl: "https://platform.openai.com/api-keys",
               docsUrl: "https://help.openai.com/en/articles/4936850-where-do-i-find-my-openai-api-key",
+              apiKeyPlaceholder: "sk-…",
               steps: [],
             },
           }),

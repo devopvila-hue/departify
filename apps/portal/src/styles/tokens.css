@@ -1337,6 +1337,66 @@ select {
   gap: 12px;
 }
 
+.dfy-settings-branding {
+  display: grid;
+  gap: 16px;
+}
+
+.dfy-settings-branding__preview {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.dfy-settings-branding__image {
+  max-width: 220px;
+  max-height: 120px;
+  border-radius: var(--dfy-radius-sm);
+  background: var(--dfy-color-surface-raised);
+  padding: 12px;
+  border: 1px solid var(--dfy-color-border);
+  object-fit: contain;
+}
+
+.dfy-settings-branding__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.dfy-settings-branding__file {
+  display: none;
+}
+
+.dfy-settings-branding__name {
+  display: grid;
+  gap: 6px;
+  max-width: 34rem;
+}
+
+.dfy-settings-branding__name label {
+  color: var(--dfy-color-muted);
+  font-size: 0.82rem;
+}
+
+.dfy-settings-branding__namerow {
+  display: flex;
+  gap: 8px;
+}
+
+.dfy-settings-branding__namerow input {
+  flex: 1;
+  min-height: 40px;
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-sm);
+  background: var(--dfy-color-surface-raised);
+  color: var(--dfy-color-text);
+  padding: 0 10px;
+  font: inherit;
+}
+
 .dfy-chat {
   display: grid;
   gap: 12px;

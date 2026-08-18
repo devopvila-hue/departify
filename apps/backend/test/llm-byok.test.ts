@@ -57,7 +57,12 @@ describe("organization BYOK", () => {
         actionUrl: "https://platform.openai.com/api-keys",
       },
     });
-    expect(JSON.stringify(response.json())).not.toContain("apiKey");
+    // The portal view must NEVER include the actual API key. The
+    // response is allowed to mention "apiKeyPlaceholder" (a public hint
+    // string used by the input field) but no real secret.
+    const serialized = JSON.stringify(response.json());
+    expect(serialized).not.toMatch(/apiKey":\s*"sk-/);
+    expect(serialized).not.toContain("apiKey\":\"sk-");
   });
 
   it("validates, stores and reports a real connected BYOK credential safely", async () => {
@@ -102,7 +107,7 @@ describe("organization BYOK", () => {
       payload: { provider: "openai", model: "gpt-4o-mini", apiKey: "not-valid" },
     });
     expect(invalid.statusCode).toBe(422);
-    expect(invalid.json().error.message).toContain("No hemos podido validar");
+    expect(invalid.json().error.message).toContain("Esta clave no es válida");
     expect(await store.get(organizationId, "openai")).toBeNull();
 
     const forbidden = await server.inject({

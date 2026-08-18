@@ -14,6 +14,7 @@ import type { DepartmentMemoryStore } from "../customer-zero/department-memory.j
 import type { ConnectorRuntime, ConnectorRuntimeCandidate } from "@departify/connector-runtime";
 import type { SeoRepositoryLinkStore } from "../customer-zero/seo-repository.js";
 import type { LlmCredentialStore } from "../customer-zero/llm-credentials.js";
+import type { OrganizationBrandingStore } from "../customer-zero/organization-branding.js";
 
 /**
  * Server dependencies — Phase P0-A / P-B.
@@ -66,4 +67,6 @@ export interface ServerDeps {
   seoRepositoryLinks?: SeoRepositoryLinkStore;
   /** Durable organization-owned BYOK credential vault. */
   llmCredentials?: LlmCredentialStore;
+  /** Durable organization-owned branding (logo + brand name). */
+  branding?: OrganizationBrandingStore;
 }

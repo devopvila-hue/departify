@@ -40,6 +40,28 @@ import {
   getLlmCredentialStore,
   type LlmCredentialRecord,
 } from "../../customer-zero/llm-credentials.js";
+import {
+  type ByokModelDescriptor,
+  type ByokProviderDescriptor,
+  type ByokProviderId,
+  getByokModelDescriptor,
+  getByokProviderDescriptor,
+  isKnownByokProvider,
+  listByokProviderDescriptors,
+  MINIMAX_DEFAULT_BASE_URL,
+  validateByokCredential,
+} from "../../customer-zero/byok-providers.js";
+import {
+  BrandingStorageError,
+  BrandingValidationError,
+  deleteOrganizationLogo,
+  getOrganizationBrandingStore,
+  projectBrandingView,
+  updateBrandName,
+  uploadOrganizationLogo,
+} from "../../customer-zero/organization-branding.js";
+import { loadAuthConfig } from "@departify/config";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { buildAnswersRawData } from "../../customer-zero/answers.js";
 import {
   normalizeCompanyUrl,
@@ -862,57 +884,93 @@ export async function registerCustomerZeroV2Routes(
     async (request) => {
       const { organizationId } = request.params;
       await requireSession(organizationId, deps);
-      const record = await (deps.llmCredentials ?? getLlmCredentialStore()).get(organizationId, BYOK_PROVIDER);
+      const store = deps.llmCredentials ?? getLlmCredentialStore();
+      const providers = listByokProviderDescriptors();
+      const credentials = (
+        await Promise.all(
+          providers
+            .filter((p) => p.enabled)
+            .map(async (p) => ({ provider: p, record: await store.get(organizationId, p.id) })),
+        )
+      ).find((entry) => entry.record?.apiKey);
+      const activeProvider = credentials?.provider ?? providers.find((p) => p.enabled && p.id === BYOK_PROVIDER) ?? providers[0];
+      const record = credentials?.record ?? null;
+      const modelDescriptor = record
+        ? getByokModelDescriptor(record.provider, record.model)
+        : activeProvider?.models.find((m) => m.recommended) ?? activeProvider?.models[0] ?? null;
       return {
         organizationId,
-        provider: BYOK_PROVIDER,
-        providerName: "OpenAI",
-        model: record?.model ?? BYOK_DEFAULT_MODEL,
-        modelLabel: "Recomendado — GPT-4o mini",
+        provider: activeProvider?.id ?? BYOK_PROVIDER,
+        providerName: activeProvider?.label ?? "OpenAI",
+        model: record?.model ?? modelDescriptor?.id ?? BYOK_DEFAULT_MODEL,
+        modelLabel: modelDescriptor?.label ?? "Recomendado",
         configured: Boolean(record),
         state: record?.verifiedAt ? "connected" : record ? "needs_attention" : "needs_setup",
         verifiedAt: record?.verifiedAt ?? null,
         error: record?.lastError ?? null,
-        help: {
-          actionUrl: "https://platform.openai.com/api-keys",
-          docsUrl: "https://help.openai.com/en/articles/4936850-where-do-i-find-my-openai-api-key",
-          steps: [
-            "Abre tu página de claves de OpenAI.",
-            "Crea una clave nueva y cópiala.",
-            "Vuelve aquí y guárdala para comprobarla.",
-          ],
-        },
+        help: activeProvider
+          ? {
+              actionUrl: activeProvider.apiKeyUrl,
+              docsUrl: activeProvider.documentationUrl,
+              apiKeyPlaceholder: activeProvider.apiKeyPlaceholder,
+              steps: [
+                `Abre tu página de claves de ${activeProvider.label}.`,
+                "Crea una clave nueva y cópiala.",
+                "Vuelve aquí y guárdala para comprobarla.",
+              ],
+            }
+          : null,
       };
     },
   );
 
   server.post<{
     Params: { organizationId: string };
-    Body: { provider?: string; model?: string; apiKey?: string };
+    Body: {
+      provider?: string;
+      model?: string;
+      apiKey?: string;
+      baseUrl?: string;
+    };
   }>(
     "/api/customer-zero/:organizationId/llm-settings",
     async (request, reply) => {
       const { organizationId } = request.params;
       await requireSession(organizationId, deps);
       const body = request.body ?? {};
-      if (body.provider && body.provider !== BYOK_PROVIDER) {
-        return reply.code(400).send({
-          error: { code: "unsupported_provider", message: "Este proveedor todavía no está disponible." },
-        });
-      }
-      if (body.model && body.model !== BYOK_DEFAULT_MODEL) {
-        return reply.code(400).send({
-          error: { code: "unsupported_model", message: "Selecciona el modelo recomendado." },
-        });
-      }
-      const apiKey = body.apiKey?.trim();
+      const apiKey = body.apiKey?.trim() ?? "";
       if (!apiKey) {
         return reply.code(400).send({
           error: { code: "missing_api_key", message: "Introduce una API key para continuar." },
         });
       }
-
-      const validation = await validateOpenAiApiKey(apiKey);
+      const providerId = body.provider && isKnownByokProvider(body.provider)
+        ? body.provider
+        : BYOK_PROVIDER;
+      const providerDescriptor = getByokProviderDescriptor(providerId);
+      if (!providerDescriptor || !providerDescriptor.enabled) {
+        return reply.code(400).send({
+          error: { code: "unsupported_provider", message: "Este proveedor todavía no está disponible." },
+        });
+      }
+      const requestedModelId = body.model?.trim() ?? "";
+      const modelDescriptor: ByokModelDescriptor | null = requestedModelId
+        ? getByokModelDescriptor(providerId, requestedModelId)
+        : providerDescriptor.models.find((m) => m.recommended) ?? providerDescriptor.models[0] ?? null;
+      if (!modelDescriptor || !modelDescriptor.enabled) {
+        return reply.code(400).send({
+          error: { code: "unsupported_model", message: "Selecciona un modelo compatible con este proveedor." },
+        });
+      }
+      const baseUrl = providerDescriptor.requiresBaseUrl
+        ? (body.baseUrl?.trim() || MINIMAX_DEFAULT_BASE_URL)
+        : undefined;
+      const validation = await validateByokCredential({
+        providerId: providerId as ByokProviderId,
+        modelId: modelDescriptor.id,
+        apiKey,
+        ...(baseUrl ? { baseUrl } : {}),
+      });
       if (!validation.valid) {
         return reply.code(validation.code === "provider_unavailable" ? 503 : 422).send({
           error: { code: validation.code, message: validation.message },
@@ -922,31 +980,240 @@ export async function registerCustomerZeroV2Routes(
       const now = new Date().toISOString();
       const record: LlmCredentialRecord = {
         organizationId,
-        provider: BYOK_PROVIDER,
-        model: body.model ?? BYOK_DEFAULT_MODEL,
+        provider: providerId as ByokProviderId,
+        model: modelDescriptor.id,
+        baseUrl: providerDescriptor.requiresBaseUrl ? (baseUrl ?? null) : null,
         apiKey,
         createdBy: request.authUser?.id ?? null,
         verifiedAt: now,
         lastError: null,
       };
-      await (deps.llmCredentials ?? getLlmCredentialStore()).put(record);
+      const store = deps.llmCredentials ?? getLlmCredentialStore();
+      await store.put(record);
       request.log.info({
         event: "llm_credential_verified",
         organizationId,
-        provider: BYOK_PROVIDER,
+        provider: providerId,
         model: record.model,
       });
       return reply.code(200).send({
         organizationId,
-        provider: BYOK_PROVIDER,
-        providerName: "OpenAI",
+        provider: providerId,
+        providerName: providerDescriptor.label,
         model: record.model,
-        modelLabel: "Recomendado — GPT-4o mini",
+        modelLabel: modelDescriptor.label,
         configured: true,
         state: "connected",
         verifiedAt: now,
         error: null,
+        help: {
+          actionUrl: providerDescriptor.apiKeyUrl,
+          docsUrl: providerDescriptor.documentationUrl,
+          apiKeyPlaceholder: providerDescriptor.apiKeyPlaceholder,
+          steps: [
+            `Abre tu página de claves de ${providerDescriptor.label}.`,
+            "Crea una clave nueva y cópiala.",
+            "Vuelve aquí y guárdala para comprobarla.",
+          ],
+        },
       });
+    },
+  );
+
+  server.delete<{
+    Params: { organizationId: string };
+  }>(
+    "/api/customer-zero/:organizationId/llm-settings",
+    async (request, reply) => {
+      const { organizationId } = request.params;
+      await requireSession(organizationId, deps);
+      const store = deps.llmCredentials ?? getLlmCredentialStore();
+      let removedAny = false;
+      for (const provider of listByokProviderDescriptors()) {
+        if (!provider.enabled) continue;
+        if (await store.remove(organizationId, provider.id)) removedAny = true;
+      }
+      if (!removedAny) {
+        return reply.code(404).send({
+          error: { code: "no_credential", message: "No hay ninguna clave API guardada para esta empresa." },
+        });
+      }
+      request.log.info({ event: "llm_credential_removed", organizationId });
+      return reply.code(200).send({ organizationId, configured: false });
+    },
+  );
+
+  // BYOK provider registry — the canonical list of providers/models the
+  // portal can offer. The UI MUST consume this contract; it MUST NOT
+  // hardcode providers or models on the client.
+  server.get<{
+    Params: { organizationId: string };
+  }>(
+    "/api/customer-zero/:organizationId/byok/providers",
+    async (request) => {
+      const { organizationId } = request.params;
+      await requireSession(organizationId, deps);
+      const providers = listByokProviderDescriptors().filter((p) => p.enabled);
+      return {
+        organizationId,
+        providers: providers.map((provider) => ({
+          id: provider.id,
+          label: provider.label,
+          enabled: provider.enabled,
+          credentialType: provider.credentialType,
+          requiresBaseUrl: provider.requiresBaseUrl,
+          apiKeyPlaceholder: provider.apiKeyPlaceholder,
+          documentationUrl: provider.documentationUrl,
+          apiKeyUrl: provider.apiKeyUrl,
+          models: provider.models
+            .filter((m) => m.enabled)
+            .map((m) => ({
+              id: m.id,
+              label: m.label,
+              recommended: m.recommended,
+              enabled: m.enabled,
+            })),
+        })),
+      };
+    },
+  );
+
+  // Branding -----------------------------------------------------------------
+  // GET — current branding (logo signed URL + brand name) for this org.
+  server.get<{
+    Params: { organizationId: string };
+  }>(
+    "/api/customer-zero/:organizationId/branding",
+    async (request, reply) => {
+      const { organizationId } = request.params;
+      await requireSession(organizationId, deps);
+      const supabase = brandingSupabase();
+      const store = deps.branding ?? getOrganizationBrandingStore();
+      const record = await store.get(organizationId);
+      const view = await projectBrandingView({ supabase, record });
+      return reply.code(200).send(view);
+    },
+  );
+
+  // PATCH — update brand name only (no logo change). Persists to the
+  // durable organization_branding row so reloads retain the value.
+  server.patch<{
+    Params: { organizationId: string };
+    Body: { brandName?: string | null };
+  }>(
+    "/api/customer-zero/:organizationId/branding",
+    async (request, reply) => {
+      const { organizationId } = request.params;
+      await requireSession(organizationId, deps);
+      const userId = request.authUser?.id ?? organizationId;
+      const store = deps.branding ?? getOrganizationBrandingStore();
+      try {
+        const record = await updateBrandName({
+          store,
+          organizationId,
+          userId,
+          brandName: request.body?.brandName ?? null,
+        });
+        const supabase = brandingSupabase();
+        const view = await projectBrandingView({ supabase, record });
+        return reply.code(200).send(view);
+      } catch (cause) {
+        if (cause instanceof BrandingValidationError) {
+          return reply.code(400).send({ error: { code: cause.code, message: cause.message } });
+        }
+        throw cause;
+      }
+    },
+  );
+
+  // POST — upload/replace the logo. JSON body:
+  //   { mimeType, dataBase64, fileName? }
+  // The portal reads the file via a FileReader and posts the base64 string;
+  // the backend decodes it, validates against the allowlist, and stores it
+  // in the private organization-assets bucket via the service-role client.
+  server.post<{
+    Params: { organizationId: string };
+    Body: { mimeType?: string; dataBase64?: string; fileName?: string };
+  }>(
+    "/api/customer-zero/:organizationId/branding/logo",
+    async (request, reply) => {
+      const { organizationId } = request.params;
+      await requireSession(organizationId, deps);
+      const userId = request.authUser?.id ?? organizationId;
+      const body = request.body ?? {};
+      const mimeType = (body.mimeType ?? "").toLowerCase();
+      const dataBase64 = body.dataBase64?.trim() ?? "";
+      if (!mimeType) {
+        return reply.code(400).send({
+          error: { code: "missing_mime_type", message: "Falta el formato de la imagen." },
+        });
+      }
+      if (!dataBase64) {
+        return reply.code(400).send({
+          error: { code: "missing_file", message: "Adjunta una imagen para subir el logo." },
+        });
+      }
+      let buffer: Buffer;
+      try {
+        buffer = Buffer.from(dataBase64, "base64");
+      } catch {
+        return reply.code(400).send({
+          error: { code: "invalid_base64", message: "El archivo no se ha podido decodificar." },
+        });
+      }
+      const store = deps.branding ?? getOrganizationBrandingStore();
+      const supabase = brandingSupabase();
+      try {
+        const { view } = await uploadOrganizationLogo({
+          store,
+          supabase,
+          organizationId,
+          userId,
+          mimeType,
+          sizeBytes: buffer.byteLength,
+          buffer,
+        });
+        request.log.info({
+          event: "branding_logo_uploaded",
+          organizationId,
+          mimeType,
+          sizeBytes: buffer.byteLength,
+        });
+        return reply.code(200).send(view);
+      } catch (cause) {
+        if (cause instanceof BrandingValidationError) {
+          return reply.code(400).send({ error: { code: cause.code, message: cause.message } });
+        }
+        if (cause instanceof BrandingStorageError) {
+          request.log.error({ event: "branding_storage_failed", organizationId, message: cause.message });
+          return reply.code(502).send({
+            error: { code: "storage_unavailable", message: "No hemos podido guardar el logo ahora mismo." },
+          });
+        }
+        throw cause;
+      }
+    },
+  );
+
+  // DELETE — remove the org logo and return to the empty state.
+  server.delete<{
+    Params: { organizationId: string };
+  }>(
+    "/api/customer-zero/:organizationId/branding/logo",
+    async (request, reply) => {
+      const { organizationId } = request.params;
+      await requireSession(organizationId, deps);
+      const userId = request.authUser?.id ?? organizationId;
+      const store = deps.branding ?? getOrganizationBrandingStore();
+      const supabase = brandingSupabase();
+      const view = await deleteOrganizationLogo({
+        store,
+        supabase,
+        organizationId,
+        userId,
+      });
+      request.log.info({ event: "branding_logo_deleted", organizationId });
+      return reply.code(200).send(view);
     },
   );
 
@@ -9140,37 +9407,43 @@ async function projectInboxItem(item: InboxItem): Promise<InboxItem & {
 
 async function validateOpenAiApiKey(apiKey: string): Promise<
   | { valid: true }
-  | { valid: false; code: "invalid_api_key" | "provider_unavailable"; message: string }
+  | { valid: false; code: "invalid_api_key" | "provider_unavailable" | "unsupported_model"; message: string }
 > {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10_000);
-  try {
-    const response = await fetch("https://api.openai.com/v1/models", {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: controller.signal,
-    });
-    if (response.ok) return { valid: true };
-    if (response.status === 401 || response.status === 403) {
-      return {
-        valid: false,
-        code: "invalid_api_key",
-        message: "No hemos podido validar esta API key. Comprueba que la has copiado completa y vuelve a intentarlo.",
-      };
-    }
-    return {
-      valid: false,
-      code: "provider_unavailable",
-      message: "OpenAI no está disponible ahora mismo. Inténtalo de nuevo en unos minutos.",
-    };
-  } catch {
-    return {
-      valid: false,
-      code: "provider_unavailable",
-      message: "No hemos podido comprobar la API key ahora mismo. Inténtalo de nuevo en unos minutos.",
-    };
-  } finally {
-    clearTimeout(timeout);
+  // Legacy helper kept only so test imports keep compiling. The real
+  // validation entry point is `validateByokCredential` from byok-providers.ts.
+  const result = await validateByokCredential({
+    providerId: BYOK_PROVIDER,
+    modelId: BYOK_DEFAULT_MODEL,
+    apiKey,
+  });
+  if (result.valid) return { valid: true };
+  return {
+    valid: false,
+    code: result.code,
+    message: result.message,
+  };
+}
+
+/**
+ * Build the Supabase service-role client for branding operations (DB +
+ * Storage). Memoised on the auth config so we do not re-instantiate on
+ * every request.
+ */
+let brandingSupabaseCache: { config: ReturnType<typeof loadAuthConfig>; client: SupabaseClient } | null = null;
+function brandingSupabase(): SupabaseClient {
+  const config = loadAuthConfig();
+  if (brandingSupabaseCache && brandingSupabaseCache.config === config) {
+    return brandingSupabaseCache.client;
   }
+  const client = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+      detectSessionInUrl: false,
+    },
+  });
+  brandingSupabaseCache = { config, client };
+  return client;
 }
 
 function providerForInboxSource(source: string): EmailProvider | null {

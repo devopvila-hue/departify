@@ -9,16 +9,26 @@ export function createOpenAIProviderFromConfig(): OpenAILlmProvider {
   return new OpenAILlmProvider(createOpenAIClient(config), config);
 }
 
-/** Builds the same official OpenAI provider for a tenant-owned BYOK key. */
+/**
+ * Builds the same official OpenAI provider for a tenant-owned BYOK key.
+ *
+ * `baseUrl` is optional and lets the tenant point at any OpenAI-compatible
+ * endpoint (the local OpenClaw gateway in development, a customer-hosted
+ * proxy in production, or a third-party provider that mimics OpenAI's
+ * shape — e.g. MiniMax). It is never persisted server-side; the caller is
+ * the credential vault.
+ */
 export function createOpenAIProviderFromApiKey(
   apiKey: string,
   defaultModel: string,
+  baseUrl?: string,
 ): OpenAILlmProvider {
   const config = createOpenAIProviderRuntimeConfig({
     apiKey,
     defaultModel,
     timeoutMs: 30_000,
     maxRetries: 2,
+    ...(baseUrl && baseUrl.trim().length > 0 ? { baseUrl: baseUrl.trim() } : {}),
   });
   return new OpenAILlmProvider(createOpenAIClient(config), config);
 }
