@@ -183,7 +183,13 @@ export async function inspectGithubRepository(input: {
     .map((entry) => entry.path as string)
     .slice(0, 2_000);
   const metadataFiles = files.filter((path) =>
-    /(^|\/)(layout|page|index|head|metadata|seo|robots|sitemap|next\.config|vite\.config)[^/]*\.(tsx?|jsx?|vue|html|js|json)$/i.test(path),
+    // SEO-relevant files: framework layouts/pages/head/metadata, sitemap/robots
+    // config files, and the most common SEO file extensions (tsx/jsx/vue/
+    // html/js/json for code, xml/txt for sitemap/robots). The extension list
+    // is the minimum needed to surface real-world public/sitemap.xml and
+    // public/robots.txt — without it the Web ↔ Repository correlation has
+    // no chance of locating the exact file the audit is flagging.
+    /(^|\/)(layout|page|index|head|metadata|seo|robots|sitemap|next\.config|vite\.config)[^/]*\.(tsx?|jsx?|vue|html|js|json|xml|txt)$/i.test(path),
   );
   const hints = new Map<string, string[]>();
   for (const issueId of input.issueIds) {
@@ -210,4 +216,190 @@ export async function inspectGithubRepository(input: {
     likelyMetadataFiles: metadataFiles.slice(0, 30),
     issueFileHints: Object.fromEntries(hints),
   };
+}
+
+/* ----------------------------------------------------------------------------
+ * Web ↔ Repository correlation
+ *
+ * Given the result of `auditWebsite()` and `inspectGithubRepository()`, this
+ * builds a structured markdown correlation the chat pipeline can attach to
+ * the persisted DepartmentResult. It enforces the Customer Zero honesty
+ * contract: every line is tagged as OBSERVED (live data from web/repo),
+ * INFERRED (reasoning connecting both), or RECOMMENDED (concrete next step).
+ *
+ * No inference is ever presented as observed data. No recommendation is
+ * presented as a fact.
+ * --------------------------------------------------------------------------*/
+
+export interface SeoIssueView {
+  readonly id: string;
+  readonly title: string;
+  readonly impact: string;
+  readonly evidence: string;
+}
+
+export interface SeoAuditLite {
+  readonly url: string;
+  readonly page: {
+    readonly title: string;
+    readonly description: string;
+    readonly canonical: string | null;
+    readonly robots: string | null;
+    readonly headings: Readonly<Record<"h1" | "h2" | "h3", readonly string[]>>;
+    readonly sitemap: "available" | "missing" | "unavailable";
+    readonly imagesWithoutAlt: number;
+    readonly structuredDataBlocks: number;
+  };
+  readonly issues: readonly SeoIssueView[];
+}
+
+export interface SeoCorrelationSection {
+  /** Issue id this correlation was built for. */
+  readonly issueId: string;
+  /** Title from the audit (observed verbatim). */
+  readonly title: string;
+  /** Evidence from the audit (observed verbatim). */
+  readonly observedEvidence: string;
+  /** Files from the repository that this issue points at (observed). */
+  readonly repositoryFiles: readonly string[];
+  /** How the audit evidence and the repository evidence relate (inference). */
+  readonly inference: string;
+  /** Concrete next step the team can take (recommendation). */
+  readonly recommendation: string;
+}
+
+export interface SeoCorrelation {
+  readonly website: string;
+  readonly repository: {
+    readonly fullName: string;
+    readonly htmlUrl: string;
+    readonly defaultBranch: string;
+  } | null;
+  readonly sections: readonly SeoCorrelationSection[];
+}
+
+/**
+ * Build a structured web ↔ repository correlation.
+ *
+ * Returns one `SeoCorrelationSection` per audit issue that has at least
+ * one matching file hint from the repository inspection. Issues without
+ * repository evidence are excluded from the correlation (not invented),
+ * but the audit's own markdown section already lists them.
+ */
+export function buildSeoCorrelation(
+  audit: SeoAuditLite,
+  inspection: SeoRepositoryInspection,
+): SeoCorrelation {
+  const sections: SeoCorrelationSection[] = [];
+  for (const issue of audit.issues) {
+    const matchedFiles = inspection.issueFileHints[issue.id] ?? [];
+    if (matchedFiles.length === 0) continue;
+    sections.push({
+      issueId: issue.id,
+      title: issue.title,
+      observedEvidence: issue.evidence,
+      repositoryFiles: matchedFiles,
+      inference: buildInference(issue, matchedFiles),
+      recommendation: buildRecommendation(issue, matchedFiles, audit),
+    });
+  }
+  return {
+    website: audit.url,
+    repository: {
+      fullName: inspection.repository.fullName,
+      htmlUrl: inspection.repository.htmlUrl,
+      defaultBranch: inspection.repository.defaultBranch,
+    },
+    sections,
+  };
+}
+
+/**
+ * Render the correlation as markdown with explicit OBSERVED / INFERRED /
+ * RECOMMENDED labels. The Customer Zero honesty contract requires that
+ * no inference be presented as observed data.
+ */
+export function renderSeoCorrelationMarkdown(
+  correlation: SeoCorrelation,
+): string {
+  const lines: string[] = [];
+  lines.push(`### Web ↔ Repositorio — correlación`);
+  lines.push(`Web auditada: ${correlation.website}`);
+  if (correlation.repository) {
+    lines.push(
+      `Repositorio: ${correlation.repository.fullName} (${correlation.repository.htmlUrl}, branch \`${correlation.repository.defaultBranch}\`)`,
+    );
+  } else {
+    lines.push(`Repositorio: (no conectado)`);
+  }
+  lines.push(``);
+  if (correlation.sections.length === 0) {
+    lines.push(
+      `No se ha podido correlacionar ningún hallazgo con archivos concretos del repositorio.`,
+    );
+    lines.push(
+      `La auditoría sigue siendo válida por sí sola; revisar manualmente los archivos del repositorio para los hallazgos pendientes.`,
+    );
+    return lines.join("\n");
+  }
+  for (const section of correlation.sections) {
+    lines.push(`#### ${section.title}  (\`${section.issueId}\`)`);
+    lines.push(`- **OBSERVADO (web)**: ${section.observedEvidence}`);
+    if (section.repositoryFiles.length > 0) {
+      lines.push(
+        `- **OBSERVADO (repo)**: ${section.repositoryFiles
+          .map((file) => `\`${file}\``)
+          .join(", ")}`,
+      );
+    }
+    lines.push(`- **INFERENCIA**: ${section.inference}`);
+    lines.push(`- **RECOMENDACIÓN**: ${section.recommendation}`);
+    lines.push(``);
+  }
+  return lines.join("\n");
+}
+
+function buildInference(issue: SeoIssueView, files: readonly string[]): string {
+  if (files.length === 0) {
+    return `El hallazgo no se ha podido asociar a ningún archivo concreto del repositorio.`;
+  }
+  return `El hallazgo "${issue.title}" se ha observado en la web y los archivos ${files
+    .map((file) => `\`${file}\``)
+    .join(", ")} son los candidatos más probables del repositorio donde se origina el marcado correspondiente.`;
+}
+
+function buildRecommendation(
+  issue: SeoIssueView,
+  files: readonly string[],
+  audit: SeoAuditLite,
+): string {
+  const fileList = files.map((file) => `\`${file}\``).join(", ");
+  switch (issue.id) {
+    case "missing-title":
+      return `Añadir/rellenar la etiqueta <title> en ${fileList} con un texto descriptivo único por página (≤ 60 caracteres).`;
+    case "missing-description":
+      return `Añadir/rellenar la meta description en ${fileList} con un resumen que invite al clic (≤ 160 caracteres).`;
+    case "missing-canonical":
+      return `Establecer <link rel="canonical" href="…"> en ${fileList} apuntando a la URL canónica de la página.`;
+    case "long-title":
+      return `Recortar el title actual ("${audit.page.title.slice(0, 60)}…", ${audit.page.title.length} caracteres) en ${fileList} para que no se trunque en las SERPs.`;
+    case "missing-h1":
+      return `Añadir un único encabezado H1 en ${fileList} que describa la propuesta de valor principal de la página.`;
+    case "multiple-h1":
+      return `Reducir a un único H1 en ${fileList}; los demás deben ser H2/H3 según la jerarquía del contenido.`;
+    case "noindex":
+      return `Quitar la directiva noindex de ${fileList} (o dejarla solo en páginas que NO deben indexarse) para que los buscadores indexen la página.`;
+    case "broken-links":
+      return `Corregir los enlaces rotos detectados en ${fileList} para que la navegación y el rastreo no se rompan.`;
+    case "images-without-alt":
+      return `Añadir atributo alt descriptivo en cada <img> de ${fileList}.`;
+    case "missing-sitemap":
+      return `Generar o exponer ${fileList} en la raíz del sitio; los buscadores lo necesitan para descubrir todas las URLs.`;
+    case "structured-data": {
+      const blocks = audit.page.structuredDataBlocks;
+      return `Añadir JSON-LD (Schema.org) en ${fileList} para los tipos principales (Organization, WebSite, BreadcrumbList). Detectados actualmente: ${blocks} bloques.`;
+    }
+    default:
+      return `Revisar ${fileList} para corregir "${issue.title}" (impacto: ${issue.impact}).`;
+  }
 }

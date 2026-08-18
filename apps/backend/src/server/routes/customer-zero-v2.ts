@@ -111,6 +111,25 @@ import {
   DRIVE_VALIDATION_DOCUMENT_NAME,
   GoogleDriveAdapter,
 } from "../../customer-zero/google-drive-adapter.js";
+import { auditWebsite, type SeoAuditReport } from "../../customer-zero/seo-audit.js";
+import {
+  buildSeoCorrelation,
+  getSeoRepositoryLinkStore,
+  inspectGithubRepository,
+  renderSeoCorrelationMarkdown,
+  type SeoRepositoryInspection,
+} from "../../customer-zero/seo-repository.js";
+import {
+  SEO_AUDIT_CAPABILITY_ID,
+  SEO_REPOSITORY_READ_CAPABILITY_ID,
+  certifySeoCapability,
+} from "@departify/capability-engine";
+import {
+  isAdminCommandAuthorized,
+  parseAdminCommand,
+  readAdminModelsView,
+  readAdminSkillsView,
+} from "../../customer-zero/admin-chat-commands.js";
 import {
   completeExecutionReceipt,
   failExecutionReceipt,
@@ -3044,6 +3063,54 @@ export async function registerCustomerZeroV2Routes(
       const trace = newCeoTurnTrace(session, correlationId, startedMonotonicAt);
       trace.timeline.T1_backend_request_received = requestReceivedElapsedMs;
       traceStage(trace, "T2_auth_tenant_resolution_complete");
+      // Golden Image admin commands — allowlist-only, env-gated, never
+      // exposed to non-admins. The Product Identity Boundary stays intact:
+      // regular Departify customers who happen to type "/models" see the
+      // exact same behaviour as typing any other word.
+      const adminCommand = parseAdminCommand(body.message);
+      if (
+        adminCommand &&
+        isAdminCommandAuthorized(request.authUser ?? undefined)
+      ) {
+        try {
+          const adminView =
+            adminCommand.command === "models"
+              ? await readAdminModelsView(session)
+              : await readAdminSkillsView(session);
+          const adminReply = JSON.stringify(adminView, null, 2);
+          try {
+            await session.conversations.addMessage(
+              session.state.currentConversationId ?? "",
+              "user",
+              body.message,
+            );
+          } catch {
+            // Admin commands must not fail because conversation persistence
+            // is unavailable. The admin still gets the runtime view.
+          }
+          return reply
+            .header("x-departify-correlation-id", correlationId)
+            .code(200)
+            .send({
+              organizationId,
+              reply: adminReply,
+              events: [],
+              routing: {
+                intent: "admin_command",
+                departments: [],
+                rationale: `Admin command /${adminCommand.command} accepted.`,
+              },
+              conversationId: session.state.currentConversationId ?? null,
+            });
+        } catch (adminError) {
+          request.log.error(
+            { err: adminError, organizationId, command: adminCommand.command },
+            "Admin command introspection failed",
+          );
+          // Fall through to the normal chat pipeline so the CEO is not
+          // left without a response. The admin error is logged for ops.
+        }
+      }
       try {
         const runtime = await buildCeoRuntimeForRequest(
           session,
@@ -3061,6 +3128,7 @@ export async function registerCustomerZeroV2Routes(
           runtime,
           trace,
           deps,
+          request.authUser?.id,
         );
         traceStage(trace, "T15_backend_response_finalization", {
           responseStatus: ceoTurnResponseStatus(trace),
@@ -4797,6 +4865,7 @@ export async function processCeoMessage(
   runtime?: RuntimeBridgeInput | null,
   trace?: CeoTurnTraceState,
   deps: ServerDeps = {},
+  userId?: string,
 ): Promise<CeoMessageResult> {
   let conversation: ConversationRecord;
   try {
@@ -4813,6 +4882,7 @@ export async function processCeoMessage(
   }
   if (trace) traceStage(trace, "T3_conversation_session_resolution_complete");
   const organizationId = session.organizationId;
+  const activeUserId = userId;
   const turnStartedAt = Date.now();
 
   await session.conversations.addMessage(conversation.id, "user", message);
@@ -5465,6 +5535,25 @@ export async function processCeoMessage(
         // Marketing Director failed: keep the routing reply.
       }
     }
+  }
+
+  if (routed.decision.intent === "delegate_seo") {
+    // SEO audit pipeline — Sprint Customer Zero Golden Image.
+    //
+    // Real SEO work: fetch the company's website (from Company DNA),
+    // run `auditWebsite()` against it, persist a real DepartmentTask
+    // and DepartmentResult, and return a structured reply the portal
+    // can show.
+    //
+    // No marketing delegation, no LLM-generated "plan", no fake work.
+    const seoOutcome = await runDelegateSeoTurn(
+      session,
+      organizationId,
+      deps,
+      activeUserId ? { userId: activeUserId } : undefined,
+    );
+    assistantReply = seoOutcome.reply;
+    marketingTurn = { role: "assistant", content: seoOutcome.reply };
   }
 
   if (routed.decision.intent === "knowledge_query") {
@@ -6574,6 +6663,228 @@ async function runGoogleBusinessTurn(
   if (intent === "calendar_create") return runCalendarCreateTurn(session, message, isEs);
   if (intent === "drive_query") return runDriveTurn(session, message, isEs);
   return { reply: isEs ? "No he podido identificar la acción de Google." : "I could not identify the Google action." };
+}
+
+/**
+ * Real SEO execution — Sprint Customer Zero Golden Image.
+ *
+ * What this does (and why nothing else did before):
+ *   1. Reads Company DNA to find the company's website URL.
+ *   2. Fetches the page with `auditWebsite()` — same code as the existing
+ *      `/api/departments/seo/:organizationId/audit` route, which has been
+ *      working all along.
+ *   3. Optionally reads the GitHub repository the SEO onboarding stored
+ *      for the website, so we can flag which files are likely where the
+ *      SEO fixes would land.
+ *   4. Persists a real DepartmentTask (status: completed) and a real
+ *      DepartmentResult so the Portal shows the work — and the chat
+ *      delivery is honest about it.
+ *   5. Returns a structured reply that distinguishes observed data vs.
+ *      inference vs. recommendation (the Customer Zero contract).
+ *
+ * The Marketing Director chat path never reached this code before
+ * because Marketing's roster has no SEO specialist and the routing
+ * table had no `delegate_seo` intent. Both gaps are fixed in this
+ * same change.
+ */
+export async function runDelegateSeoTurn(
+  session: CustomerZeroSession,
+  organizationId: string,
+  deps: ServerDeps,
+  options?: { readonly userId?: string },
+): Promise<{ reply: string }> {
+  const isEs = session.state.locale !== "en";
+  const store = workStoreForRoutes();
+  const dna = await resolveCompanyDnaStore(deps).get(organizationId);
+  const website = dna?.website;
+  if (!website) {
+    const noWebsiteReply = isEs
+      ? "Para auditar el SEO necesito que me indiques la web de tu empresa. Puedes hacerlo en Conoce tu negocio → Empresa."
+      : "I need your company's website before I can audit its SEO. You can set it up in Know your business → Company.";
+    return { reply: noWebsiteReply };
+  }
+
+  const now = new Date().toISOString();
+  const task = await store.createTask({
+    organizationId,
+    departmentId: "seo",
+    objectiveId: null,
+    requestedBy: organizationId,
+    assignedEmployeeId: null,
+    title: "Auditoría SEO de la web",
+    summary: website,
+    capability: "seo.audit.website" as DepartmentWorkCapability,
+    toolId: "departify.seo.audit",
+    status: "running",
+    statusMessage: isEs ? "Revisando la web real…" : "Auditing the live website…",
+    progress: 0.1,
+    requiredCapabilities: ["seo.audit.website" as DepartmentWorkCapability],
+    startedAt: now,
+    completedAt: null,
+    resultId: null,
+    errorCode: null,
+    errorMessage: null,
+    timeoutMs: 120_000,
+  });
+
+  let report: SeoAuditReport;
+  try {
+    report = await auditWebsite(website);
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : "No hemos podido completar la auditoría.";
+    await store.updateTask(task.id, {
+      status: "failed",
+      statusMessage: message,
+      completedAt: new Date().toISOString(),
+      errorCode: "seo_audit_failed",
+      errorMessage: message,
+    });
+    return {
+      reply: isEs
+        ? `He intentado leer ${website} y no he podido: ${message}`
+        : `I tried to read ${website} and could not: ${message}`,
+    };
+  }
+
+  let repositoryInspection: SeoRepositoryInspection | null = null;
+  try {
+    const repository = await getSeoRepositoryLinkStore().get(organizationId, website);
+    if (repository) {
+      repositoryInspection = await inspectGithubRepository({
+        organizationId,
+        userId: options?.userId ?? organizationId,
+        link: repository,
+        issueIds: report.issues.map((issue) => issue.id),
+      });
+    }
+  } catch {
+    // Repository inspection is best-effort: a missing or unauthorized GitHub
+    // link must not block the website audit from completing.
+    repositoryInspection = null;
+  }
+
+  const critical = report.issues.filter((i) => i.priority === "critical").length;
+  const important = report.issues.filter((i) => i.priority === "important").length;
+  const opportunities = report.issues.filter((i) => i.priority === "opportunity").length;
+  const result = await store.createResult({
+    organizationId,
+    departmentId: "seo",
+    relatedWorkItemId: task.id,
+    title: "Auditoría SEO",
+    summary: `${report.issues.length} hallazgos verificables: ${critical} críticos, ${important} importantes y ${opportunities} oportunidades.`,
+    content: [
+      `## Auditoría SEO`,
+      `Web revisada: ${report.url}`,
+      `Fecha de la auditoría: ${report.fetchedAt}`,
+      ``,
+      `### Observado`,
+      `- title: ${report.page.title || "(vacío)"}`,
+      `- description: ${report.page.description || "(vacío)"}`,
+      `- canonical: ${report.page.canonical ?? "(no detectado)"}`,
+      `- robots: ${report.page.robots ?? "(no detectado)"}`,
+      `- H1 (${report.page.headings.h1.length}): ${report.page.headings.h1.slice(0, 5).join(" | ") || "(sin H1)"}`,
+      `- H2 (${report.page.headings.h2.length}) / H3 (${report.page.headings.h3.length})`,
+      `- Enlaces internos revisados: ${report.page.internalUrls.length}`,
+      `- Enlaces internos rotos: ${report.page.brokenUrls.length}`,
+      `- Imágenes sin alt: ${report.page.imagesWithoutAlt}`,
+      `- Bloques de datos estructurados: ${report.page.structuredDataBlocks}`,
+      `- Metadata social presente: ${report.page.socialMetadata.join(", ") || "(ninguna)"}`,
+      `- sitemap.xml: ${report.page.sitemap}`,
+      ``,
+      `### Hallazgos`,
+      ...report.issues.map(
+        (issue) => `- **${issue.priority}** — ${issue.title}. Impacto: ${issue.impact}. Evidencia: ${issue.evidence}`,
+      ),
+      ``,
+      `### Recomendaciones (derivadas de los hallazgos)`,
+      ...report.issues.slice(0, 6).map(
+        (issue, index) => `- ${index + 1}. Atender "${issue.title}" — ${issue.impact}.`,
+      ),
+      ...(repositoryInspection
+        ? [
+            ``,
+            `### Repositorio conectado`,
+            `- ${repositoryInspection.repository.fullName} (${repositoryInspection.repository.htmlUrl})`,
+            `- Archivos de metadatos localizados: ${repositoryInspection.likelyMetadataFiles.length}.`,
+            ...Object.entries(repositoryInspection.issueFileHints).flatMap(([issueId, files]) =>
+              files.map((file) => `- ${issueId}: ${file}`),
+            ),
+            ``,
+            renderSeoCorrelationMarkdown(
+              buildSeoCorrelation(
+                {
+                  url: report.url,
+                  page: {
+                    title: report.page.title,
+                    description: report.page.description,
+                    canonical: report.page.canonical,
+                    robots: report.page.robots,
+                    headings: report.page.headings,
+                    sitemap: report.page.sitemap,
+                    imagesWithoutAlt: report.page.imagesWithoutAlt,
+                    structuredDataBlocks: report.page.structuredDataBlocks,
+                  },
+                  issues: report.issues.map((issue) => ({
+                    id: issue.id,
+                    title: issue.title,
+                    impact: issue.impact,
+                    evidence: issue.evidence,
+                  })),
+                },
+                repositoryInspection,
+              ),
+            ),
+          ]
+        : []),
+    ].join("\n"),
+    data: {
+      ...(report as unknown as Record<string, unknown>),
+      ...(repositoryInspection ? { repository: repositoryInspection } : {}),
+    },
+    source: "SEO website audit (chat pipeline)",
+    producedByCapability: "seo.audit.website" as DepartmentWorkCapability,
+  });
+
+  await store.updateTask(task.id, {
+    status: "completed",
+    statusMessage: isEs ? "Auditoría lista." : "Audit ready.",
+    progress: 1,
+    completedAt: new Date().toISOString(),
+    resultId: result.id,
+  });
+
+  // Certify the SEO capabilities that just produced a real result.
+  //
+  // We follow the same canonical pattern as `certifyMauticCapability` in
+  // operational-context.ts: `verification.status` flips from `pending` to
+  // `passed` only after a real round-trip succeeded. We never certify a
+  // capability without evidence.
+  //
+  //   seo.audit.website  → certified when auditWebsite() succeeded
+  //                          (which it just did — we are past the try/catch)
+  //   seo.repository.read → certified ONLY when inspectGithubRepository()
+  //                          returned a real inspection. Not on connection
+  //                          alone. Not on token presence alone.
+  const certifiedAt = new Date().toISOString();
+  const auditContract = session.capabilities.get(SEO_AUDIT_CAPABILITY_ID);
+  if (auditContract) {
+    session.capabilities.register(
+      certifySeoCapability(auditContract, certifiedAt),
+    );
+  }
+  if (repositoryInspection) {
+    const repoContract = session.capabilities.get(SEO_REPOSITORY_READ_CAPABILITY_ID);
+    if (repoContract) {
+      session.capabilities.register(
+        certifySeoCapability(repoContract, certifiedAt),
+      );
+    }
+  }
+
+  const headline = isEs
+    ? `He auditado ${website}. Encontré ${report.issues.length} problemas: ${critical} críticos, ${important} importantes y ${opportunities} oportunidades. La primera acción prioritaria es: ${report.issues[0]?.title ?? "(sin hallazgos)"}.`
+    : `I audited ${website}. Found ${report.issues.length} issues: ${critical} critical, ${important} important and ${opportunities} opportunities. The first priority action is: ${report.issues[0]?.title ?? "(no findings)"}.`;
+  return { reply: headline };
 }
 
 export async function runCalendarReadTurn(

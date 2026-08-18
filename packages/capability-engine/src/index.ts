@@ -87,3 +87,11 @@ export {
   buildMauticCapability,
   certifyMauticCapability,
 } from "./capabilities/mautic-capability.js";
+export {
+  SEO_AUDIT_CAPABILITY_ID,
+  SEO_REPOSITORY_READ_CAPABILITY_ID,
+  SEO_DEPARTMENT,
+  buildSeoAuditCapability,
+  buildSeoRepositoryReadCapability,
+  certifySeoCapability,
+} from "./capabilities/seo-capability.js";

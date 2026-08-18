@@ -45,6 +45,11 @@ import {
   createMauticTestConnectionToolDefinition,
 } from "./mautic-tools.js";
 import {
+  createSeoAuditToolDefinition,
+  createSeoRepositoryListToolDefinition,
+  createSeoRepositoryInspectToolDefinition,
+} from "./seo-tools.js";
+import {
   produceMarketingDiagnosis,
   formTeam,
   type MarketingDiagnosis,
@@ -60,6 +65,8 @@ import {
 import {
   DepartmentCapabilityRegistry,
   buildMauticCapability,
+  buildSeoAuditCapability,
+  buildSeoRepositoryReadCapability,
 } from "@departify/capability-engine";
 import { WorkflowExecution, type WorkflowResult } from "@departify/workflows";
 import { randomUUID } from "node:crypto";
@@ -324,6 +331,10 @@ export function getOrCreateCustomerZeroSession(
     createMauticTestConnectionToolDefinition(),
     createMauticContactCountToolDefinition(),
     createMauticContactSearchToolDefinition(),
+    // SEO tools — Customer Zero Golden Image.
+    createSeoAuditToolDefinition(),
+    createSeoRepositoryListToolDefinition(),
+    createSeoRepositoryInspectToolDefinition(),
   ]) {
     if (!runtime.registry.has(def.id)) {
       runtime.registry.register(def);
@@ -334,8 +345,11 @@ export function getOrCreateCustomerZeroSession(
   // Sprint 62 — canonical capability registry for the Marketing department.
   // The Mautic capability is registered; its operational status is DERIVED by
   // the registry from the connection state + Tool Runtime (never from memory).
+  // Same registration pattern for SEO — Customer Zero Golden Image.
   const capabilities = new DepartmentCapabilityRegistry();
   capabilities.register(buildMauticCapability());
+  capabilities.register(buildSeoAuditCapability());
+  capabilities.register(buildSeoRepositoryReadCapability());
 
   // AgentToolBridge with the Marketing agents' permissions.
   const port: AgentToolPort = new AgentToolRuntimeAdapter({

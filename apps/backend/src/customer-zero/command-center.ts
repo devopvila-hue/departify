@@ -174,6 +174,7 @@ export interface RoutingDecision {
   readonly intent:
     | "direct_response"
     | "delegate_marketing"
+    | "delegate_seo"
     | "email_action"
     | "calendar_read"
     | "calendar_create"
@@ -449,7 +450,34 @@ const ROUTING_RULES: readonly RoutingRule[] = [
         input.message,
       ),
   },
+  {
+    // SEO-specific intent — Sprint Customer Zero Golden Image.
+    //
+    // Before this rule existed, an SEO request like "Analiza el SEO de mi
+    // web y dime cuáles son los problemas prioritarios" fell through every
+    // other pattern and was delegated to Marketing as a generic message.
+    // The Marketing roster has no SEO specialist and no SEO capability, so
+    // the LLM produced generic text with no real audit, no real data, and
+    // no persisted DepartmentTask / DepartmentResult.
+    //
+    // This rule routes the request to `delegate_seo`, which the chat
+    // pipeline executes by calling `auditWebsite()` against the company's
+    // website (from Company DNA) and persisting a real task + result.
+    intent: "delegate_seo",
+    rationale:
+      "The CEO is asking for SEO analysis or improvements — route to the SEO audit pipeline that reads the real website and persists a real task + result.",
+    match: (input) => SEO_REQUEST_PATTERN.test(input.message),
+  },
 ];
+
+/**
+ * Recognises SEO requests in either Spanish or English. The pattern is
+ * broad enough to cover "Analiza el SEO", "auditoría SEO", "mejoras SEO",
+ * "indexación", "sitemap", "meta description", "search console",
+ * "audit my SEO", "SEO plan", "first improvements".
+ */
+const SEO_REQUEST_PATTERN =
+  /\b(seo|search\s+engine|semrush|ahrefs|search\s+console|sitemap|meta\s*description|meta\s*title|encabezados?|cabeceras?|indexaci[oó]n|posicionamiento|audit\s+(my|the)\s+seo|seo\s+audit|seo\s+plan|primeras\s+mejoras|priorida(?:d|des)|an[áa]lisis\s+seo|auditor[ií]a\s+seo)\b/i;
 
 const APPROVAL_VERBS =
   /\b(aprobar|aprueba|apruebo|aprueb[a-záàäeéèíìöüñ]*lo|apruebe|approved?|approve|si[,\s]+hazlo|dale|hazlo|hazlo ya|go ahead|adelante|confirma|confirmar|de acuerdo|ok\s*hazlo)\b/i;
@@ -546,6 +574,19 @@ function buildRuleOutcome(
           input.locale,
           "Hola. Estoy aquí. Dime qué necesitas conseguir y pongo al equipo con ello.",
           "Hello. I'm here. Tell me what you want to achieve and I'll put the team on it.",
+        ),
+      };
+    case "delegate_seo":
+      return {
+        decision: {
+          intent: "delegate_seo",
+          departments: ["seo"],
+          rationale: rule.rationale,
+        },
+        reply: t(
+          input.locale,
+          "Voy a revisar tu web ahora mismo. En un momento te traigo los problemas prioritarios y un plan de acciones.",
+          "I'll audit your website right now. I'll come back with the priority issues and an action plan in a moment.",
         ),
       };
     case "meta_product_question":
