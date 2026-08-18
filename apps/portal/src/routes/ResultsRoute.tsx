@@ -1,48 +1,73 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   api,
   type CeoOverview,
-  type ChartData,
   type DepartmentResult,
+  type DepartmentTask,
 } from "@/app/api";
 import { useOrg } from "@/app/org-context";
-import { Card, EmptyState, HeadBadge } from "@/components/primitives";
-import { readable } from "@/app/readable";
-import { renderMarkdown } from "@/app/markdown";
+import { Card, EmptyState } from "@/components/primitives";
+import { ResultRenderer } from "@/components/ResultRenderer";
 
-/** Resultados — what your company has achieved, not what the system ran. */
+/**
+ * Resultados — what your company has achieved, not what the system ran.
+ *
+ * This route is the canonical Resultados surface. It uses the FULL
+ * DepartmentResult list (`api.results(org).results`) — every entry has
+ * its structured `data` payload preserved. The CeoOverview projection
+ * is intentionally NOT used here because it drops the data field and
+ * pins every result to the Marketing head.
+ *
+ * Per-result rendering is delegated to <ResultRenderer /> which
+ * dispatches on `result.contract`:
+ *   seo.audit.result  → <SeoDashboard />
+ *   otherwise         → clean generic card (NO raw Markdown)
+ *
+ * Result versioning: same org + same departmentId + same contract key
+ * is treated as the same operational result. The latest result per key
+ * is the active one; the rest live under "Historial". We do NOT
+ * create a new card per CEO re-run.
+ */
 export function ResultsRoute() {
   const { organizationId } = useOrg();
   const [overview, setOverview] = useState<CeoOverview | null>(null);
-  const [departmentResults, setDepartmentResults] = useState<DepartmentResult[]>([]);
+  const [results, setResults] = useState<DepartmentResult[]>([]);
+  const [tasks, setTasks] = useState<DepartmentTask[]>([]);
   const [dashboardCount, setDashboardCount] = useState(0);
   const [dashboardLimit, setDashboardLimit] = useState(5);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!organizationId) return;
-    void api.overview(organizationId).then((data) => {
-      if (data) setOverview(data);
-    });
-    void api.results(organizationId).then((data) => {
-      if (data) {
-        setDepartmentResults(data.results ?? []);
-        setDashboardCount(data.dashboardCount ?? 0);
-        setDashboardLimit(data.dashboardLimit ?? 5);
-      }
-    });
-    void api.dashboardSummary(organizationId).then((data) => {
-      if (data) {
-        setDashboardCount(data.dashboardCount);
-        setDashboardLimit(data.dashboardLimit);
-      }
-    });
+    setLoading(true);
+    Promise.all([
+      api.overview(organizationId).then((data) => {
+        if (data) setOverview(data);
+      }),
+      api.results(organizationId).then((data) => {
+        if (data) {
+          setResults(data.results ?? []);
+          setDashboardCount(data.dashboardCount ?? 0);
+          setDashboardLimit(data.dashboardLimit ?? 5);
+        }
+      }),
+      api.workFeed(organizationId).then((data) => {
+        if (data?.tasks) setTasks(data.tasks);
+      }),
+    ]).finally(() => setLoading(false));
   }, [organizationId]);
 
-  const overviewResults = overview?.company?.results ?? overview?.results ?? [];
-  const canonicalResults = overview?.company ? overviewResults : departmentResults;
-  const resultDetails = new Map(departmentResults.map((result) => [result.id, result]));
-  const totalResults = canonicalResults.length;
+  // Group results by (departmentId, contract). Latest per group is
+  // active; older are history.
+  const grouped = useMemo(() => groupResultsByOperationalKey(results), [results]);
+
+  // Index tasks by id for fast lookup by ResultRenderer / SeoDashboard.
+  const taskIndex = useMemo(() => {
+    const map = new Map<string, DepartmentTask>();
+    for (const task of tasks) map.set(task.id, task);
+    return map;
+  }, [tasks]);
 
   return (
     <div className="dfy-page">
@@ -62,110 +87,83 @@ export function ResultsRoute() {
         )}
       </section>
 
-      {totalResults === 0 ? (
+      {loading ? (
+        <Card><p className="dfy-muted">Cargando resultados…</p></Card>
+      ) : grouped.active.length === 0 ? (
         <Card>
           <EmptyState
             title="Todavía no hay entregables"
-            description="En cuanto Marketing termine un trabajo, su resultado aparecerá aquí listo para usar."
+            description="En cuanto un departamento termine un trabajo, su resultado aparecerá aquí listo para usar."
           />
         </Card>
       ) : (
         <div className="dfy-grid dfy-grid--single">
-          {overviewResults.map((result) => (
-            <Card key={result.id} title={result.title}>
-              <HeadBadge head={result.head} compact />
-              <p className="dfy-result">{readable(result.summary)}</p>
-              {resultDetails.get(result.id)?.content && (
-                <div
-                  className="dfy-result__body"
-                  dangerouslySetInnerHTML={{
-                    __html: renderMarkdown(resultDetails.get(result.id)?.content ?? ""),
-                  }}
-                />
-              )}
-              {resultDetails.get(result.id)?.chart && (
-                <ChartRenderer chart={resultDetails.get(result.id)!.chart!} />
-              )}
-            </Card>
+          {grouped.active.map((result) => (
+            <ResultRenderer key={result.id} result={result} taskIndex={taskIndex} />
           ))}
+          {grouped.history.length > 0 && (
+            <Card title="Historial">
+              <details>
+                <summary>
+                  {grouped.history.length} resultado{grouped.history.length === 1 ? "" : "s"} anterior{grouped.history.length === 1 ? "" : "es"}
+                </summary>
+                <ul className="dfy-list">
+                  {grouped.history.map((result) => (
+                    <li key={result.id}>
+                      <strong>{result.title}</strong>{" "}
+                      <span className="dfy-muted">{result.departmentId} · {new Date(result.createdAt).toLocaleString()}</span>
+                      <p className="dfy-muted">{result.summary}</p>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            </Card>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function ChartRenderer(props: { chart: ChartData }) {
-  const { chart } = props;
-  if (chart.kind === "table" && chart.rows && chart.rows.length > 0) {
-    return (
-      <table className="dfy-result__table">
-        <thead>
-          <tr>
-            <th>Etiqueta</th>
-            <th>Valor</th>
-          </tr>
-        </thead>
-        <tbody>
-          {chart.rows.map((row, index) => (
-            <tr key={`${row.label}_${index}`}>
-              <td>{row.label}</td>
-              <td>{row.value}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    );
+/**
+ * Operational key: same org + same departmentId + same contract = the
+ * same operational result. Re-running the audit updates the active
+ * result instead of creating a duplicate card.
+ */
+interface GroupedResults {
+  active: DepartmentResult[];
+  history: DepartmentResult[];
+}
+
+function groupResultsByOperationalKey(results: DepartmentResult[]): GroupedResults {
+  const byKey = new Map<string, DepartmentResult[]>();
+  for (const result of results) {
+    const key = resultKey(result);
+    const bucket = byKey.get(key) ?? [];
+    bucket.push(result);
+    byKey.set(key, bucket);
   }
-  if (chart.kind === "bar" || chart.kind === "line") {
-    const series = chart.series[0];
-    if (!series) return null;
-    const labels = series.labels ?? series.values.map((_, i) => `${i + 1}`);
-    const max = Math.max(1, ...series.values);
-    return (
-      <div className="dfy-chart" data-kind={chart.kind}>
-        <div className="dfy-chart__title">{chart.title}</div>
-        <div className="dfy-chart__rows">
-          {labels.map((label, index) => {
-            const value = series.values[index] ?? 0;
-            const pct = Math.round((value * 100) / max);
-            return (
-              <div className="dfy-chart__row" key={`${label}_${index}`}>
-                <span className="dfy-chart__label">{label}</span>
-                <span className="dfy-chart__bar">
-                  <span className="dfy-chart__bar-fill" style={{ width: `${pct}%` }} />
-                </span>
-                <span className="dfy-chart__value">
-                  {value}
-                  {chart.unit ? ` ${chart.unit}` : ""}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
+  const active: DepartmentResult[] = [];
+  const history: DepartmentResult[] = [];
+  for (const bucket of byKey.values()) {
+    bucket.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    if (bucket[0]) active.push(bucket[0]);
+    for (let i = 1; i < bucket.length; i += 1) {
+      const item = bucket[i];
+      if (item) history.push(item);
+    }
   }
-  if (chart.kind === "donut") {
-    return (
-      <div className="dfy-chart" data-kind="donut">
-        <div className="dfy-chart__title">{chart.title}</div>
-        <ul className="dfy-chart__donut-list">
-          {chart.series[0]?.labels?.map((label, index) => (
-            <li key={`${label}_${index}`}>
-              <strong>{label}</strong>: {chart.series[0]?.values[index] ?? 0}
-            </li>
-          ))}
-        </ul>
-      </div>
-    );
-  }
-  if (chart.kind === "number") {
-    return (
-      <div className="dfy-chart" data-kind="number">
-        <div className="dfy-chart__title">{chart.title}</div>
-        <div className="dfy-chart__big">{chart.series[0]?.values[0] ?? 0}</div>
-      </div>
-    );
-  }
-  return null;
+  return { active, history };
+}
+
+function resultKey(result: DepartmentResult): string {
+  const contract = readContract(result);
+  return `${result.departmentId}::${contract ?? "legacy"}`;
+}
+
+function readContract(result: DepartmentResult): string | null {
+  const data = result.data;
+  if (!data || typeof data !== "object") return null;
+  const candidate = (data as { contract?: unknown }).contract;
+  return typeof candidate === "string" && candidate.length > 0 ? candidate : null;
 }

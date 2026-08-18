@@ -125,6 +125,10 @@ export interface SeoResultContract {
   readonly correlation: SeoCorrelation;
   readonly plan: SeoResolutionPlan;
   readonly tasks: readonly SeoResolutionTaskPayload[];
+  /** IDs of the DepartmentTask rows persisted for the derived plan
+   *  buckets. The Portal uses these IDs to look up live task state
+   *  (queued / running / completed) without re-fetching the contract. */
+  readonly derivedTaskIds: readonly string[];
   readonly source: "seo.audit.website";
   readonly producedByCapability: "seo.audit.website";
 }
@@ -414,6 +418,7 @@ export function buildSeoResultContract(input: {
     correlation,
     plan,
     tasks,
+    derivedTaskIds: [], // Filled by the chat pipeline after persistence.
     source: "seo.audit.website",
     producedByCapability: "seo.audit.website",
   };

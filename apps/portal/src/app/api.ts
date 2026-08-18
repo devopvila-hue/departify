@@ -158,16 +158,21 @@ export interface DecisionView {
 
 export interface ActivityView {
   id: string;
-  head: HeadIdentity;
+  /** null when the item is from a department without a canonical head. */
+  head: HeadIdentity | null;
   message: string;
   tone: "working" | "done" | "waiting" | "blocked";
 }
 
 export interface ResultView {
   id: string;
-  head: HeadIdentity;
+  /** null when the result's department has no canonical head. */
+  head: HeadIdentity | null;
+  departmentId: string;
   title: string;
   summary: string;
+  /** Canonical structured contract — drives ResultRenderer dispatch. */
+  contract: string | null;
 }
 
 /* -------------------------------------------------------------------------
@@ -319,6 +324,9 @@ export interface SeoResultContract {
   readonly correlation: SeoCorrelationContract;
   readonly plan: SeoResolutionPlanContract;
   readonly tasks: readonly SeoResolutionTaskPayloadContract[];
+  /** Persisted DepartmentTask IDs for the plan buckets. The Portal uses
+   *  these to look up live task state (queued / running / completed). */
+  readonly derivedTaskIds: readonly string[];
   readonly source: "seo.audit.website";
   readonly producedByCapability: "seo.audit.website";
 }

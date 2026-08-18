@@ -35,6 +35,37 @@ type DepartmentCapabilityCard = {
   readonly state: "disponible" | "necesita_conexion" | "no_disponible";
 };
 
+/**
+ * Resolve the human head for a given result. Today only Marketing has a
+ * canonical head. SEO has no canonical head yet — the result is shown
+ * without a person attached. NEVER substitute Marketing's head for a
+ * non-Marketing department (this was the source of the Elvira-on-SEO
+ * contamination visible in the production Resultados screen).
+ */
+function resolveResultHead(
+  departmentId: string,
+  marketingHead: DepartmentHeadView,
+): DepartmentHeadView | null {
+  if (departmentId === "marketing") return marketingHead;
+  // SEO, future departments: no head is the honest answer.
+  return null;
+}
+
+/**
+ * Resolve the canonical contract name from a DepartmentResult's
+ * structured payload. The Portal dispatches a dedicated renderer based
+ * on this string (`seo.audit.result`, …). For legacy results without a
+ * known contract we return null and the Portal falls back to a clean
+ * text-only view (NEVER raw Markdown).
+ */
+function resolveResultContract(result: DepartmentResult): string | null {
+  const data = result.data;
+  if (!data || typeof data !== "object") return null;
+  const candidate = (data as { contract?: unknown }).contract;
+  if (typeof candidate !== "string" || candidate.length === 0) return null;
+  return candidate;
+}
+
 export interface DecisionView {
   readonly id: string;
   readonly head: DepartmentHeadView;
@@ -48,7 +79,9 @@ export interface DecisionView {
 
 export interface ActivityView {
   readonly id: string;
-  readonly head: DepartmentHeadView;
+  /** Resolved per item — null when the item is from a department
+   *  without a canonical head (e.g. SEO). Never Marketing for SEO. */
+  readonly head: DepartmentHeadView | null;
   readonly message: string;
   readonly tone: "working" | "done" | "waiting" | "blocked";
   readonly createdAt?: string;
@@ -56,9 +89,15 @@ export interface ActivityView {
 
 export interface ResultView {
   readonly id: string;
-  readonly head: DepartmentHeadView;
+  /** Resolved from the result's departmentId. null when no head is registered
+   *  for that department (e.g. SEO has no canonical head yet). Never Marketing. */
+  readonly head: DepartmentHeadView | null;
+  readonly departmentId: string;
   readonly title: string;
   readonly summary: string;
+  /** Canonical structured payload — the Portal renders this with the
+   *  matching ResultRenderer (no Markdown fallback for known contracts). */
+  readonly contract: string | null;
   readonly createdAt?: string;
 }
 
@@ -304,7 +343,7 @@ export function buildCompanyOperatingState(input: {
     }),
     ...input.results.map((result) => ({
       id: `result_${result.id}`,
-      head: input.head,
+      head: resolveResultHead(result.departmentId, input.head),
       message: `Resultado disponible: ${result.title}`,
       tone: "done" as const,
       createdAt: result.createdAt,
@@ -348,9 +387,11 @@ export function buildCompanyOperatingState(input: {
     activity,
     results: input.results.map((result) => ({
       id: result.id,
-      head: input.head,
+      head: resolveResultHead(result.departmentId, input.head),
+      departmentId: result.departmentId,
       title: result.title,
       summary: result.summary,
+      contract: resolveResultContract(result),
       createdAt: result.createdAt,
     })),
   };
@@ -408,9 +449,11 @@ export function buildCeoOverview(session: CustomerZeroSession): CeoOverview {
     .filter((item) => item.status === "completed" && item.result)
     .map((item) => ({
       id: `res_${item.id}`,
-      head,
+      head, // Marketing items → Marketing head.
+      departmentId: "marketing",
       title: item.title,
       summary: item.result ?? "",
+      contract: null,
     }));
 
   return {

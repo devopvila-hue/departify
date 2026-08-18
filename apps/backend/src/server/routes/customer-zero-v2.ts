@@ -6792,8 +6792,9 @@ export async function runDelegateSeoTurn(
   // has issues becomes its own DepartmentTask (departmentId: "seo") in
   // the canonical task system, so the CEO can see work in the Portal's
   // existing task list — no parallel SEO task subsystem.
+  const derivedTaskIds: string[] = [];
   for (const payload of seoContract.tasks) {
-    await store.createTask({
+    const created = await store.createTask({
       organizationId,
       departmentId: "seo",
       objectiveId: null,
@@ -6814,7 +6815,14 @@ export async function runDelegateSeoTurn(
       errorMessage: null,
       timeoutMs: 7_200_000,
     });
+    derivedTaskIds.push(created.id);
   }
+
+  // Inject the live task IDs into the contract so the Portal can read
+  // their queued / running / completed state without re-fetching the
+  // contract. The contract's own `tasks` field stays as the payload
+  // description; the IDs are the runtime link.
+  (seoContract as { derivedTaskIds: readonly string[] }).derivedTaskIds = derivedTaskIds;
 
   const result = await store.createResult({
     organizationId,
