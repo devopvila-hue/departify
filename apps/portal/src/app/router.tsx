@@ -71,7 +71,7 @@ export const router = createBrowserRouter([
     errorElement: <RouteErrorFallback />,
   },
   {
-    path: "/connections/github_repository/callback",
+    path: "/connections/github/callback",
     element: <GitHubOAuthCallbackRoute />,
     errorElement: <RouteErrorFallback />,
   },

@@ -54,12 +54,14 @@ describe("provider-backed marketing OAuth", () => {
     ]);
   });
 
-  it("uses the production API callback bridge for TikTok OAuth", () => {
+  it("uses the production API callback bridge for TikTok and GitHub OAuth", () => {
     process.env.NODE_ENV = "production";
     expect(externalOAuthRedirectUri("tiktok", "https://app.departify.app"))
       .toBe("https://api.departify.app/connections/tiktok/callback");
     expect(externalOAuthRedirectUri("tiktok_business", "https://app.departify.app"))
       .toBe("https://api.departify.app/connections/tiktok_ads/callback");
+    expect(externalOAuthRedirectUri("github", "https://app.departify.app"))
+      .toBe("https://api.departify.app/connections/github/callback");
     delete process.env.NODE_ENV;
   });
 
@@ -74,7 +76,7 @@ describe("provider-backed marketing OAuth", () => {
       userId: "user-seo",
       provider: "github",
       returnPath: "/seo",
-      redirectUri: "https://app.departify.app/connections/github_repository/callback",
+      redirectUri: "https://api.departify.app/connections/github/callback",
     });
     const authorizationUrl = new URL(out.authorizationUrl);
 
@@ -96,7 +98,7 @@ describe("provider-backed marketing OAuth", () => {
       userId: "user-seo",
       provider: "github",
       returnPath: "/seo",
-      redirectUri: "https://app.departify.app/connections/github_repository/callback",
+      redirectUri: "https://api.departify.app/connections/github/callback",
     });
 
     expect(new URL(out.authorizationUrl).searchParams.get("client_id")).toBe("github-client-deployed");

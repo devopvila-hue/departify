@@ -2424,11 +2424,11 @@ export async function registerCustomerZeroV2Routes(
     },
   );
 
-  // TikTok sends the provider callback to the API host. Keep the browser
+  // TikTok and GitHub send the provider callback to the API host. Keep the browser
   // callback in the portal so it can preserve the authenticated return path,
   // while allowing the API to control and whitelist every forwarded OAuth
   // parameter. Tokens never pass through this redirect.
-  for (const callbackToolId of ["tiktok", "tiktok_ads"] as const) {
+  for (const callbackToolId of ["tiktok", "tiktok_ads", "github"] as const) {
     server.get<{
       Querystring: Partial<Record<"code" | "auth_code" | "state" | "error" | "error_description", string>>;
     }>(
