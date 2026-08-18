@@ -324,6 +324,7 @@ test.describe("Golden Department production acceptance", () => {
     );
     await expect(page.locator(".dfy-thread")).toHaveCount(1);
 
+    await page.waitForTimeout(1000);
     const viewport = await scroller.evaluate((element) => ({
       top: element.scrollTop,
       distance: element.scrollHeight - element.scrollTop - element.clientHeight,
