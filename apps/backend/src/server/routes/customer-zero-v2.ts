@@ -143,6 +143,9 @@ import {
 import {
   DEFAULT_CONVERSATION_TITLE,
   deriveConversationTitle,
+  shouldCompact,
+  splitForCompaction,
+  summarizeOldMessages,
   type ConversationRecord,
   type ConversationMessage,
 } from "../../customer-zero/conversation-store.js";
@@ -4155,20 +4158,25 @@ export function emitCeoTurnFailureTrace(
 
 function traceResponseStatus(errorCode: string | null): number {
   switch (errorCode) {
+    case "RUNTIME_CONTEXT_EXHAUSTED":
+      return 400;
+    case "RUNTIME_TIMEOUT":
+    case "ENGINE_TIMEOUT":
+      return 504;
+    case "RUNTIME_CONNECTION_FAILED":
+    case "ENGINE_AUTHENTICATION":
+    case "ENGINE_UNAVAILABLE":
+      return 503;
+    case "RUNTIME_RECOVERY_FAILED":
+    case "ENGINE_EXECUTION":
+    case "ENGINE_PROTOCOL":
+      return 502;
     case "ENGINE_INVALID_REQUEST":
       return 400;
     case "ENGINE_RATE_LIMIT":
       return 429;
-    case "ENGINE_TIMEOUT":
-      return 504;
-    case "ENGINE_AUTHENTICATION":
-    case "ENGINE_UNAVAILABLE":
-      return 503;
     case "ENGINE_SESSION_NOT_FOUND":
       return 404;
-    case "ENGINE_EXECUTION":
-    case "ENGINE_PROTOCOL":
-      return 502;
     default:
       return 500;
   }
@@ -4325,9 +4333,13 @@ async function buildRuntimeBridge(
   // user. Keeping only the organization here would let two members share
   // OpenClaw transcript/tool context and would make credential selection
   // ambiguous.
-  const sessionId = userId
+  let sessionId = userId
     ? `ceo:${session.organizationId}:${userId}`
     : `ceo:${session.organizationId}`;
+  if (conversation?.compactedUpToMessageId) {
+    const suffix = conversation.compactedUpToMessageId.slice(0, 8);
+    sessionId = `${sessionId}:${suffix}`;
+  }
   const existingEngineSession = await deps.engine.getSession(sessionId);
   const engineSession = existingEngineSession
     ?? await deps.engine.createSession({ sessionId });
@@ -5078,18 +5090,97 @@ export async function processCeoMessage(
           contextBytes: Buffer.byteLength(nativeContext, "utf8"),
         });
       }
-      const nativeResult = await runtime.engine.sendMessage({
-        sessionId: runtime.sessionId,
+      let activeSessionId = runtime.sessionId;
+      let activeContext = nativeContext;
+
+      let nativeResult = await runtime.engine.sendMessage({
+        sessionId: activeSessionId,
         // Native mode receives the CEO's actual utterance. The existing
         // operational normalizer belongs to ENGINE 02's legacy protocol and
         // must not become a native-tool intent classifier.
         message,
-        runtimeContext: nativeContext,
+        runtimeContext: activeContext,
         nativeBusinessTools: true,
         ...(trace
           ? { timeline: (stage: string, metadata?: Readonly<Record<string, unknown>>) => traceStage(trace, stage, metadata) }
           : {}),
       });
+
+      const needsRecovery =
+        nativeResult.status === "failed" ||
+        (nativeResult.text && isInternalRuntimeLeak(nativeResult.text));
+
+      if (needsRecovery && trace) {
+        traceStage(trace, "T13_compaction_failure_or_leak_detected_initiating_recovery");
+        
+        // 1. Force secondary compaction on Departify side immediately
+        try {
+          const persistedConversationId = conversation.id;
+          const allMessages = await session.conversations.listMessages(
+            organizationId,
+            persistedConversationId,
+          );
+          const { older } = splitForCompaction(allMessages);
+          const persisted = await session.conversations.get(
+            organizationId,
+            persistedConversationId,
+          );
+          const priorIndex = persisted?.compactedUpToMessageId
+            ? allMessages.findIndex((msg) => msg.id === persisted.compactedUpToMessageId)
+            : -1;
+          const newOlder = older.filter((msg) =>
+            allMessages.findIndex((candidate) => candidate.id === msg.id) > priorIndex,
+          );
+          
+          const messagesToFold = newOlder.length > 0
+            ? newOlder
+            : (older.length > 0 ? older : (allMessages.length > 0 ? allMessages : []));
+          if (messagesToFold.length > 0) {
+            const lastFolded = messagesToFold[messagesToFold.length - 1] as ConversationMessage;
+            const delta = summarizeOldMessages(
+              messagesToFold.map((m) => ({ role: m.role, content: m.content })),
+            );
+            const summary = [persisted?.summary, delta].filter(Boolean).join("\n\n");
+            await session.conversations.saveCompaction(
+              organizationId,
+              persistedConversationId,
+              summary,
+              lastFolded.id,
+              (persisted?.compactionMessageCount ?? 0) + messagesToFold.length,
+            );
+          }
+        } catch (compactionErr: any) {
+          traceStage(trace, "T13_recovery_compaction_failed", { error: compactionErr.message });
+        }
+
+        // 2. Re-build the runtime bridge. Because the compaction was saved,
+        // buildRuntimeBridgeForCeoTurn will automatically resolve a new rotated sessionId suffix!
+        const rotatedRuntime = await buildRuntimeBridgeForCeoTurn(
+          session,
+          deps,
+          trace,
+          userId,
+          message,
+        );
+
+        if (rotatedRuntime) {
+          traceStage(trace, "T13_session_rotated_retrying_sendMessage", {
+            newSessionId: rotatedRuntime.sessionId,
+          });
+          activeSessionId = rotatedRuntime.sessionId;
+          activeContext = renderRuntimeBusinessContextForNativeEngine(rotatedRuntime.context);
+          nativeResult = await rotatedRuntime.engine.sendMessage({
+            sessionId: activeSessionId,
+            message,
+            runtimeContext: activeContext,
+            nativeBusinessTools: true,
+            ...(trace
+              ? { timeline: (stage: string, metadata?: Readonly<Record<string, unknown>>) => traceStage(trace, stage, metadata) }
+              : {}),
+          });
+        }
+      }
+
       if (trace) {
         trace.openclawStatus = nativeResult.status;
         trace.engineErrorCode = nativeResult.errorCode ?? null;
@@ -5103,7 +5194,7 @@ export async function processCeoMessage(
         trace.selectedToolNames = selectedTools;
         trace.toolCallCount = selectedTools.length;
         trace.contextBytes = Buffer.byteLength(
-          nativeContext,
+          activeContext,
           "utf8",
         );
         trace.toolResultStatuses = nativeResult.status === "completed" ? ["success"] : ["failed"];
@@ -5993,7 +6084,8 @@ async function completeRuntimeCeoTurn(
   workResult: DepartmentResult | null = null,
   trace?: CeoTurnTraceState,
 ): Promise<CeoMessageResult> {
-  const safeReply = reply
+  const sanitizedReply = sanitizeResponseText(reply, session.state.locale);
+  const safeReply = sanitizedReply
     .replace(/<departify_tool_call>[\s\S]*?<\/departify_tool_call>/gi, "")
     .trim();
   const finalReply = detectUnbackedWorkClaim(safeReply)
@@ -9121,6 +9213,33 @@ export function createWorkExecutor(
       }
     },
   });
+}
+
+export function isInternalRuntimeLeak(text: string): boolean {
+  if (!text) return false;
+  const forbidden = [
+    "openclaw",
+    "gateway",
+    "compaction",
+    "/compact",
+    "/new",
+    "reservetokensfloor",
+    "agents.defaults",
+    "context window",
+    "token limit"
+  ];
+  const lower = text.toLowerCase();
+  return forbidden.some((term) => lower.includes(term));
+}
+
+export function sanitizeResponseText(text: string, locale = "es"): string {
+  if (!text) return text;
+  if (isInternalRuntimeLeak(text)) {
+    return locale === "en"
+      ? "I could not complete this request. Your conversation is saved; you can try again."
+      : "No he podido completar esta petición. Tu conversación está guardada; puedes volver a intentarlo.";
+  }
+  return text;
 }
 
 /** Exposed for tests. */

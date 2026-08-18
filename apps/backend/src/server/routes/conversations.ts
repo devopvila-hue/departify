@@ -360,6 +360,8 @@ export async function registerConversationRoutes(
           deps.engineRuntimePolicy,
           runtime,
           trace,
+          deps,
+          request.authUser?.id,
         );
       } catch (cause) {
         if (cause instanceof MaxActiveConversationsError) {
