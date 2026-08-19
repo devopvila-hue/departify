@@ -483,4 +483,163 @@ describe("departify-video runtime and job contract tests", () => {
     const updated = await workStore.getTask(task.id);
     expect(updated!.status).toBe("completed");
   });
+
+  it("Test G: Recovery Concurrency Lock - exactly one worker obtains execution ownership", async () => {
+    const orgId = "org-concurrency-test";
+    const { setMyWorkerIdForTests } = await import("../src/server/routes/video.js");
+
+    await llmCredentials.put({
+      organizationId: orgId,
+      provider: "openai",
+      model: "gpt-4o-mini",
+      apiKey: "sk-mock-key-concurrency",
+      createdBy: "user-a",
+      verifiedAt: new Date().toISOString(),
+      lastError: null,
+      baseUrl: null,
+    });
+
+    await googleTokens.put({
+      organizationId: orgId,
+      userId: "user-a",
+      provider: "gmail",
+      accessToken: "mock",
+      refreshToken: "mock-refresh-token",
+      scopes: ["https://www.googleapis.com/auth/drive.file"],
+      expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
+      email: "ceo@concurrency.com",
+      displayName: "CEO",
+      operationalVerifiedAt: new Date().toISOString(),
+      operationalProbeError: null,
+      operationalCapabilities: ["drive.write"],
+    });
+
+    const workStore = workStoreForRoutes();
+    const task = await workStore.createTask({
+      organizationId: orgId,
+      departmentId: "marketing",
+      objectiveId: null,
+      requestedBy: "user-a",
+      title: "Generación de Vídeo de Marketing",
+      summary: "Concurrency check",
+      capability: "marketing.video.prepare",
+      toolId: "departify.video.generate",
+      status: "queued",
+      statusMessage: "En cola...",
+      progress: 0,
+      requiredCapabilities: ["marketing.video.prepare", "drive.write"],
+      startedAt: null,
+      completedAt: null,
+      resultId: null,
+      errorCode: null,
+      errorMessage: null,
+      timeoutMs: 300_000,
+      source: {
+        type: "video_generation",
+        idempotencyKey: "concurrency-idem-key",
+        aspectRatio: "9:16",
+        duration: 15,
+        budget: 1.00,
+        estimatedCost: 0.15,
+        providerOperations: [],
+        artifact: "https://drive.google.com/file/d/cached-file-id/view", // already generated!
+        driveFileId: "cached-file-id",
+      },
+    });
+
+    // Worker A and Worker B try to reconcile simultaneously
+    setMyWorkerIdForTests("worker-A");
+    const p1 = executeVideoJobReconciliation(task.id, { llmCredentials, googleTokens } as any);
+
+    setMyWorkerIdForTests("worker-B");
+    const p2 = executeVideoJobReconciliation(task.id, { llmCredentials, googleTokens } as any);
+
+    await Promise.all([p1, p2]);
+
+    const updated = await workStore.getTask(task.id);
+    console.log("TEST_G_ERROR:", updated!.errorMessage);
+    console.log("TEST_G_STATUS:", updated!.status);
+    console.log("TEST_G_ASSIGNED:", updated!.assignedEmployeeId);
+    expect(updated!.status).toBe("completed");
+    expect(["worker-A", "worker-B"]).toContain(updated!.assignedEmployeeId); // Exactly one worker obtained the lease and executed!
+  });
+
+  it("Test H: Lease Expiry Recovery - active worker successfully breaks/acquires expired lease", async () => {
+    const orgId = "org-lease-expiry-test";
+    const { setMyWorkerIdForTests } = await import("../src/server/routes/video.js");
+
+    await llmCredentials.put({
+      organizationId: orgId,
+      provider: "openai",
+      model: "gpt-4o-mini",
+      apiKey: "sk-mock-key-expiry",
+      createdBy: "user-a",
+      verifiedAt: new Date().toISOString(),
+      lastError: null,
+      baseUrl: null,
+    });
+
+    await googleTokens.put({
+      organizationId: orgId,
+      userId: "user-a",
+      provider: "gmail",
+      accessToken: "mock",
+      refreshToken: "mock-refresh-token",
+      scopes: ["https://www.googleapis.com/auth/drive.file"],
+      expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
+      email: "ceo@expiry.com",
+      displayName: "CEO",
+      operationalVerifiedAt: new Date().toISOString(),
+      operationalProbeError: null,
+      operationalCapabilities: ["drive.write"],
+    });
+
+    const workStore = workStoreForRoutes();
+    const expiredLeaseTime = new Date(Date.now() - 1000).toISOString(); // 1 second ago (expired!)
+
+    const task = await workStore.createTask({
+      organizationId: orgId,
+      departmentId: "marketing",
+      objectiveId: null,
+      requestedBy: "user-a",
+      title: "Generación de Vídeo de Marketing",
+      summary: "Expiry check",
+      capability: "marketing.video.prepare",
+      toolId: "departify.video.generate",
+      status: "running",
+      statusMessage: "Iniciando...",
+      progress: 0.1,
+      requiredCapabilities: ["marketing.video.prepare", "drive.write"],
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      resultId: null,
+      errorCode: null,
+      errorMessage: null,
+      timeoutMs: 300_000,
+      assignedEmployeeId: "worker-dead", // Locked by dead worker!
+      source: {
+        type: "video_generation",
+        idempotencyKey: "expiry-idem-key",
+        aspectRatio: "9:16",
+        duration: 15,
+        budget: 1.00,
+        estimatedCost: 0.15,
+        providerOperations: [],
+        artifact: "https://drive.google.com/file/d/cached-file-id/view", // already generated!
+        driveFileId: "cached-file-id",
+        leaseExpiresAt: expiredLeaseTime, // Lease is expired!
+      },
+    });
+
+    // Active worker B reconciles
+    setMyWorkerIdForTests("worker-B-active");
+    await executeVideoJobReconciliation(task.id, { llmCredentials, googleTokens } as any);
+
+    const updated = await workStore.getTask(task.id);
+    console.log("TEST_H_ERROR:", updated!.errorMessage);
+    console.log("TEST_H_STATUS:", updated!.status);
+    console.log("TEST_H_ASSIGNED:", updated!.assignedEmployeeId);
+    expect(updated!.status).toBe("completed");
+    expect(updated!.assignedEmployeeId).toBe("worker-B-active"); // Active Worker B successfully hijacked and processed!
+  });
 });

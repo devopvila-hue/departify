@@ -75,7 +75,9 @@ export type DepartmentWorkCapability =
   | "marketing.shopify.customers.list"
   | "seo.audit.website"
   | "seo.repository.read"
-  | "drive.workspace.create";
+  | "drive.workspace.create"
+  | "marketing.video.prepare"
+  | "drive.write";
 
 /** Departments of work the model is NOT allowed to promise today. */
 export const UNSUPPORTED_PROMISE_PATTERNS: readonly RegExp[] = [
@@ -173,6 +175,17 @@ export interface DepartmentTask {
   } | {
     readonly type: "chat_operation";
     readonly operationKey: string;
+  } | {
+    readonly type: "video_generation";
+    readonly idempotencyKey: string;
+    readonly aspectRatio: string;
+    readonly duration: number;
+    readonly budget: number;
+    readonly estimatedCost: number;
+    readonly providerOperations: readonly any[];
+    readonly artifact: string | null;
+    readonly driveFileId: string | null;
+    readonly leaseExpiresAt?: string | null;
   };
 }
 
