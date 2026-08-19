@@ -343,3 +343,50 @@ El "fetch failed" del usuario nuevo era el error crudo de Node fetch
 Backend 506/506 (9 tests CZ08), portal 101/101, lint/typecheck/build verdes.
 Deploy Railway SUCCESS + Netlify bundle + health 200.
 FINAL STATUS: READY FOR FOUNDER VALIDATION (browser autenticado real NO validado).
+
+---
+## Sprint 64b — Real-time SSE activity streaming (commit 2a5d415)
+
+### Qué se hizo
+Cerré el gap principal que dejó Sprint 64 en PARTIAL: el SSE real progresivo.
+La base `activitySink` ya existía; la cableé a un endpoint streaming y al portal.
+
+### Backend
+- Nueva ruta `POST /api/customer-zero/:org/command-center/message/stream`:
+  `reply.hijack()` + `text/event-stream`. Emite frames progresivos
+  `event: activity` (received → retrieving_context → delegated → streaming)
+  y termina con `event: result` (o `event: error`).
+- Mismo pipeline que el endpoint JSON; `processCeoMessage` SIN cambios.
+- Product Identity Boundary intacta: el timeline interno queda en logs,
+  nunca en el stream. Admin commands y MaxActiveConversationsError mapeados.
+
+### Portal
+- `api.commandCenterMessageStream`: fetch + ReadableStream, parser SSE
+  manual, fallback al endpoint JSON si el transporte falla.
+- `ChatRoute`: el chat principal usa el stream; cada evento actualiza
+  `processStatus` en vivo (Recibido → Revisando → Marketing trabajando →
+  Escribiendo).
+
+### Tests (3 nuevos en sprint-64-live-activity.test.ts)
+- B1: stream devuelve text/event-stream con frames de actividad en orden
+  + result terminal.
+- B2: nunca filtra jargon interno (compaction/leak/recovery/T1/OpenClaw).
+- B3: "received" se emite antes de que el engine devuelva.
+
+### Validación
+- Backend 805 pass (802 + 3 nuevos); 4 integration fail = Supabase local
+  (pre-existente, no relacionado).
+- Portal 130/130. Lint sin errores nuevos. Typecheck + build backend y
+  portal verdes.
+- Push a origin/main OK. Railway redeploy OK (container a22676dd19e6).
+  /health 200, app 200, endpoint /message/stream responde 401 (ruta viva).
+
+### Estado final
+Sprint 64 + 64b: la experiencia de chat ahora es comparable a OpenClaw
+desde Telegram en la dimensión de feedback en vivo. El CEO ve progreso
+real mientras el motor trabaja, no un black box.
+
+Pendiente NO automatizable (requiere cuenta del CEO / Telegram):
+- Browser autenticado real en producción.
+- Mobile E2E autenticado.
+- Baseline contra OpenClaw directo en Telegram (mismo modelo).

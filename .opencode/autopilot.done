@@ -1,175 +1,45 @@
-# AUTOPILOT DONE — Onboarding / Company DNA / Readiness Recovery
+# AUTOPILOT DONE — SPRINT 64 + 64b: CHAT PERFORMANCE + NATIVE OPENCLAW EXPERIENCE
 
-## 1. ROSA PRE-FLIGHT
-Read the onboarding commits (b7f904e, 87db295, 9b99dfa, c73a159, 0070009),
-company-dna.ts, company-readiness.ts, onboarding-checkpoints.ts,
-SupabaseCompanyDNAStore, RootRoute, ShellGate, CustomerZeroRoute, all
-/start /progress /next-question /understanding /confirm /handoff endpoints,
-auth boundary, session hydration. No feature work. No Email/Calendar/Drive.
-No OnboardingV3/CompanyDNAV2/new state machine — consolidated onto the
-readiness architecture the previous sprint introduced.
+## Resumen de lo logrado
+El objetivo era que el Chat de Departify tuviera una experiencia de
+velocidad, streaming y proactividad comparable a OpenClaw usado
+directamente desde Telegram. Se completó en dos commits:
 
-## 2. PRODUCTION EVIDENCE INSPECTED
-- Supabase production: 8 orgs; NONE has a complete DNA record. The
-  founder's org (7a9f4986, Gmail connected) has NO DNA row. A new-user org
-  (8aae681a) has intake-only DNA (research never completed).
-- Railway logs: new-user /start → `customer_zero_started` +
-  `research_started`, NO `research_completed` (research threw).
-- Deployed commit 0070009 (adoption) at 01:04 UTC; failure evidence after.
+1. **Sprint 64 (7896498)** — Live Activity / feedback honesto:
+   - Label optimista instantáneo "Departify · Recibido" (TTF ~0ms).
+   - Eventos reales de actividad del backend (received → retrieving_context
+     → delegated → streaming) mostrados en el portal.
+   - Eliminada lectura duplicada de Google tokens por turno.
+   - ConversationList memoizada (React.memo).
+   - Product Identity Boundary protegida por tests (nunca se filtra
+     OpenClaw/gateway/timeline interno).
 
-## 3. EXISTING-USER LAST_SUCCESSFUL_CHECKPOINT
-GET /:org 200 (record branch) — the org's durable state was readable.
+2. **Sprint 64b (2a5d415)** — SSE real progresivo:
+   - Endpoint `POST /command-center/message/stream` (text/event-stream)
+     que emite cada work_state en tiempo real y termina con `result`.
+   - `api.commandCenterMessageStream` en el portal (fetch + ReadableStream,
+     con fallback al JSON endpoint).
+   - ChatRoute actualiza processStatus en vivo por cada evento.
 
-## 4. EXISTING-USER FIRST_FAILED_CHECKPOINT
-GET /:org 200 response body WITHOUT contextReady/contextMissing/stage —
-the Fastify response schema omitted them, so the serializer stripped them.
-The portal always saw `contextReady === undefined`.
+## Archivos clave
+- apps/backend/src/server/routes/customer-zero-v2.ts (endpoint SSE ~L3695,
+  activitySink en processCeoMessage ~L5419, buildRuntimeBridge ~L4716)
+- apps/backend/src/customer-zero/command-center.ts (tipos work_state)
+- apps/backend/test/sprint-64-live-activity.test.ts (9 tests: A1-A6 + B1-B3)
+- apps/portal/src/app/api.ts (commandCenterMessageStream)
+- apps/portal/src/routes/ChatRoute.tsx (streaming + label optimista)
 
-## 5. EXISTING-USER ROOT_CAUSE
-The status response schema (customer-zero.ts) listed only the legacy
-fields. `contextReady`, `contextMissing`, `stage` were returned by the
-handler but never reached the portal. RootRoute therefore never saw
-"ready" → every org was treated as not-ready → CustomerZeroRoute fell
-into the LEGACY conversation step → `currentQuestion` returned null →
-`buildConversationPayload` emitted the legacy `handoff` →
-"Ya tengo suficiente / Vamos a trabajar" (dead: the button's
-understanding endpoint had no DNA to show → "No hemos podido preparar el
-resumen").
+## Cómo verificarlo
+- Backend: `cd apps/backend && npx vitest run` → 805 pass
+  (4 integration fail = requieren Supabase local, pre-existente).
+- Portal: `cd apps/portal && npx vitest run` → 130 pass.
+- Typecheck + build backend y portal verdes.
+- Producción: https://api.departify.app/health → 200;
+  https://app.departify.app → 200; endpoint /message/stream → 401 (ruta viva).
+- Railway redeploy OK (container a22676dd19e6).
 
-## 6. NEW-USER LAST_SUCCESSFUL_CHECKPOINT
-POST /start 200 → `research_started` checkpoint.
-
-## 7. NEW-USER FIRST_FAILED_CHECKPOINT
-`research_started` with NO `research_completed` — `fetchAndExtractWebsite`
-rejected (unreachable website) → runResearch recorded the RAW Node error
-("fetch failed") via failProgress → the portal's ResearchStep showed it
-verbatim and the flow reset toward intake.
-
-## 8. NEW-USER ROOT_CAUSE
-Unbounded raw error propagation: the web fetch rejection message
-("fetch failed") was stored on progress.error and rendered to the CEO.
-No business-readable mapping; no retry that preserved the organization.
-
-## 9. WHY LEGACY TERMINAL STILL EXISTED
-Two onboarding UIs coexisted: the legacy conversation→handoff step
-(next-question returned `handoff` when no question remained) and the new
-readiness/understanding path. The portal only entered the new path when
-contextMissing === ["confirmation"]; with the schema stripping the stage,
-that never happened for pre-DNA orgs.
-
-## 10. WHY "VAMOS A TRABAJAR" WAS DEAD
-The button called openConfirmation → api.understanding → the org had no
-DNA → nothing to review; the understanding endpoint returned no data and
-the flow could not advance.
-
-## 11. WHY UNDERSTANDING RECONSTRUCTION FAILED
-Same root cause: stage/contextReady never reached the portal, so it never
-routed to the understanding screen, and the org had no DNA to show.
-
-## 12. EXACT CAUSE OF RAW "FETCH FAILED"
-Node's undici `fetch` rejects with message "fetch failed" for DNS/TLS/refused
-connections. `fetchAndExtractWebsite` did not map it; runResearch recorded
-the raw message; ResearchStep rendered `body.error` verbatim.
-
-## 13. CANONICAL STATE MACHINE AFTER FIX
-AUTHENTICATED → INTAKE (no DNA) → RESEARCH (intake, research not done) →
-DISCOVERY (research done, blocking discovery not done) → UNDERSTANDING
-(discovery done, unconfirmed) → READY (confirmed current) → CHAT. The
-portal routes exclusively by the durable stage; the legacy handoff
-terminal is removed from the API.
-
-## 14. DURABLE RECONSTRUCTION TABLE
-FACT | DURABLE SOURCE | WRITER | READER | REQUIRED FOR READINESS
-intake | company_dna (company_name, website/description, objective) | /start (projectIntakeToDna) | readinessFactsFromRecord, status | yes
-research completion | company_dna.research_completed_at | runResearch (projectResearchToDna) | readinessFactsFromRecord | yes
-research facts | company_dna (products, customers, geography, ...) | runResearch / /answer | understanding, readiness | yes
-blocking discovery | company_dna.blocking_discovery_completed_at | /answer (markMilestone) | readinessFactsFromRecord | yes
-CEO confirmation | company_dna.ceo_confirmed_at (+ facts_updated_at) | /confirm (applyCeoConfirmation) | isConfirmationCurrent | yes
-factsUpdatedAt | company_dna.facts_updated_at | all fact writers | isConfirmationCurrent | yes
-ceoConfirmedAt | company_dna.ceo_confirmed_at | /confirm | readinessFactsFromRecord | yes
-department provisioned | company_dna.department_provisioned_at | /marketing handoff (markMilestone) | readinessFactsFromRecord | yes
-
-## 15. EXISTING-ORG ADOPTION
-Existing org without DNA → status 200 stage "intake" on the SAME
-organization id (the 404 that wiped the org is gone). Integrations,
-conversations and org identity are untouched.
-
-## 16. COMPANY DNA BEHAVIOR
-DNA is the single durable source of the five readiness facts. A row alone
-is not readiness (L test). Research output is only written when genuine.
-
-## 17. READINESS BEHAVIOR
-Evaluated from durable DNA only; never from process memory. The stage is
-projected from the same record.
-
-## 18. REFRESH BEHAVIOR
-Refresh → status (durable stage) → the portal resumes at the correct
-incomplete stage (research/discovery/understanding) or chat when ready.
-
-## 19. BACKEND RESTART BEHAVIOR
-Same as refresh — the stage is computed from Supabase; confirmed orgs
-return contextReady=true → chat.
-
-## 20. NEW-USER BEHAVIOR
-Intake → research (resumable via POST /:org/research on the same org) →
-discovery → understanding → confirmation → chat. Research failure shows a
-business message + Reintentar; intake is never reset.
-
-## 21. SAFE ERROR UX
-web-analysis fetch failures map to "No hemos podido acceder a la web de tu
-empresa…". Raw "fetch failed" never reaches the CEO.
-
-## 22. FILES CHANGED
-company-readiness.ts (durableOnboardingStage), customer-zero.ts (schema +
-404→200 intake + stage), customer-zero-v2.ts (resume research, no handoff),
-web-analysis.ts (friendly errors), portal api.ts (stage/research),
-CustomerZeroRoute.tsx (stage routing, research retry, no legacy terminal),
-CustomerZeroRoute.test.tsx.
-
-## 23. TESTS ADDED
-customer-zero-08-onboarding-recovery.test.ts (9): stage derivation,
-no-handoff, refresh reconstruction, restart durability, stale
-confirmation, no chat bypass, same-org adoption, understanding 404,
-friendly research errors.
-
-## 24. BACKEND TEST TOTAL — 506/506 (40 files) PASS
-## 25. PORTAL TEST TOTAL — 101/101 (13 files) PASS
-## 26. LINT — pnpm -r lint VERDE
-## 27. TYPECHECK — pnpm -r typecheck VERDE
-## 28. BUILD — pnpm -r build VERDE
-## 29. PNPM CHECK — portal check verde en aislamiento; el check agregado
-falla intermitentemente por contención de 36 paquetes (timeout del test
-runner), no por regresión (suite estable en 3 ejecuciones consecutivas).
-## 30. MIGRATIONS — none new (company_dna already applied).
-## 31. COMMITS
-03b4090 fix(customer-zero): onboarding readiness recovery — one canonical
-path, no legacy handoff terminal
-## 32. RAILWAY DEPLOYMENT — departify-api SUCCESS (03b4090); health 200.
-## 33. NETLIFY DEPLOYMENT — bundle contiene el nuevo copy (Revisar lo que
-hemos entendido / Reintentar).
-## 34. BROWSER VALIDATION EXISTING ORG — NOT VALIDATED IN REAL
-AUTHENTICATED BROWSER (requires the founder's account; no browser
-automation against the real authenticated session was possible).
-## 35. BROWSER VALIDATION NEW ORG — NOT VALIDATED IN REAL AUTHENTICATED
-BROWSER (same limitation).
-## 36. VALIDATED
-Code paths, durable stage projection, schema delivery, resume research,
-friendly errors, 506 backend + 101 portal tests, deploy, health, bundle.
-## 37. NOT VALIDATED
-Real authenticated browser flows (both scenarios), real website research.
-## 38. BLOCKED
-None.
-## 39. EXACT FOUNDER RETEST
-SCENARIO 1 (existing org): refresh app.departify.app → debe ver intake u
-onboarding en el MISMO org (no "Ya tengo suficiente") → completar →
-research → "Esto es lo que he entendido" → confirmar → chat → refresh →
-sigue en chat.
-SCENARIO 2 (new org): cuenta nueva → intake → research → preguntas →
-revisión → confirmación → chat → refresh → sigue en chat. Si la web falla:
-mensaje en lenguaje de negocio + Reintentar (nunca "fetch failed").
-## 40. FINAL STATUS
-READY FOR FOUNDER VALIDATION — automated/production checkpoints healthy;
-real authenticated browser validation NOT performed (requires the
-founder's account). Per the golden rule: onboarding is now the single
-canonical path, impossible to bypass, and a refresh cannot forget where
-the CEO was.
+## Pendiente NO automatizable (requiere acceso humano)
+- Browser autenticado real en producción (cuenta del CEO).
+- Mobile E2E autenticado.
+- Baseline contra OpenClaw directo en Telegram con el mismo modelo
+  (script tools/chat-latency-ab.mjs disponible en el repo).
