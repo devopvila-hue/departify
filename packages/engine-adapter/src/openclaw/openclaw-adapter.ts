@@ -125,6 +125,12 @@ export class OpenClawEngineAdapter implements EngineAdapter {
         },
         this.client.config.requestTimeoutMs,
         input.timeline,
+        // Sprint 67 P0 — forward chunk callback so the SSE handler can
+        // stream progressive assistant text to the portal without waiting
+        // for the agent.wait settle. The callback is wrapped in a try/catch
+        // inside the gateway-client so a caller-side error cannot poison
+        // the WebSocket loop.
+        input.onChunk,
       );
       const text = lastAssistant.text ?? "";
       const toolCalls = (lastAssistant.toolCalls ?? []).map((tc) => ({

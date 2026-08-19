@@ -34,6 +34,30 @@ export interface EngineSendMessageInput {
   toolResult?: string;
   /** Experimental native OpenClaw mode; no textual Departify tool protocol. */
   nativeBusinessTools?: boolean;
+  /**
+   * Sprint 67 P0 — progressive assistant text delivery.
+   *
+   * The provider adapter invokes this callback for every user-visible
+   * assistant text delta the gateway emits while the run is in flight.
+   * The callback is invoked from the WebSocket message loop. Implementations
+   * MUST be non-blocking and free of side effects on the canonical message
+   * store. The final `result` returned by `sendMessage` still carries the
+   * authoritative final text — the chunks are a transport concern, not a
+   * second source of truth.
+   *
+   * `finished` is the structural run-settled signal: the gateway has
+   * emitted the terminal event for the run (e.g. lifecycle status
+   * completed/ok on agent.wait). The chat history is stable at this point.
+   */
+  onChunk?: (chunk: EngineAssistantChunk) => void;
+}
+
+/** A single assistant text delta from the model. Provider-neutral. */
+export interface EngineAssistantChunk {
+  /** UTF-8 text delta. The portal concatenates these in order. */
+  text: string;
+  /** True if this is the final chunk emitted before run settlement. */
+  finished: boolean;
 }
 
 export interface EngineNativeToolPolicyInput {

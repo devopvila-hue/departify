@@ -320,6 +320,7 @@ export class OpenClawGatewayClient {
     waitTimeoutMs: number,
     collectEvents = false,
     timeline?: GatewayTimeline,
+    onChunk?: (chunk: { text: string; finished: boolean }) => void,
   ): Promise<{ result: unknown; events?: RunEvents }> {
     await this.ensureConnected();
     const runEvents: RunEvents = { assistantChunks: [], toolCalls: [] };
@@ -350,8 +351,8 @@ export class OpenClawGatewayClient {
       // run cannot contaminate this turn.
       runEvents.toolCalls = [];
     }
-    const runEventCapture = collectEvents
-      ? this.startEventCapture(runEvents, runId, timeline)
+    const runEventCapture = collectEvents || onChunk
+      ? this.startEventCapture(runEvents, runId, timeline, onChunk)
       : null;
 
     let wait: unknown;
@@ -379,6 +380,7 @@ export class OpenClawGatewayClient {
     params: ReqParams,
     waitTimeoutMs: number,
     timeline?: GatewayTimeline,
+    onChunk?: (chunk: { text: string; finished: boolean }) => void,
   ): Promise<{
     runStatus: string;
     lastAssistant: {
@@ -396,7 +398,7 @@ export class OpenClawGatewayClient {
   }> {
     const key = String(params.key);
     const historyBefore = await this.chatHistory(key);
-    const { result, events } = await this.runAgent(params, waitTimeoutMs, true, timeline);
+    const { result, events } = await this.runAgent(params, waitTimeoutMs, true, timeline, onChunk);
     const runStatus = String((result as { status?: unknown })?.status ?? "");
     const history = await this.chatHistory(key);
     const messages = history?.messages ?? [];
@@ -673,6 +675,7 @@ export class OpenClawGatewayClient {
     runEvents: RunEvents,
     activeRunId: string,
     timeline?: GatewayTimeline,
+    onChunk?: (chunk: { text: string; finished: boolean }) => void,
   ): { stop: () => void } {
     let firstEventSeen = false;
     const handler = (ev: MessageEvent) => {
@@ -698,6 +701,17 @@ export class OpenClawGatewayClient {
         const chunk = d.delta ?? d.text ?? "";
         if (chunk) {
           (runEvents.assistantChunks ??= []).push(chunk);
+          // Sprint 67 P0 — surface the chunk to the caller in real time.
+          // The callback is invoked from the WebSocket loop; the caller
+          // MUST be non-blocking. We do not deduplicate equal chunks here;
+          // the chat-side reducer renders the delta verbatim.
+          if (onChunk) {
+            try {
+              onChunk({ text: chunk, finished: false });
+            } catch {
+              /* swallow — caller-side error must never poison the WS loop */
+            }
+          }
         }
       } else if (stream === "tool" || payload.status === "tool") {
         const name = String((data as { name?: string }).name ?? "tool");

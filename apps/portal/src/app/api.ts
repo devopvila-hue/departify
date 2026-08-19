@@ -1751,6 +1751,7 @@ export const api = {
     conversationId: string | undefined,
     correlationId: string,
     onActivity: (event: CommandCenterEvent) => void,
+    onChunk?: (chunk: { text: string; finished: boolean }) => void,
   ): Promise<
     (CommandCenterMessageResult & {
       conversationId?: string;
@@ -1813,6 +1814,18 @@ export const api = {
           }
           if (eventName === "activity") {
             onActivity(parsed as CommandCenterEvent);
+          } else if (eventName === "content_delta") {
+            // Sprint 67 P0 — progressive assistant text. The reducer
+            // concatenates these in order so the assistant bubble streams
+            // in real time. The final `result` event still carries the
+            // authoritative final text — chunks are a transport, not a
+            // second source of truth.
+            if (onChunk) {
+              const c = parsed as { text?: string; finished?: boolean };
+              if (typeof c.text === "string") {
+                onChunk({ text: c.text, finished: c.finished === true });
+              }
+            }
           } else if (eventName === "result") {
             result = parsed as CommandCenterMessageResult & {
               conversationId?: string;
@@ -1917,6 +1930,7 @@ export const api = {
     message: string,
     correlationId: string,
     onActivity: (event: CommandCenterEvent) => void,
+    onChunk?: (chunk: { text: string; finished: boolean }) => void,
   ): Promise<
     (CommandCenterMessageResult & {
       conversationId?: string;
@@ -1976,6 +1990,18 @@ export const api = {
           }
           if (eventName === "activity") {
             onActivity(parsed as CommandCenterEvent);
+          } else if (eventName === "content_delta") {
+            // Sprint 67 P0 — progressive assistant text. The reducer
+            // concatenates these in order so the assistant bubble streams
+            // in real time. The final `result` event still carries the
+            // authoritative final text — chunks are a transport, not a
+            // second source of truth.
+            if (onChunk) {
+              const c = parsed as { text?: string; finished?: boolean };
+              if (typeof c.text === "string") {
+                onChunk({ text: c.text, finished: c.finished === true });
+              }
+            }
           } else if (eventName === "result") {
             result = parsed as CommandCenterMessageResult & {
               conversationId?: string;

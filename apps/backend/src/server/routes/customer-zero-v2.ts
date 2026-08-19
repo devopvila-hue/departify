@@ -3890,6 +3890,19 @@ export async function registerCustomerZeroV2Routes(
           // Sprint 64 — Live Activity: the sink writes each event to the
           // SSE stream as it happens, so the CEO sees progress in real time.
           captureActivity,
+          // Sprint 67 P0 — surface progressive assistant text as the
+          // model streams, without waiting for agent.wait to settle.
+          (chunk: { text: string; finished: boolean }) => {
+            try {
+              send("content_delta", {
+                text: chunk.text,
+                finished: chunk.finished,
+                at: Date.now(),
+              });
+            } catch {
+              /* client may have disconnected mid-write */
+            }
+          },
         );
         traceStage(trace, "T15_backend_response_finalization", {
           responseStatus: ceoTurnResponseStatus(trace),
@@ -5695,6 +5708,16 @@ export async function processCeoMessage(
     message: string,
     extra?: { departmentId?: string; capability?: string },
   ) => void,
+  /**
+   * Sprint 67 P0 — progressive assistant text sink. The route handler
+   * may pass a callback that receives each user-visible assistant text
+   * delta the gateway emits while the run is in flight. The delivery is
+   * guaranteed only for the actual chat path that calls `engine.sendMessage`.
+   * Tool-checks, deterministic-gate turns and short-circuits do not
+   * invoke this sink. The callback MUST be non-blocking; it is invoked
+   * from the OpenClaw WebSocket loop.
+   */
+  chunkSink?: (chunk: { text: string; finished: boolean }) => void,
 ): Promise<CeoMessageResult> {
   let conversation: ConversationRecord;
   try {
@@ -5945,6 +5968,9 @@ export async function processCeoMessage(
         message,
         runtimeContext: activeContext,
         nativeBusinessTools: true,
+        // Sprint 67 P0 — forward the chunk sink so the SSE handler can
+        // emit `content_delta` frames while the model is still running.
+        ...(chunkSink ? { onChunk: chunkSink } : {}),
         ...(trace
           ? { timeline: (stage: string, metadata?: Readonly<Record<string, unknown>>) => traceStage(trace, stage, metadata) }
           : {}),

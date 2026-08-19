@@ -440,6 +440,46 @@ export function ChatRoute() {
     // The 5-active-cap is enforced by the same endpoint via
     // ensureConversation (see customer-zero-v2.ts). When a conversation
     // is already selected, send the message to that conversation.
+    // Sprint 67 P0 — progressive text. We append the user line and a
+    // streaming assistant placeholder BEFORE the network roundtrip so
+    // the CEO sees the assistant bubble fill in as `content_delta`
+    // frames arrive. The final assistant text from `result` overwrites
+    // the streamed accumulator at the end; the placeholder has key
+    // `streaming-${correlationId}` so the chunk reducer can find it.
+    const streamingKey = `streaming-${correlationId}`;
+    setTranscript((prev) => {
+      const userLine = { role: "user" as const, content: value };
+      const placeholder = {
+        role: "assistant" as const,
+        content: "",
+        speaker: "elvira" as const,
+        _streaming: true,
+      };
+      // Avoid duplicating the user line if the optimistic submit already
+      // appended it (controlled by setTranscript optimistic append).
+      void streamingKey;
+      if (prev.at(-1)?.role === "user" && prev.at(-1)?.content === value) {
+        return [...prev, placeholder];
+      }
+      return [...prev, userLine, placeholder];
+    });
+    const onChunk = (chunk: { text: string; finished: boolean }): void => {
+      if (generation !== loadGenerationRef.current) return;
+      if (!chunk.text) return;
+      setTranscript((prev) => {
+        const idx = prev.findIndex(
+          (t) => (t as { _streaming?: boolean })._streaming === true,
+        );
+        if (idx < 0) return prev;
+        const updated = prev.slice();
+        const existing = updated[idx] as { content: string };
+        updated[idx] = {
+          ...updated[idx],
+          content: existing.content + chunk.text,
+        } as (typeof prev)[number];
+        return updated;
+      });
+    };
     const result:
       | (CommandCenterMessageResult & {
           conversationId?: string;
@@ -459,6 +499,7 @@ export function ChatRoute() {
               setProcessStatus(event.message);
             }
           },
+          onChunk,
         )
       : await api.commandCenterMessageStream(
           organizationId,
@@ -475,6 +516,7 @@ export function ChatRoute() {
               setProcessStatus(event.message);
             }
           },
+          onChunk,
         );
     if (generation !== loadGenerationRef.current) return;
     setBusy(false);
@@ -550,12 +592,25 @@ export function ChatRoute() {
     // Append the user line (if not already rendered by the polling reload)
     // and the assistant reply so the CEO sees a continuous history.
     setTranscript((prev) => {
-      const last = prev.at(-1);
       const assistantLine = {
         role: "assistant" as const,
         content: visibleAssistantMessage(result!.reply),
         speaker: inferSpeaker(cleanEvents),
       };
+      // Sprint 67 P0 — replace the streaming placeholder (if any) with the
+      // authoritative final line. The streaming reducer prepended a
+      // placeholder with `_streaming: true` so we can locate it. If we
+      // never received a chunk (e.g. tool-deterministic path), the
+      // placeholder is still empty and we just drop it.
+      const last = prev.at(-1);
+      const streamingIdx = prev.findIndex(
+        (t) => (t as { _streaming?: boolean })._streaming === true,
+      );
+      if (streamingIdx >= 0) {
+        const updated = prev.slice();
+        updated[streamingIdx] = assistantLine;
+        return updated;
+      }
       if (last?.role === "user" && last.content === value) {
         return [...prev, assistantLine];
       }

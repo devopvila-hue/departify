@@ -273,6 +273,7 @@ describe("Sprint 65 P0 — Real Streaming Transport on every conversation turn",
     expect(raw).not.toMatch(/Error: /); // raw error class names
     const frames = parseSse(raw);
     const last = frames[frames.length - 1];
+    if (!last) throw new Error("expected at least one SSE frame");
     expect(["result", "error"]).toContain(last.eventName);
   });
 

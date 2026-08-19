@@ -599,6 +599,23 @@ export async function registerConversationRoutes(
         });
       };
 
+      // Sprint 67 P0 — progressive assistant text. Each gateway
+      // assistant-chunk event becomes a `content_delta` SSE frame so
+      // the portal starts rendering the assistant bubble while the
+      // model is still streaming. The sink is non-blocking; segments
+      // are emitted verbatim and the reducer concatenates them.
+      const chunkSink = (chunk: { text: string; finished: boolean }): void => {
+        try {
+          send("content_delta", {
+            text: chunk.text,
+            finished: chunk.finished,
+            at: Date.now(),
+          });
+        } catch {
+          /* client may have disconnected mid-write */
+        }
+      };
+
       try {
         captureActivity(
           "retrieving_context",
@@ -633,6 +650,9 @@ export async function registerConversationRoutes(
           // Sprint 65 P0 — the sink writes each event to the SSE stream
           // as it happens, so the CEO sees progress on every turn.
           captureActivity,
+          // Sprint 67 P0 — surface progressive assistant text as soon
+          // as the gateway emits it, without waiting for agent.wait.
+          chunkSink,
         );
         traceStage(trace, "T15_backend_response_finalization", {
           responseStatus: ceoTurnResponseStatus(trace),
