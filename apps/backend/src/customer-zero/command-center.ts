@@ -1493,28 +1493,37 @@ export function buildProactiveOpening(
   const marketingActive = !!work;
   const objective = work?.goal ?? session.state.onboarding?.goal ?? null;
 
-  // Honest proactivity trigger: the "Elvira toma la iniciativa" card
-  // only appears when there is something grounded to say — an active
-  // work plan (items in motion, waiting on a connection, approvals)
-  // or a company objective to advance. Without either, there is no
-  // legitimate proactive message: "Elvira ya está lista, dime qué
-  // quieres conseguir" is zero-value noise the moment the CEO already
-  // spoke. The opening surface stays silent instead.
+  // Honest proactivity trigger: the proactive card only appears when
+  // there is something grounded to say — an active work plan (items
+  // in motion, waiting on a connection, approvals) or a company
+  // objective to advance. P0 Product Consistency — Elvira is the
+  // Marketing head, not a global fallback. The proactive card talks
+  // as "Departify" for general/transversal context and only mentions
+  // Elvira when the work actually belongs to Marketing.
   if (objective || marketingActive) {
+    const isMarketingOwned = !!work;
     events.push({
       kind: "intent_proactive",
       intent: "open",
       title: t(
         session.state.locale,
-        "Elvira toma la iniciativa",
-        "Elvira takes the initiative",
+        isMarketingOwned
+          ? "Elvira toma la iniciativa"
+          : "Departify está organizando el primer plan",
+        isMarketingOwned
+          ? "Elvira takes the initiative"
+          : "Departify is organizing the first plan",
       ),
       message: objective
         ? buildProactiveStrategyMessage(session.state.locale, objective, work)
         : t(
             session.state.locale,
-            "Elvira ya está lista para ponerse a trabajar. Dile qué quieres conseguir.",
-            "Elvira is ready to start working. Tell her what you want to achieve.",
+            isMarketingOwned
+              ? "Elvira ya está lista para ponerse a trabajar. Dile qué quieres conseguir."
+              : "Cuéntanos qué quieres conseguir y prepararemos el primer plan.",
+            isMarketingOwned
+              ? "Elvira is ready to start working. Tell her what you want to achieve."
+              : "Tell us what you want to achieve and we'll prepare the first plan.",
           ),
     });
   }

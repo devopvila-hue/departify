@@ -24,8 +24,8 @@ const openingEs = {
     {
       kind: "intent_proactive",
       intent: "open",
-      title: "Elvira toma la iniciativa",
-      message: "Para validar tu empresa, Elvira va a empezar por revisar el contexto.",
+      title: "Departify está organizando el primer plan",
+      message: "Para validar tu empresa, Departify va a empezar por revisar el contexto.",
     },
   ],
 };

@@ -27,8 +27,8 @@ const openingEs = {
     {
       kind: "intent_proactive",
       intent: "open",
-      title: "Elvira toma la iniciativa",
-      message: "Para conseguir tu objetivo (conseguir 20 clientes en Barcelona), Elvira va a empezar por validar audiencia y mensaje.",
+      title: "Departify está organizando el primer plan",
+      message: "Para conseguir tu objetivo (conseguir 20 clientes en Barcelona), Departify va a empezar por validar audiencia y mensaje.",
     },
     {
       kind: "connection_need",
@@ -208,7 +208,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
   it("S1. opening connection cards are filtered; the greeting card renders", async () => {
     const { container } = renderChat();
     // The proactive intent card is the canonical opening.
-    expect(await screen.findByText(/elvira toma la iniciativa/i)).toBeInTheDocument();
+    expect(await screen.findByText(/departify está organizando/i)).toBeInTheDocument();
     // The unrelated Brevo connection card from the opening is filtered.
     expect(screen.queryByText(/para enviar tus campañas/i)).not.toBeInTheDocument();
     // The conversation transcript is loaded.
@@ -218,7 +218,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
 
   it("S2. sending while scrolled up returns the viewport to the latest exchange", async () => {
     const { container } = renderChat();
-    await screen.findByText(/elvira toma la iniciativa/i);
+    await screen.findByText(/departify está organizando/i);
     const el = scroller(container);
     setupScrollMetrics(el);
     await waitFor(() => expect(el.scrollTop).toBe(0));
@@ -284,7 +284,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
     );
 
     renderChat();
-    await screen.findByText(/elvira toma la iniciativa/i);
+    await screen.findByText(/departify está organizando/i);
     await screen.findByText(/¿tengo correos importantes\?/i);
     const input = await screen.findByLabelText(/mensaje para departify/i);
     fireEvent.change(input, { target: { value } });
@@ -298,7 +298,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
 
   it("S3. 'Volver al último mensaje' appears when scrolled up and snaps to the bottom", async () => {
     const { container } = renderChat();
-    await screen.findByText(/elvira toma la iniciativa/i);
+    await screen.findByText(/departify está organizando/i);
     const el = scroller(container);
     setupScrollMetrics(el, 900, 300);
     // Scroll well above the bottom (distance 900-100-300 = 500 ≥ 80).
@@ -320,7 +320,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
 
   it("S3b. scrolling up immediately exposes the latest-message affordance", async () => {
     const { container } = renderChat();
-    await screen.findByText(/elvira toma la iniciativa/i);
+    await screen.findByText(/departify está organizando/i);
     const el = scroller(container);
     setupScrollMetrics(el, 900, 300);
 
@@ -333,7 +333,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
 
   it("S4. a passive event does not yank the viewport while reading history", async () => {
     const { container } = renderChat();
-    await screen.findByText(/elvira toma la iniciativa/i);
+    await screen.findByText(/departify está organizando/i);
     const el = scroller(container);
     setupScrollMetrics(el, 900, 300);
     // CEO is reading old history, well above the bottom.
@@ -365,7 +365,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
     );
 
     const { container } = renderChat();
-    await screen.findByText(/elvira toma la iniciativa/i);
+    await screen.findByText(/departify está organizando/i);
     const el = scroller(container);
     setupScrollMetrics(el, 900, 300);
     const input = await screen.findByLabelText(/mensaje para departify/i);
@@ -391,7 +391,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
 
   it("S5. an existing conversation restores the viewport to the latest message", async () => {
     const { container } = renderChat();
-    await screen.findByText(/elvira toma la iniciativa/i);
+    await screen.findByText(/departify está organizando/i);
     const el = scroller(container);
     setupScrollMetrics(el, 900, 300);
 
@@ -408,7 +408,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
 
   it("S6. the CEO thread is continuous and does not expose session switching", async () => {
     renderChat();
-    await screen.findByText(/elvira toma la iniciativa/i);
+    await screen.findByText(/departify está organizando/i);
 
     const input = await screen.findByLabelText(/mensaje para departify/i);
     fireEvent.change(input, { target: { value: "hola" } });

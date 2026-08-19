@@ -603,7 +603,7 @@ export function ChatRoute() {
       const assistantLine = {
         role: "assistant" as const,
         content: visibleAssistantMessage(result!.reply),
-        speaker: inferSpeaker(cleanEvents),
+        speaker: inferSpeaker(cleanEvents, result.routing?.intent),
       };
       // Defensive: avoid duplicating the user line if the polling reload
       // appended it first. The submit path does NOT pre-append a user
@@ -789,7 +789,14 @@ const ConversationList = React.memo(ConversationListInner);
 
 function inferSpeaker(
   events: readonly CommandCenterEvent[],
+  latestIntent?: string,
 ): "departify" | "elvira" {
+  // P0 Product Consistency — Elvira is the Marketing head, not a
+  // global fallback. The assistant bubble speaker is Elvira only
+  // when the latest routing intent is Marketing-owned. For every
+  // other intent (direct response, seo audit, calendar read, etc.),
+  // the speaker is Departify.
+  if (latestIntent !== "marketing") return "departify";
   for (const event of events) {
     if (event.kind === "transcript" && event.speaker) return event.speaker;
   }
