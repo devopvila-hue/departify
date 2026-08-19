@@ -42,7 +42,7 @@ function context(): RuntimeBusinessContext {
     version: 1,
     compiledAt: new Date().toISOString(),
     organization: { id: "org_engine02_1" },
-    identity: { role: "ceo", locale: "es", timezone: "Europe/Madrid" },
+    identity: { role: "ceo", locale: "es", timezone: "Europe/Madrid", userPreferredName: null, userNameRequested: false },
     company: { products: [], customers: [] },
     connections: [],
     activeObjective: null,

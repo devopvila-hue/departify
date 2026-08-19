@@ -182,15 +182,23 @@ export async function hydrateSessionFromCompanyDna(
       url?: string;
       understood?: InterpretedBusiness;
       dnaHydrated?: boolean;
+      entrepreneurPreferredName?: string | null;
     };
   },
   store: CompanyDnaStore,
 ): Promise<void> {
   if (session.state.dnaHydrated) return;
   session.state.dnaHydrated = true;
-  if (session.state.onboarding) return;
 
   const record = await store.get(session.organizationId);
+
+  // Sprint 67 P0.1-A — the preferred name hydrates independently of the
+  // onboarding projection: a session that already carries onboarding
+  // (e.g. hydrated by an earlier step) still needs the person's name.
+  session.state.entrepreneurPreferredName =
+    record?.entrepreneurPreferredName ?? null;
+
+  if (session.state.onboarding) return;
   if (!record) return;
 
   session.state.onboarding = {

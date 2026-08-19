@@ -887,6 +887,19 @@ export interface CommandCenterMessageResult {
   routing: CommandCenterRouting;
   connectionSuggestion: CommandCenterConnectionSuggestion | null;
   pendingToolId: string | null;
+  /**
+   * Sprint 67 P0.1-B — Next Best Actions. At most 3, deterministic,
+   * only when they save the entrepreneur a decision. Clicking sends
+   * `request` through the SAME chat path as a typed message.
+   */
+  nextActions?: readonly CommandCenterNextAction[];
+}
+
+export interface CommandCenterNextAction {
+  id: string;
+  label: string;
+  request: string;
+  classification: "AVAILABLE_NOW" | "NEEDS_CONNECTION" | "NEEDS_APPROVAL";
 }
 
 /* -------------------------------------------------------------------------

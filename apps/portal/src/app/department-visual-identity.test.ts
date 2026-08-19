@@ -18,7 +18,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { visualIdentityForDepartment } from "../../portal/src/app/department-visual-identity";
+import { visualIdentityForDepartment } from "./department-visual-identity.js";
 
 describe("Sprint 67 P0 — product consistency surface", () => {
   it("T12: Marketing uses the registry Marketing accent (coral)", () => {

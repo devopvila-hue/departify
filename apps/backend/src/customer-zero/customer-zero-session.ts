@@ -113,6 +113,13 @@ export interface CustomerZeroSessionState {
   url?: string;
   rawData: Readonly<Record<string, unknown>>;
   companyName?: string;
+  /**
+   * Sprint 67 P0.1 — Personal identity. The CEO's human name as captured
+   * by the chat at first use. Stored server-side so it survives reload
+   * and is available to the runtime context. `null` until the chat
+   * asks once and the user answers.
+   */
+  entrepreneurPreferredName?: string | null;
   conversation: readonly { role: "user" | "assistant"; content: string }[];
   /** The Marketing department's structured work for this organization. */
   marketingWork?: MarketingWorkState;

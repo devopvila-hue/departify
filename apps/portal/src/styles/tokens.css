@@ -1796,6 +1796,33 @@ select {
   text-decoration: underline;
 }
 
+/* Sprint 67 P0.1-B — Next Best Actions row. Compact chips under the
+   latest assistant reply. At most three, identical to the existing
+   `.dfy-chip` surface so they read as part of the conversation rather
+   than as a separate dashboard. The classification only changes the
+   subtle border tint — it is never a coloured button, never a CTA. */
+.dfy-next-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-self: flex-start;
+  margin: 4px 0 4px;
+}
+.dfy-next-actions__chip {
+  font-size: 0.82rem;
+  padding: 8px 14px;
+}
+.dfy-next-actions__chip--needs_connection {
+  border-style: dashed;
+}
+.dfy-next-actions__chip--needs_approval {
+  border-color: var(--dfy-color-warning, #c08a2e);
+}
+.dfy-next-actions__chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 /* Customer Zero 01 — work-state strip shown above the assistant bubble. */
 .dfy-event--work-state {
   flex-direction: row;

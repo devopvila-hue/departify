@@ -26,6 +26,10 @@ import type { CustomerZeroSession } from "./customer-zero-session.js";
 import { t } from "./locale.js";
 import { listDepartmentMemory } from "./department-memory.js";
 import type { CompanyDnaRecord } from "./company-dna.js";
+import {
+  entrepreneurNameAlreadyRequested,
+  resolveEntrepreneurPreferredName,
+} from "./personal-identity.js";
 import type { DepartmentResult, DepartmentTask } from "./department-work.js";
 import type {
   ApprovalRequest,
@@ -688,6 +692,14 @@ export interface RuntimeBusinessContext {
     readonly role: "ceo";
     readonly locale: SupportedLocale;
     readonly timezone: string;
+    /**
+     * Sprint 67 P0.1-A — how the entrepreneur wants to be called, or
+     * null when Departify does not know it yet. The engine uses it only
+     * when it improves the response; the default vocative remains 'tú'.
+     */
+    readonly userPreferredName: string | null;
+    /** True once Departify used its one chance to ask for the name. */
+    readonly userNameRequested: boolean;
   };
   readonly company: {
     readonly name?: string;
@@ -867,6 +879,13 @@ export function compileRuntimeBusinessContext(
       role: "ceo",
       locale: input.session.state.locale,
       timezone: input.timezone ?? process.env["DEPARTIFY_TIMEZONE"] ?? "Europe/Madrid",
+      userPreferredName: resolveEntrepreneurPreferredName(
+        input.companyDna ?? null,
+        input.session,
+      ),
+      userNameRequested: entrepreneurNameAlreadyRequested(
+        input.companyDna ?? null,
+      ),
     },
     company: {
       ...(dna?.companyName ?? base.companyDNA.companyName

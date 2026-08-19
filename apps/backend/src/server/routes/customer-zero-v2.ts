@@ -343,6 +343,17 @@ import {
   hydrateSessionFromCompanyDna,
   type CeoCorrections,
 } from "../../customer-zero/company-readiness.js";
+import {
+  extractEntrepreneurNameFromAnswer,
+  extractEntrepreneurNameIntroduction,
+  markEntrepreneurNameRequested,
+  persistEntrepreneurPreferredName,
+  resolveEntrepreneurPreferredName,
+} from "../../customer-zero/personal-identity.js";
+import {
+  resolveNextBestActions,
+  type NextBestAction,
+} from "../../customer-zero/next-best-actions.js";
 import { evaluateReadiness as evaluateReadinessReport } from "../../customer-zero/context-readiness.js";
 import { checkpoint } from "../../customer-zero/onboarding-checkpoints.js";
 import {
@@ -4593,6 +4604,13 @@ export interface CeoMessageResult {
   readonly connectionSuggestion: ConnectionSuggestion | null;
   readonly pendingToolId: string | null;
   readonly conversationId: string;
+  /**
+   * Sprint 67 P0.1-B — Next Best Actions derived deterministically from
+   * the post-turn state. At most 3; empty when they would not save the
+   * entrepreneur a decision. Clicking replays `request` through the
+   * existing chat path.
+   */
+  readonly nextActions?: readonly NextBestAction[];
 }
 
 interface RuntimeBridgeInput {
@@ -5663,6 +5681,88 @@ function runtimeProviderUnavailable(reply: string): boolean {
 }
 
 /**
+ * Sprint 67 P0.1-A — deterministic personal-identity capture for one turn.
+ *
+ * Runs at the very start of the CEO turn. Two capture paths, both
+ * server-side:
+ *   1. An explicit introduction anywhere in the message
+ *      ("me llamo X", "puedes llamarme X", "soy X", "mi nombre es X").
+ *   2. A bare short answer, ONLY when the previous assistant message
+ *      actually asked the canonical question (and the answer does not
+ *      look like a business request — work is never misread as a name).
+ *
+ * A captured name is persisted to the durable Company DNA record
+ * (preserving business facts and the CEO confirmation) and hydrated
+ * into the session projection. Failures are swallowed: identity never
+ * blocks work.
+ */
+async function captureEntrepreneurIdentityForTurn(
+  session: CustomerZeroSession,
+  conversation: ConversationRecord,
+  message: string,
+  deps: ServerDeps,
+): Promise<void> {
+  try {
+    const store = resolveCompanyDnaStore(deps);
+    const record = await store.get(session.organizationId);
+    if (resolveEntrepreneurPreferredName(record, session)) return;
+    const recent = await session.conversations.listMessages(
+      session.organizationId,
+      conversation.id,
+      6,
+    );
+    const lastAssistant =
+      [...recent].reverse().find((entry) => entry.role === "assistant")
+        ?.content ?? null;
+    const captured =
+      extractEntrepreneurNameIntroduction(message) ??
+      extractEntrepreneurNameFromAnswer(message, lastAssistant);
+    if (captured) {
+      const updated = await persistEntrepreneurPreferredName(
+        store,
+        session.organizationId,
+        captured,
+      );
+      if (updated) {
+        session.state.entrepreneurPreferredName =
+          updated.entrepreneurPreferredName ?? null;
+      }
+    }
+  } catch {
+    // Identity capture is never allowed to break a business turn.
+  }
+}
+
+/**
+ * Sprint 67 P0.1-A — burns Departify's ONE chance to ask for the name.
+ * Called only on turns where the engine actually receives the message,
+ * AFTER the runtime context was compiled (the context for THIS turn
+ * still says userNameRequested=false, so the model may ask now; every
+ * future turn will say true and never ask again).
+ */
+async function markEntrepreneurNameAskedOnce(
+  session: CustomerZeroSession,
+  deps: ServerDeps,
+): Promise<void> {
+  try {
+    const store = resolveCompanyDnaStore(deps);
+    const record = await store.get(session.organizationId);
+    if (resolveEntrepreneurPreferredName(record, session)) return;
+    const updated = await markEntrepreneurNameRequested(
+      store,
+      session.organizationId,
+      new Date().toISOString(),
+    );
+    if (updated) {
+      session.state.entrepreneurPreferredName =
+        updated.entrepreneurPreferredName ?? null;
+    }
+  } catch {
+    // Asking is a courtesy, never a dependency of the turn.
+  }
+}
+
+/**
  * P-B part 15 — one authoritative chat turn. The user message and the
  * assistant reply are persisted to a durable, organization-scoped
  * conversation. The LLM context uses a BOUNDED window of recent messages, not
@@ -5671,7 +5771,7 @@ function runtimeProviderUnavailable(reply: string): boolean {
  */
 type MarketingServiceType = MarketingService;
 
-export async function processCeoMessage(
+async function runCeoMessageTurn(
   session: CustomerZeroSession,
   message: string,
   conversationId?: string,
@@ -5738,6 +5838,11 @@ export async function processCeoMessage(
   const turnStartedAt = Date.now();
 
   await session.conversations.addMessage(conversation.id, "user", message);
+
+  // Sprint 67 P0.1-A — personal identity capture. Deterministic,
+  // best-effort, and NEVER a gate: a miss or a store failure falls
+  // through to the normal turn (TRABAJO > PERFIL).
+  await captureEntrepreneurIdentityForTurn(session, conversation, message, deps);
 
   const operationalMessage = normalizeOperationalLanguage(message);
   const deliverableRequest = classifyDeliverableRequest(operationalMessage);
@@ -5959,6 +6064,11 @@ export async function processCeoMessage(
       }
       let activeSessionId = runtime.sessionId;
       let activeContext = nativeContext;
+
+      // Sprint 67 P0.1-A — the engine now receives the message with a
+      // context that may still allow the one name question. Mark the
+      // opportunity as used so no future turn asks again.
+      await markEntrepreneurNameAskedOnce(session, deps);
 
       let nativeResult = await runtime.engine.sendMessage({
         sessionId: activeSessionId,
@@ -6254,6 +6364,8 @@ export async function processCeoMessage(
   // ENGINE 02 legacy mode — retained only when native mode is disabled.
   if (runtime && !runtime.nativeBusinessTools && runtimeCandidate(operationalMessage, session)) {
     try {
+      // Sprint 67 P0.1-A — same one-shot bound as the native path above.
+      await markEntrepreneurNameAskedOnce(session, deps);
       const runtimeTurn = await runRuntimeBusinessTurn({
         engine: runtime.engine,
         sessionId: runtime.sessionId,
@@ -6962,6 +7074,104 @@ export async function processCeoMessage(
     pendingToolId: routed.pendingToolId ?? null,
     conversationId: conversation.id,
   };
+}
+
+/**
+ * Sprint 67 P0.1-B — the one exported CEO turn entrypoint. Wraps the
+ * internal pipeline so EVERY completion path (engine, deterministic
+ * gates, legacy router) carries the same deterministic Next Best
+ * Actions, computed from the real post-turn state. Callers and their
+ * signatures are unchanged.
+ */
+export async function processCeoMessage(
+  session: CustomerZeroSession,
+  message: string,
+  conversationId?: string,
+  marketing?: MarketingServiceType,
+  engineRuntimePolicy?: "strict" | "legacy-fallback",
+  runtime?: RuntimeBridgeInput | null,
+  trace?: CeoTurnTraceState,
+  deps: ServerDeps = {},
+  userId?: string,
+  activitySink?: (
+    state:
+      | "received"
+      | "retrieving_context"
+      | "delegated"
+      | "working"
+      | "analyzing"
+      | "tool_started"
+      | "tool_completed"
+      | "preparing_result"
+      | "streaming"
+      | "completed"
+      | "blocked"
+      | "error",
+    message: string,
+    extra?: { departmentId?: string; capability?: string },
+  ) => void,
+  chunkSink?: (chunk: { text: string; finished: boolean }) => void,
+): Promise<CeoMessageResult> {
+  const result = await runCeoMessageTurn(
+    session,
+    message,
+    conversationId,
+    marketing,
+    engineRuntimePolicy,
+    runtime,
+    trace,
+    deps,
+    userId,
+    activitySink,
+    chunkSink,
+  );
+  const nextActions = await computeNextBestActionsForResult(
+    session,
+    deps,
+    result,
+  );
+  return { ...result, nextActions };
+}
+
+/**
+ * Sprint 67 P0.1-B — deterministic post-turn action resolution. Reads the
+ * same durable stores the turn itself used. Failures degrade to "no
+ * actions": an action surface must never break a reply.
+ */
+async function computeNextBestActionsForResult(
+  session: CustomerZeroSession,
+  deps: ServerDeps,
+  result: CeoMessageResult,
+): Promise<readonly NextBestAction[]> {
+  try {
+    const workStore = deps.workStore ?? workStoreForRoutes();
+    const [results, approvals] = await Promise.all([
+      workStore.listResultsForOrg(session.organizationId, 5),
+      deps.marketing?.listApprovals(session.organizationId)
+        ?? Promise.resolve([]),
+    ]);
+    return resolveNextBestActions({
+      locale: session.state.locale,
+      intent: result.routing?.intent ?? null,
+      results,
+      approvals,
+      connections: [...session.state.connections.values()].map(
+        (connection) => ({
+          toolId: connection.toolId,
+          label: connection.label,
+          status: connection.status,
+        }),
+      ),
+      connectionSuggestion: result.connectionSuggestion
+        ? {
+            toolId: result.connectionSuggestion.toolId,
+            label: result.connectionSuggestion.label,
+          }
+        : null,
+    });
+  } catch {
+    return [];
+  }
 }
 
 async function completeRuntimeCeoTurn(

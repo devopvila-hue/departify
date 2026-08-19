@@ -77,6 +77,20 @@ export interface CompanyDnaRecord {
    * company after confirming invalidates the confirmation.
    */
   readonly factsUpdatedAt: string;
+
+  /**
+   * Sprint 67 P0.1-A — Personal identity. How the entrepreneur wants to
+   * be called, captured once by the chat. This is NOT a business fact:
+   * writing it never moves `factsUpdatedAt` and never invalidates a CEO
+   * confirmation. Absent/null means "not known yet".
+   */
+  readonly entrepreneurPreferredName?: string | null;
+  /**
+   * Sprint 67 P0.1-A — when Departify last had its one chance to ask
+   * for the name. Bounds the ask to at most once, durably, across
+   * reloads and conversations. Not a business fact either.
+   */
+  readonly entrepreneurNameRequestedAt?: string | null;
 }
 
 /**

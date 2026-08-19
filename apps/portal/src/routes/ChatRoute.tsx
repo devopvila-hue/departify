@@ -6,6 +6,7 @@ import {
   api,
   type CommandCenterEvent,
   type CommandCenterMessageResult,
+  type CommandCenterNextAction,
   type DepartmentResult,
   type MessageView,
 } from "@/app/api";
@@ -115,6 +116,15 @@ export function ChatRoute() {
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  /**
+   * Sprint 67 P0.1-B — Next Best Actions under the latest assistant
+   * reply. Cleared at the start of every turn so a stale chip can never
+   * fire while a new turn is in flight. Clicking a chip replays its
+   * `request` through the SAME `send()` path as a typed message.
+   */
+  const [nextActions, setNextActions] = useState<
+    readonly CommandCenterNextAction[]
+  >([]);
   /**
    * Hotfix — minimal writing indicator. The CEO sees a quiet three-dot
    * row while the model is producing, never an intermediate assistant
@@ -437,9 +447,17 @@ export function ChatRoute() {
     setIsGenerating(false);
   }
 
-  async function send() {
-    const value = input.trim();
+  /**
+   * Sprint 67 P0.1-B — `send` accepts an optional override value so a
+   * Next Best Action click is EXACTLY the user typing that request:
+   * same transport, same backend turn, exactly one execution (the
+   * `busy` guard below rejects double clicks while a turn is running).
+   */
+  async function send(overrideValue?: string) {
+    const value = (overrideValue ?? input).trim();
     if (!organizationId || !value || busy) return;
+    // Stale chips must not survive into the new turn.
+    setNextActions([]);
     const correlationId =
       typeof crypto !== "undefined" && "randomUUID" in crypto
         ? crypto.randomUUID()
@@ -620,6 +638,14 @@ export function ChatRoute() {
     });
     setEvents(cleanEvents);
     if (result.conversationId) setCurrentConversationId(result.conversationId);
+    // Sprint 67 P0.1-B — surface the deterministic Next Best Actions under
+    // the latest assistant reply. Empty array is correct for greetings,
+    // factual answers, work that produced no durable result, or turns
+    // that surfaced a connection need as the only meaningful action. The
+    // backend already caps at 3; the portal defends against an older or
+    // non-canonical response by re-capping before render.
+    const actions = result.nextActions ?? [];
+    setNextActions(actions.length > 3 ? actions.slice(0, 3) : actions);
   }
 
   const focusedRef = useRef(false);
@@ -668,6 +694,33 @@ export function ChatRoute() {
           isFresh={transcript.length === 0 && events.length === 0 && !opening}
           onNavigate={(path) => navigate(path)}
         />
+        {/* Sprint 67 P0.1-B — Next Best Actions. Compact row of at most 3
+            chips under the latest assistant reply. They only render when
+            they would save the entrepreneur a decision (a greeting yields
+            none). Clicking a chip is EXACTLY the user typing the request —
+            same `send()` path, single execution. */}
+        {nextActions.length > 0 && !isWriting && (
+          <div
+            className="dfy-next-actions"
+            data-testid="chat-next-actions"
+            role="group"
+            aria-label="Próximas acciones"
+          >
+            {nextActions.map((action) => (
+              <button
+                key={action.id}
+                type="button"
+                className={`dfy-chip dfy-next-actions__chip dfy-next-actions__chip--${action.classification.toLowerCase()}`}
+                data-testid="chat-next-action"
+                data-classification={action.classification}
+                disabled={busy}
+                onClick={() => void send(action.request)}
+              >
+                {action.label}
+              </button>
+            ))}
+          </div>
+        )}
         {isWriting && <WritingIndicator />}
         {!followingLatest && (transcript.length > 0 || events.length > 0) && (
           <button

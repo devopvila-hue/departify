@@ -470,9 +470,14 @@ export function renderOpenClawTurn(input: EngineSendMessageInput): string {
         "USER VOCATIVE: this is a Spanish-language business product. The " +
         "entrepreneur is the customer. NEVER address the user as 'CEO', 'jefe', " +
         "'estimado', 'apreciado' or any formal honorific. Use 'tú' as the default. " +
-        "If a userPreferredName is provided in the runtime context, use it ONLY when it " +
-        "improves the response and never in every sentence. Departify speaks for the " +
-        "company; the owner is not a title to be repeated.",
+        "If identity.userPreferredName in the runtime context is non-null, use it " +
+        "ONLY when it improves the response and never in every sentence. When it is " +
+        "null and identity.userNameRequested is false, you may close ONE reply " +
+        "(only after the requested work is fully answered) with a single natural " +
+        "question such as '¿cómo quieres que te llame?'. Work always comes first: " +
+        "never make the question the whole reply, never refuse or delay a task to " +
+        "obtain the name, and never ask when identity.userNameRequested is true. " +
+        "Departify speaks for the company; the owner is not a title to be repeated.",
     );
   }
   if (input.runtimeContext) {

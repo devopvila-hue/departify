@@ -45,6 +45,8 @@ interface CompanyDnaRow {
   ceo_confirmed_at: string | null;
   department_provisioned_at: string | null;
   facts_updated_at: string;
+  entrepreneur_preferred_name: string | null;
+  entrepreneur_name_requested_at: string | null;
 }
 
 /** PostgREST/Postgres signals for "the table is not there yet". */
@@ -123,6 +125,9 @@ export class SupabaseCompanyDnaStore implements CompanyDnaStore {
         ceo_confirmed_at: record.ceoConfirmedAt ?? null,
         department_provisioned_at: record.departmentProvisionedAt ?? null,
         facts_updated_at: record.factsUpdatedAt,
+        entrepreneur_preferred_name: record.entrepreneurPreferredName ?? null,
+        entrepreneur_name_requested_at:
+          record.entrepreneurNameRequestedAt ?? null,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "organization_id" },
@@ -164,6 +169,12 @@ function mapRow(row: CompanyDnaRow): CompanyDnaRecord {
     ...(row.ceo_confirmed_at ? { ceoConfirmedAt: row.ceo_confirmed_at } : {}),
     ...(row.department_provisioned_at
       ? { departmentProvisionedAt: row.department_provisioned_at }
+      : {}),
+    ...(row.entrepreneur_preferred_name
+      ? { entrepreneurPreferredName: row.entrepreneur_preferred_name }
+      : {}),
+    ...(row.entrepreneur_name_requested_at
+      ? { entrepreneurNameRequestedAt: row.entrepreneur_name_requested_at }
       : {}),
     factsUpdatedAt: row.facts_updated_at,
   };
