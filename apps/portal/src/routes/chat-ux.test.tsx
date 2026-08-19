@@ -371,7 +371,8 @@ describe("Central Chat UX P0 — chat interaction", () => {
     const input = await screen.findByLabelText(/mensaje para departify/i);
     fireEvent.change(input, { target: { value: "sigue la respuesta" } });
     fireEvent.click(screen.getByRole("button", { name: /enviar/i }));
-    await screen.findByText(/departify · recibido/i);
+    // Hotfix — the writing indicator replaces the old "Recibido" pill.
+    await screen.findByTestId("chat-writing-indicator");
 
     // The CEO can move back into the history while the answer is pending.
     scrollTo(el, 100);

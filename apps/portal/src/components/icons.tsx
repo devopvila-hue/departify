@@ -162,6 +162,16 @@ export function SendIcon(props: IconProps): ReactElement {
   );
 }
 
+/** Hotfix — STOP icon. A clean square that reads as "stop" in the
+ *  composer send-button slot while Departify is generating. */
+export function StopIcon(props: IconProps): ReactElement {
+  return (
+    <IconBase {...props}>
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+    </IconBase>
+  );
+}
+
 export function PlusIcon(props: IconProps): ReactElement {
   return (
     <IconBase {...props}>

@@ -20,8 +20,10 @@ import {
   ResultsIcon,
   SendIcon,
   SparkIcon,
+  StopIcon,
   TasksIcon,
 } from "@/components/icons";
+import { WritingIndicator } from "@/components/WritingIndicator";
 
 /**
  * Sprint 64 — Live Activity: pick the freshest work_state event from
@@ -113,7 +115,20 @@ export function ChatRoute() {
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [processStatus, setProcessStatus] = useState<string | null>(null);
+  /**
+   * Hotfix — minimal writing indicator. The CEO sees a quiet three-dot
+   * row while the model is producing, never an intermediate assistant
+   * bubble. The final result replaces this state exactly once.
+   */
+  const [isWriting, setIsWriting] = useState(false);
+  /**
+   * Hotfix — STOP / cancel. The composer shows a STOP button while
+   * the SSE fetch is in flight. Clicking it aborts the fetch; the
+   * abort signal is detected in the API layer and the CEO does NOT
+   * see a JSON fallback nor a red error message.
+   */
+  const [isGenerating, setIsGenerating] = useState(false);
+  const currentAbortRef = useRef<AbortController | null>(null);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   /** Invalidates in-flight loads/turns when the authorized organization changes. */
   const loadGenerationRef = useRef(0);
@@ -393,16 +408,33 @@ export function ChatRoute() {
         setCurrentSummary(data?.conversation.summary ?? null);
         setEvents([]);
         setError(null);
-        console.info("[chat-timeline]", {
-          correlationId,
-          stage: "post_generation_recovery_completed",
-          errorClass: "post_generation_failure",
-          messageCount: messages.length,
-        });
+        // Return true to signal the recovery succeeded so the caller
+        // does NOT render the "could not respond" error alert.
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Hotfix — STOP / cancel. The CEO presses the STOP button while
+   * Departify is generating. We invalidate the load generation token
+   * so any late events from the aborted fetch are dropped, abort
+   * the in-flight fetch, and reset the chat UX to idle. No error
+   * is shown: STOP is a normal CEO action, not a failure.
+   */
+  function stop() {
+    const controller = currentAbortRef.current;
+    if (controller) {
+      controller.abort();
+      currentAbortRef.current = null;
+    }
+    // Bump the generation token so any stray callbacks from the
+    // aborted fetch are discarded.
+    loadGenerationRef.current += 1;
+    setBusy(false);
+    setIsWriting(false);
+    setIsGenerating(false);
   }
 
   async function send() {
@@ -421,64 +453,44 @@ export function ChatRoute() {
     });
     setBusy(true);
     setError(null);
-    // Sprint 64 — Live Activity P0: optimistic product micro-copy the
-    // moment the CEO submits. No fake "Pensando…" pill: this label is
-    // honest because the request has been accepted locally. The portal
-    // replaces it with the latest real backend activity (received /
-    // retrieving_context / delegated / working / tool_started) when
-    // the response arrives — and with streamed events when the chat
-    // endpoint emits them progressively.
-    setProcessStatus("Departify · Recibido");
+    // Hotfix — show the writing indicator immediately so the CEO sees
+    // we are working BEFORE any response frame arrives. The final
+    // assistant text from `result.reply` replaces the indicator
+    // exactly once. `content_delta` frames are accepted but DO NOT
+    // touch the transcript — they only confirm the run is alive.
+    setIsWriting(true);
+    setIsGenerating(true);
     setInput("");
     // Sending a new message always returns focus to the latest exchange,
     // even if the CEO was reading older history. Distinct from passive
     // updates, which respect the manual scroll override.
     requestFollowToLatest();
 
+    // Hotfix — STOP / cancel. One controller per turn. The controller
+    // is stored on a ref so the STOP button can fire it. Late events
+    // from the aborted fetch are dropped by the `generation` token
+    // check further below.
+    const controller = new AbortController();
+    currentAbortRef.current = controller;
+    const signal = controller.signal;
+
     // When no conversation is active, route through the same backend
     // endpoint that auto-creates the durable conversation on first use.
     // The 5-active-cap is enforced by the same endpoint via
     // ensureConversation (see customer-zero-v2.ts). When a conversation
     // is already selected, send the message to that conversation.
-    // Sprint 67 P0 — progressive text. We append the user line and a
-    // streaming assistant placeholder BEFORE the network roundtrip so
-    // the CEO sees the assistant bubble fill in as `content_delta`
-    // frames arrive. The final assistant text from `result` overwrites
-    // the streamed accumulator at the end; the placeholder has key
-    // `streaming-${correlationId}` so the chunk reducer can find it.
-    const streamingKey = `streaming-${correlationId}`;
-    setTranscript((prev) => {
-      const userLine = { role: "user" as const, content: value };
-      const placeholder = {
-        role: "assistant" as const,
-        content: "",
-        speaker: "elvira" as const,
-        _streaming: true,
-      };
-      // Avoid duplicating the user line if the optimistic submit already
-      // appended it (controlled by setTranscript optimistic append).
-      void streamingKey;
-      if (prev.at(-1)?.role === "user" && prev.at(-1)?.content === value) {
-        return [...prev, placeholder];
-      }
-      return [...prev, userLine, placeholder];
-    });
+    //
+    // Hotfix — `onChunk` now exists purely to confirm "the model is
+    // alive" and to refresh the writing indicator. We DO NOT write
+    // intermediate text into the transcript. The transcript is built
+    // once when the `result` frame lands, using the canonical
+    // `result.reply`.
     const onChunk = (chunk: { text: string; finished: boolean }): void => {
       if (generation !== loadGenerationRef.current) return;
-      if (!chunk.text) return;
-      setTranscript((prev) => {
-        const idx = prev.findIndex(
-          (t) => (t as { _streaming?: boolean })._streaming === true,
-        );
-        if (idx < 0) return prev;
-        const updated = prev.slice();
-        const existing = updated[idx] as { content: string };
-        updated[idx] = {
-          ...updated[idx],
-          content: existing.content + chunk.text,
-        } as (typeof prev)[number];
-        return updated;
-      });
+      // Chunks are activity pulses, not display text. The writing
+      // indicator is already on; we only need to ensure it stays on
+      // until the terminal result lands.
+      if (chunk.text) setIsWriting(true);
     };
     const result:
       | (CommandCenterMessageResult & {
@@ -490,48 +502,41 @@ export function ChatRoute() {
           currentConversationId,
           value,
           correlationId,
-          // Sprint 65 P0 — Live Activity on every conversation turn, not
-          // only the opening one: each progressive work_state event from
-          // the SSE stream replaces the optimistic label in real time.
-          (event) => {
-            if (generation !== loadGenerationRef.current) return;
-            if (event.kind === "work_state" && event.message) {
-              setProcessStatus(event.message);
-            }
-          },
+          // Hotfix — Live Activity events are accepted but intentionally
+          // suppressed in the chat surface. The writing indicator is
+          // driven by the first `content_delta` and the terminal
+          // `result`.
+          () => undefined,
           onChunk,
+          signal,
         )
       : await api.commandCenterMessageStream(
           organizationId,
           value,
           undefined,
           correlationId,
-          // Sprint 64 — Live Activity: each progressive work_state event
-          // from the SSE stream replaces the optimistic label in real
-          // time, so the CEO sees "Recibido" → "Revisando tu información"
-          // → "Marketing está trabajando" → "Escribiendo" as it happens.
-          (event) => {
-            if (generation !== loadGenerationRef.current) return;
-            if (event.kind === "work_state" && event.message) {
-              setProcessStatus(event.message);
-            }
-          },
+          () => undefined,
           onChunk,
+          signal,
         );
     if (generation !== loadGenerationRef.current) return;
-    setBusy(false);
-    // Sprint 64 — Live Activity: the latest backend work_state event is
-    // the honest label for what the assistant is doing right now. The
-    // optimistic "Recibido" is replaced with the freshest message the
-    // backend emitted for THIS turn. ProcessStatus is cleared AFTER we
-    // render the assistant reply, so the activity is briefly visible
-    // even on fast responses.
-    const latestActivity = result ? latestWorkState(result.events) : null;
-    if (latestActivity) {
-      setProcessStatus(latestActivity.message);
-    } else {
-      setProcessStatus(null);
+    // Hotfix — STOP / cancel. If the fetch was aborted by the CEO,
+    // ignore the result entirely. The writing indicator is already
+    // off; the composer is already usable; no error is shown.
+    if (signal.aborted) {
+      setBusy(false);
+      setIsWriting(false);
+      setIsGenerating(false);
+      currentAbortRef.current = null;
+      return;
     }
+    setBusy(false);
+    setIsWriting(false);
+    setIsGenerating(false);
+    currentAbortRef.current = null;
+    // Hotfix — the writing indicator is the ONLY intermediate visible
+    // state. There is no per-event activity label exposed to the CEO.
+    void latestWorkState;
     // If the transport failed after the backend persisted a valid pair, the
     // durable transcript is the completion gate. Recover it before showing a
     // generic error; an old assistant message is not sufficient evidence.
@@ -589,28 +594,21 @@ export function ChatRoute() {
         suggestion: result.connectionSuggestion,
       });
     }
-    // Append the user line (if not already rendered by the polling reload)
-    // and the assistant reply so the CEO sees a continuous history.
+    // Append the user line and the assistant reply so the CEO sees a
+    // continuous history. The hotfix removed the streaming placeholder,
+    // so we never have to recompute or replace an intermediate bubble.
+    // The writing indicator stayed on screen until this point and is
+    // cleared one render later by the `setIsWriting(false)` above.
     setTranscript((prev) => {
       const assistantLine = {
         role: "assistant" as const,
         content: visibleAssistantMessage(result!.reply),
         speaker: inferSpeaker(cleanEvents),
       };
-      // Sprint 67 P0 — replace the streaming placeholder (if any) with the
-      // authoritative final line. The streaming reducer prepended a
-      // placeholder with `_streaming: true` so we can locate it. If we
-      // never received a chunk (e.g. tool-deterministic path), the
-      // placeholder is still empty and we just drop it.
+      // Defensive: avoid duplicating the user line if the polling reload
+      // appended it first. The submit path does NOT pre-append a user
+      // line anymore — the writing indicator replaces it visually.
       const last = prev.at(-1);
-      const streamingIdx = prev.findIndex(
-        (t) => (t as { _streaming?: boolean })._streaming === true,
-      );
-      if (streamingIdx >= 0) {
-        const updated = prev.slice();
-        updated[streamingIdx] = assistantLine;
-        return updated;
-      }
       if (last?.role === "user" && last.content === value) {
         return [...prev, assistantLine];
       }
@@ -670,11 +668,7 @@ export function ChatRoute() {
           isFresh={transcript.length === 0 && events.length === 0 && !opening}
           onNavigate={(path) => navigate(path)}
         />
-        {processStatus && (
-          <div className="dfy-chat-thinking" role="status">
-            <SparkIcon /> {processStatus}
-          </div>
-        )}
+        {isWriting && <WritingIndicator />}
         {!followingLatest && (transcript.length > 0 || events.length > 0) && (
           <button
             type="button"
@@ -697,7 +691,9 @@ export function ChatRoute() {
         value={input}
         onChange={setInput}
         onSend={() => void send()}
+        onStop={stop}
         busy={busy}
+        isGenerating={isGenerating}
         error={error}
       />
     </div>
@@ -1072,7 +1068,9 @@ function Composer(props: {
   value: string;
   onChange: (value: string) => void;
   onSend: () => void;
+  onStop: () => void;
   busy: boolean;
+  isGenerating: boolean;
   error: string | null;
 }) {
   return (
@@ -1100,21 +1098,38 @@ function Composer(props: {
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
+              if (props.isGenerating) {
+                props.onStop();
+                return;
+              }
               props.onSend();
             }
           }}
-          disabled={props.busy}
+          disabled={props.busy && !props.isGenerating}
           aria-label="Mensaje para Departify"
         />
-        <button
-          type="button"
-          className="dfy-composer-bar__send"
-          onClick={props.onSend}
-          disabled={props.busy || props.value.trim().length === 0}
-          aria-label="Enviar"
-        >
-          <SendIcon />
-        </button>
+        {props.isGenerating ? (
+          <button
+            type="button"
+            className="dfy-composer-bar__stop"
+            onClick={props.onStop}
+            aria-label="Detener respuesta"
+            data-testid="chat-stop-button"
+          >
+            <StopIcon />
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="dfy-composer-bar__send"
+            onClick={props.onSend}
+            disabled={props.busy || props.value.trim().length === 0}
+            aria-label="Enviar"
+            data-testid="chat-send-button"
+          >
+            <SendIcon />
+          </button>
+        )}
       </div>
     </div>
   );

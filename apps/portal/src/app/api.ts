@@ -1752,6 +1752,7 @@ export const api = {
     correlationId: string,
     onActivity: (event: CommandCenterEvent) => void,
     onChunk?: (chunk: { text: string; finished: boolean }) => void,
+    signal?: AbortSignal,
   ): Promise<
     (CommandCenterMessageResult & {
       conversationId?: string;
@@ -1767,6 +1768,7 @@ export const api = {
       const response = await fetch(url, {
         method: "POST",
         headers,
+        ...(signal ? { signal } : {}),
         body: JSON.stringify(
           conversationId ? { message, conversationId } : { message },
         ),
@@ -1858,8 +1860,16 @@ export const api = {
           "conversations",
         ]);
       return result;
-    } catch {
-      // Stream transport failed — fall back to the JSON endpoint.
+    } catch (cause) {
+      // Hotfix — STOP / cancel. The CEO aborted the in-flight SSE
+      // fetch. This is a normal lifecycle event, not a transport
+      // failure. Do NOT fall back to the JSON endpoint: that would
+      // re-run the CEO message and double-persist the turn.
+      if (signal?.aborted) {
+        return null;
+      }
+      // Stream transport failed for a real reason — fall back to the
+      // JSON endpoint so the CEO still gets a reply.
       return api.commandCenterMessage(
         org,
         message,
@@ -1931,6 +1941,7 @@ export const api = {
     correlationId: string,
     onActivity: (event: CommandCenterEvent) => void,
     onChunk?: (chunk: { text: string; finished: boolean }) => void,
+    signal?: AbortSignal,
   ): Promise<
     (CommandCenterMessageResult & {
       conversationId?: string;
@@ -1947,6 +1958,7 @@ export const api = {
         method: "POST",
         headers,
         body: JSON.stringify({ message }),
+        ...(signal ? { signal } : {}),
       });
       if (!response.ok || !response.body) {
         // Non-streaming path (e.g. auth boundary or proxy). Fall back to
@@ -2029,8 +2041,15 @@ export const api = {
       // message exactly once.
       invalidateOrg(org, ["conversation", "conversations", "overview"]);
       return result;
-    } catch {
-      // Stream transport failed — fall back to the JSON endpoint.
+    } catch (cause) {
+      // Hotfix — STOP / cancel. The CEO aborted the in-flight SSE
+      // fetch. Do NOT fall back to the JSON endpoint: that would
+      // re-run the CEO message and double-persist the turn.
+      if (signal?.aborted) {
+        return null;
+      }
+      // Stream transport failed for a real reason — fall back to the
+      // JSON endpoint so the CEO still gets a reply.
       return api.sendConversationMessage(
         org,
         conversationId,

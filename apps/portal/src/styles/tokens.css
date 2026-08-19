@@ -2107,6 +2107,95 @@ select {
   animation: dfy-pulse 1.6s ease-in-out infinite;
 }
 
+/* Hotfix — minimal writing indicator. Three dots with a staggered
+ * opacity pulse; static dot row when reduced-motion is on. Stable
+ * height so the conversation does not jump on each chunk. Reserves
+ * a fixed 24px min-height so the layout never reflows. */
+.dfy-chat-writing {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--dfy-color-surface-raised);
+  border: 1px solid var(--dfy-color-border);
+  align-self: flex-start;
+  min-height: 24px;
+}
+
+.dfy-chat-writing__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dfy-color-accent);
+  opacity: 0.35;
+  animation: dfy-writing-pulse 1.2s ease-in-out infinite;
+}
+
+.dfy-chat-writing__dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.dfy-chat-writing__dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+.dfy-chat-writing__label {
+  color: var(--dfy-color-muted);
+  font-size: 0.85rem;
+}
+
+/* Hotfix — STOP button. Visually clean square that fits the
+ * existing send-button footprint. The composer remains usable while
+ * generating; pressing STOP cancels the in-flight SSE fetch. */
+.dfy-composer-bar__stop {
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  border-radius: 999px;
+  background: var(--dfy-color-accent);
+  color: var(--dfy-color-accent-contrast);
+  border: 0;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.dfy-composer-bar__stop:hover {
+  background: var(--dfy-color-accent-strong, var(--dfy-color-accent));
+  filter: brightness(0.95);
+}
+
+.dfy-composer-bar__stop:focus-visible {
+  outline: 2px solid var(--dfy-color-accent-contrast);
+  outline-offset: 2px;
+}
+
+.dfy-composer-bar__stop svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+@keyframes dfy-writing-pulse {
+  0%, 80%, 100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dfy-chat-writing__dot {
+    animation: none;
+    opacity: 0.65;
+  }
+}
+
 /* Central Chat UX P0 — jump-to-latest affordance when the CEO has
    scrolled up. Replaces the yanky auto-scroll behaviour. */
 .dfy-chat-jump-latest {
