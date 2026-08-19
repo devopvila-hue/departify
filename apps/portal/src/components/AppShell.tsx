@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactElement } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "@/app/auth-context";
-import { api } from "@/app/api";
+import { api, type BrandingView } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import {
   ApprovalsIcon,
@@ -140,9 +140,13 @@ export function AppShell(props: {
   const navigate = useNavigate();
   const { signOut } = useAuth();
   const { organizationId, setOrganizationId } = useOrg();
+  const [branding, setBranding] = useState<BrandingView | null>(null);
 
   useEffect(() => {
-    if (!organizationId) return;
+    if (!organizationId) {
+      setBranding(null);
+      return;
+    }
     // Keep the initial warm-up deliberately small. The rest is prefetched
     // on intent (hover/focus) so login never downloads the whole product.
     const timer = window.setTimeout(() => {
@@ -153,6 +157,29 @@ export function AppShell(props: {
       ]);
     }, 1_200);
     return () => window.clearTimeout(timer);
+  }, [organizationId]);
+
+  // Sprint 66 P0 — global shell must show the SAME branding the CEO
+  // configured at /configuracion. The previous hardcoded "D" placeholder
+  // ignored the org logo. Re-fetch on org change and after the cache may
+  // have been invalidated by uploads/deletes.
+  useEffect(() => {
+    if (!organizationId) {
+      setBranding(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const view = await api.branding(organizationId);
+        if (!cancelled) setBranding(view);
+      } catch {
+        if (!cancelled) setBranding(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [organizationId]);
 
   useEffect(() => {
@@ -231,11 +258,20 @@ export function AppShell(props: {
         aria-label="Navegación principal"
       >
         <div className="dfy-sidebar__brand">
-          <span className="dfy-sidebar__mark" aria-hidden="true">
-            D
-          </span>
+          {branding?.logo ? (
+            <img
+              src={branding.logo.signedUrl}
+              alt={branding.brandName ? `${branding.brandName} logo` : "Logo"}
+              className="dfy-sidebar__logo"
+              data-testid="sidebar-brand-logo"
+            />
+          ) : (
+            <span className="dfy-sidebar__mark" aria-hidden="true">
+              {branding?.brandName?.charAt(0).toUpperCase() ?? "D"}
+            </span>
+          )}
           <span className="dfy-sidebar__brandlabel">
-            <strong>Departify</strong>
+            <strong>{branding?.brandName ?? "Departify"}</strong>
             <span className="dfy-sidebar__product">Tu empresa</span>
           </span>
         </div>

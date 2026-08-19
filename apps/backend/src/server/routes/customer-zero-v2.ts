@@ -3900,6 +3900,23 @@ export async function registerCustomerZeroV2Routes(
         if (responseStatus >= 400) {
           const errorCode =
             (runtime?.trace ?? trace).engineErrorCode ?? "ENGINE_EXECUTION";
+          // Sprint 66 P0 — the CEO-facing message stays generic for the
+          // product surface, but the responsible engineer must be able to
+          // find the proximate cause in the internal log. Surface the
+          // engine status, error code, and timeline so the failure is
+          // traceable instead of buried behind a catch-all phrase.
+          request.log.error(
+            {
+              correlationId,
+              organizationId,
+              engineErrorCode: errorCode,
+              openclawStatus: (runtime?.trace ?? trace).openclawStatus,
+              sessionFound: trace.sessionFound,
+              durationMs: Date.now() - trace.startedMonotonicAt,
+              timeline: trace.timeline,
+            },
+            "opening SSE engine failure before persistence",
+          );
           send("error", {
             code: errorCode,
             message:
@@ -10160,7 +10177,20 @@ export function isInternalRuntimeLeak(text: string): boolean {
     "token limit"
   ];
   const lower = text.toLowerCase();
-  return forbidden.some((term) => lower.includes(term));
+  // Sprint 66 P0 — chat reliability: a single substring match rotated
+  // the engine session downstream and broke the next turn. Live-product
+  // answers legitimately use words like "reservar" (contains "reservetokensfloor"),
+  // "renueva" (contains "/new"), "compactar" (contains "compaction"). The
+  // previous heuristic was a false-positive magnet. Require two distinct
+  // forbidden terms OR an explicit structural pattern (slash command or
+  // dotted config key) before rotating the session.
+  const hits = forbidden.filter((term) => lower.includes(term));
+  if (hits.length >= 2) return true;
+  if (/\/compact\b/.test(lower)) return true;
+  if (/\/new\b/.test(lower)) return true;
+  if (/agents\.defaults/.test(lower)) return true;
+  if (/reservetokensfloor/i.test(lower)) return true;
+  return false;
 }
 
 export function sanitizeResponseText(text: string, locale = "es"): string {

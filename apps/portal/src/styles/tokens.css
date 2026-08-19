@@ -728,6 +728,18 @@ select {
   font-weight: 800;
 }
 
+/* Sprint 66 P0 — global shell logo. The org's uploaded logo replaces
+ * the "D" placeholder. object-fit: contain keeps the source aspect
+ * ratio without distorting the sidebar height. */
+.dfy-sidebar__logo {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--dfy-radius-sm);
+  object-fit: contain;
+  background: var(--dfy-color-surface);
+}
+
 .dfy-sidebar__product {
   color: var(--dfy-color-muted);
   font-size: 0.78rem;

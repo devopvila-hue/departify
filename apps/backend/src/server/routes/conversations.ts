@@ -642,6 +642,24 @@ export async function registerConversationRoutes(
         const responseStatus = ceoTurnResponseStatus(trace);
         if (responseStatus >= 400) {
           const errorCode = trace.engineErrorCode ?? "ENGINE_EXECUTION";
+          // Sprint 66 P0 — the CEO-facing message stays generic for the
+          // product surface, but the responsible engineer must be able to
+          // find the proximate cause in the internal log. Surface the
+          // engine status, error code, and timeline so the failure is
+          // traceable instead of buried behind a catch-all phrase.
+          request.log.error(
+            {
+              correlationId,
+              organizationId,
+              conversationId,
+              engineErrorCode: errorCode,
+              openclawStatus: trace.openclawStatus,
+              sessionFound: trace.sessionFound,
+              durationMs: Date.now() - trace.startedMonotonicAt,
+              timeline: trace.timeline,
+            },
+            "conversation SSE engine failure before persistence",
+          );
           send("error", {
             code: errorCode,
             message:
