@@ -150,29 +150,6 @@ function renderChat(): void {
   );
 }
 
-function resolvePendingStreams(): void {
-  for (const entry of pendingResponses) {
-    entry.resolve(
-      new Response("event: result\ndata: {}\n\n", {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      }),
-    );
-  }
-  pendingResponses = [];
-}
-
-function resolveStream(status: number, body: string): void {
-  const entry = pendingResponses[0];
-  if (!entry) return;
-  const response = new Response(body, {
-    status,
-    headers: { "content-type": "text/event-stream" },
-  });
-  entry.resolve(response);
-  pendingResponses.shift();
-}
-
 describe("Sprint 67 P0 — STOP / cancel generation", () => {
   beforeEach(() => {
     setupPendingStream();

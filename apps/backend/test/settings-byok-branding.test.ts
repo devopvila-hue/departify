@@ -25,7 +25,7 @@ import {
 // Stub the Supabase service-role client constructor at module level. The
 // branding routes call createClient(url, key, opts) once per request; the
 // spy replaces every call with our in-memory fake.
-let stubBuckets = new Map<string, Map<string, Buffer>>();
+const stubBuckets = new Map<string, Map<string, Buffer>>();
 const stubUpload = vi.fn();
 const stubRemove = vi.fn();
 const stubSignedUrl = vi.fn();

@@ -4,7 +4,6 @@ import type { CommandCenterInput } from "../src/customer-zero/command-center.js"
 import { DepartmentCapabilityRegistry } from "@departify/capability-engine";
 import { runDelegateSeoTurn } from "../src/server/routes/customer-zero-v2.js";
 import { InMemoryCompanyDnaStore } from "../src/customer-zero/company-dna.js";
-import { InMemoryDepartmentWorkStore } from "../src/customer-zero/department-work.js";
 import { resetFallbackCompanyDnaStoreForTest } from "../src/customer-zero/company-dna.js";
 import { __resetWorkStoreForTests, workStoreForRoutes } from "../src/server/routes/customer-zero-v2.js";
 import type { CustomerZeroSession } from "../src/customer-zero/customer-zero-session.js";

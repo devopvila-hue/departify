@@ -1873,7 +1873,7 @@ export const api = {
           "conversations",
         ]);
       return result;
-    } catch (cause) {
+    } catch {
       // Hotfix — STOP / cancel. The CEO aborted the in-flight SSE
       // fetch. This is a normal lifecycle event, not a transport
       // failure. Do NOT fall back to the JSON endpoint: that would
@@ -2054,7 +2054,7 @@ export const api = {
       // message exactly once.
       invalidateOrg(org, ["conversation", "conversations", "overview"]);
       return result;
-    } catch (cause) {
+    } catch {
       // Hotfix — STOP / cancel. The CEO aborted the in-flight SSE
       // fetch. Do NOT fall back to the JSON endpoint: that would
       // re-run the CEO message and double-persist the turn.

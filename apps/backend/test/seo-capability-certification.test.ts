@@ -17,7 +17,6 @@ import {
   InMemoryCompanyDnaStore,
   createCompanyDnaRecord,
 } from "../src/customer-zero/company-dna.js";
-import { InMemoryDepartmentWorkStore } from "../src/customer-zero/department-work.js";
 import {
   setExternalOAuthTokenStore,
   type ExternalOAuthTokenRecord,

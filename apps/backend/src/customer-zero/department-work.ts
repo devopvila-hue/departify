@@ -194,7 +194,7 @@ export interface DepartmentTask {
     readonly duration: number;
     readonly budget: number;
     readonly estimatedCost: number;
-    readonly providerOperations: readonly any[];
+    readonly providerOperations: readonly unknown[];
     readonly artifact: string | null;
     readonly driveFileId: string | null;
     readonly leaseExpiresAt?: string | null;

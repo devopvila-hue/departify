@@ -38,47 +38,6 @@ import {
 const ORG = "org_seo_real";
 const USER = "user_seo_real";
 
-const REPO_RESPONSE = {
-  repository: {
-    id: "999",
-    fullName: "acme/marketing-site",
-    private: false,
-    defaultBranch: "main",
-    htmlUrl: "https://github.com/acme/marketing-site",
-  },
-  files: [
-    "package.json",
-    "next.config.js",
-    "public/robots.txt",
-    "public/sitemap.xml",
-    "src/app/layout.tsx",
-    "src/app/page.tsx",
-    "src/app/head.tsx",
-    "src/app/metadata.ts",
-    "src/seo/index.ts",
-    "src/components/Hero.tsx",
-    "src/utils/redirects.ts",
-    "README.md",
-  ],
-  likelyMetadataFiles: [
-    "src/app/layout.tsx",
-    "src/app/head.tsx",
-    "src/app/metadata.ts",
-    "src/seo/index.ts",
-    "next.config.js",
-    "public/robots.txt",
-    "public/sitemap.xml",
-  ],
-  issueFileHints: {
-    "missing-title": ["src/app/layout.tsx", "src/app/head.tsx", "src/app/metadata.ts"],
-    "missing-description": ["src/app/layout.tsx", "src/app/head.tsx", "src/app/metadata.ts"],
-    "missing-canonical": ["src/app/layout.tsx", "src/app/head.tsx", "src/app/metadata.ts"],
-    "missing-sitemap": ["public/sitemap.xml", "next.config.js"],
-    "images-without-alt": ["src/app/page.tsx", "src/components/Hero.tsx"],
-    "missing-h1": ["src/app/page.tsx"],
-  },
-};
-
 class FakeOAuthTokenStore implements ExternalOAuthTokenStore {
   private records = new Map<string, ExternalOAuthTokenRecord>();
 

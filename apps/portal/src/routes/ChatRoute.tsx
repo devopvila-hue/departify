@@ -392,7 +392,6 @@ export function ChatRoute() {
     organizationId: string,
     expectedConversationId: string | null,
     userMessage: string,
-    correlationId: string,
   ): Promise<boolean> {
     const generation = loadGenerationRef.current;
     const candidates = expectedConversationId
@@ -567,7 +566,6 @@ export function ChatRoute() {
         organizationId,
         currentConversationId ?? result?.conversationId ?? null,
         value,
-        correlationId,
       );
       console.info("[chat-timeline]", {
         correlationId,

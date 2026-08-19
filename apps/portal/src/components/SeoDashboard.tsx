@@ -61,8 +61,6 @@ export function SeoDashboard(props: {
   const resolvedCount = derivedTasks.filter(
     (t) => t.status === "completed",
   ).length;
-  const totalCount = issuesList.length;
-  const unresolvedCount = Math.max(0, totalCount - resolvedCount);
 
   return (
     <div className="dfy-seo-dashboard" data-testid="seo-dashboard">

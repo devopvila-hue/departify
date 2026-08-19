@@ -25,8 +25,8 @@ export async function registerVideoRoutes(server: FastifyInstance, deps: ServerD
       const { organizationId } = request.params;
       const { prompt, aspectRatio = "9:16", duration = 15, budget = 1.00, idempotencyKey } = request.body;
 
-      // 1. Validate session
-      const session = await requireSession(organizationId, deps);
+      // 1. Validate session (throws if invalid/unauthorized)
+      await requireSession(organizationId, deps);
       const userId = request.authUser?.id ?? organizationId;
       const workStore = workStoreForRoutes();
 
@@ -207,6 +207,7 @@ export async function executeVideoJobReconciliation(taskId: string, deps: Server
   try {
     if (isInMemory) {
       // Single-threaded JS in-memory store is naturally atomic
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const tasksMap = (workStore as any).tasks;
       const current = tasksMap.get(taskId);
       if (!current || current.status === "completed" || current.status === "failed") return;
@@ -233,11 +234,13 @@ export async function executeVideoJobReconciliation(taskId: string, deps: Server
         source: {
           ...current.source,
           leaseExpiresAt: newLeaseExpiry,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } as any,
       };
       tasksMap.set(taskId, activeTask);
     } else {
       // Supabase Store: Atomic update with conditional postgres checks
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const admin = (workStore as any).admin;
       const { data, error } = await admin
         .from("department_tasks")
@@ -345,6 +348,7 @@ export async function executeVideoJobReconciliation(taskId: string, deps: Server
     });
 
     const adapter = new GoogleDriveAdapter({ organizationId: activeTask.organizationId, userId: writeIdentity.userId });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const accessToken = await (adapter as any).getAccessToken(GoogleDriveAdapter.WRITE_SCOPE);
     if (!accessToken) {
       throw new Error("No se pudo renovar el acceso de Google Drive.");
@@ -408,8 +412,8 @@ export async function executeVideoJobReconciliation(taskId: string, deps: Server
     }
 
     await completeJobSuccessfully(activeTask, webViewLink, fileId);
-  } catch (err: any) {
-    const cleanError = err.message || "Error desconocido en el renderizado";
+  } catch (err: unknown) {
+    const cleanError = err instanceof Error ? err.message : "Error desconocido en el renderizado";
     const code = cleanError.includes("VIDEO_BUDGET_EXCEEDED") ? "VIDEO_BUDGET_EXCEEDED" : "VIDEO_RENDER_FAILED";
     await workStore.updateTask(taskId, {
       status: "failed",
@@ -464,6 +468,7 @@ export async function recoverAllActiveVideoJobsOnBoot(deps: ServerDeps) {
     const workStore = workStoreForRoutes();
 
     if (workStore.constructor.name === "SupabaseDepartmentWorkStore") {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const admin = (workStore as any).admin;
       const { data, error } = await admin
         .from("department_tasks")
@@ -477,6 +482,7 @@ export async function recoverAllActiveVideoJobsOnBoot(deps: ServerDeps) {
         }
       }
     } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const tasksMap = (workStore as any).tasks;
       if (tasksMap) {
         for (const task of tasksMap.values()) {

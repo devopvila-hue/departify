@@ -42,7 +42,6 @@ import {
 } from "../../customer-zero/llm-credentials.js";
 import {
   type ByokModelDescriptor,
-  type ByokProviderDescriptor,
   type ByokProviderId,
   getByokModelDescriptor,
   getByokProviderDescriptor,
@@ -143,10 +142,8 @@ import {
 } from "../../customer-zero/google-drive-adapter.js";
 import { auditWebsite, type SeoAuditReport } from "../../customer-zero/seo-audit.js";
 import {
-  buildSeoCorrelation,
   getSeoRepositoryLinkStore,
   inspectGithubRepository,
-  renderSeoCorrelationMarkdown,
   type SeoRepositoryInspection,
 } from "../../customer-zero/seo-repository.js";
 import {
@@ -173,7 +170,6 @@ import {
 import {
   DEFAULT_CONVERSATION_TITLE,
   deriveConversationTitle,
-  shouldCompact,
   splitForCompaction,
   summarizeOldMessages,
   type ConversationRecord,
@@ -6142,8 +6138,10 @@ async function runCeoMessageTurn(
               (persisted?.compactionMessageCount ?? 0) + messagesToFold.length,
             );
           }
-        } catch (compactionErr: any) {
-          traceStage(trace, "T13_recovery_compaction_failed", { error: compactionErr.message });
+        } catch (compactionErr: unknown) {
+          traceStage(trace, "T13_recovery_compaction_failed", {
+            error: compactionErr instanceof Error ? compactionErr.message : String(compactionErr),
+          });
         }
 
         // 2. Re-build the runtime bridge. Because the compaction was saved,
@@ -10219,25 +10217,6 @@ async function projectInboxItem(item: InboxItem): Promise<InboxItem & {
     taskId: task?.id ?? null,
     convertedToTask: Boolean(task),
     ...(task ? { relatedWorkItemId: task.id, state: "in_work" as const } : {}),
-  };
-}
-
-async function validateOpenAiApiKey(apiKey: string): Promise<
-  | { valid: true }
-  | { valid: false; code: "invalid_api_key" | "provider_unavailable" | "unsupported_model"; message: string }
-> {
-  // Legacy helper kept only so test imports keep compiling. The real
-  // validation entry point is `validateByokCredential` from byok-providers.ts.
-  const result = await validateByokCredential({
-    providerId: BYOK_PROVIDER,
-    modelId: BYOK_DEFAULT_MODEL,
-    apiKey,
-  });
-  if (result.valid) return { valid: true };
-  return {
-    valid: false,
-    code: result.code,
-    message: result.message,
   };
 }
 

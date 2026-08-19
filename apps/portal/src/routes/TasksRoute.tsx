@@ -3,14 +3,12 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import {
   api,
-  type CompanyStatus,
   type DepartmentResult,
   type DepartmentTask,
   type HeadIdentity,
 } from "@/app/api";
 import { useOrg } from "@/app/org-context";
 import { cssVarsFor, DepartmentChip } from "@/components/DepartmentChip";
-import { Badge } from "@/components/primitives";
 import {
   DEPARTMENT_VISUAL_IDENTITY,
   visualIdentityForDepartment,
@@ -55,7 +53,6 @@ export function TasksRoute() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const focusedTaskId = searchParams.get("taskId");
-  const [status, setStatus] = useState<CompanyStatus | null>(null);
   const [tasks, setTasks] = useState<DepartmentTask[]>([]);
   const [results, setResults] = useState<DepartmentResult[]>([]);
   const [head, setHead] = useState<HeadIdentity | null>(null);
@@ -64,13 +61,11 @@ export function TasksRoute() {
 
   const load = useCallback(async () => {
     if (!organizationId) return;
-    const [statusData, handoff, workFeed, resultsResp] = await Promise.all([
-      api.status(organizationId),
+    const [handoff, workFeed, resultsResp] = await Promise.all([
       api.handoff(organizationId),
       api.workFeed(organizationId),
       api.results(organizationId),
     ]);
-    if (statusData) setStatus(statusData);
     if (handoff) setHead(handoff.head);
     setTasks(workFeed?.tasks ?? []);
     setResults(resultsResp?.results ?? []);
@@ -376,7 +371,6 @@ function humanDuration(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   if (seconds < 60) return `En curso · ${seconds}s`;
   const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
   if (minutes < 60) return `En curso · ${minutes} min`;
   const hours = Math.floor(minutes / 60);
   const remainingMinutes = minutes % 60;

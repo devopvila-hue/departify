@@ -268,7 +268,6 @@ const SEO_DECLARED_CAPABILITY_IDS = [
 export async function readAdminSkillsView(
   session: CustomerZeroSession,
 ): Promise<AdminSkillsView> {
-  const capabilities = session.capabilities;
   const connectionMap = session.state?.connections;
   const connectedTools = connectionMap
     ? [...connectionMap.values()].map((conn) => ({

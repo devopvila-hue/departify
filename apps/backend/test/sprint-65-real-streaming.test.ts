@@ -306,7 +306,7 @@ describe("Sprint 65 P0 — Real Streaming Transport on every conversation turn",
   });
 
   it("C6: tenant isolation — another org cannot POST to this conversation stream (404, no body)", async () => {
-    const { org, conversationId } = await startOrg();
+    const { conversationId } = await startOrg();
     // Start a second org with a different auth token.
     const b = await authedInject(
       {

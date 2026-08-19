@@ -99,7 +99,7 @@ function isLikelyBusinessRequest(text: string): boolean {
  * longer sentence).
  */
 export function normalizePreferredName(raw: string): string | null {
-  let name = raw.trim().replace(/\s+/g, " ").replace(/[.,;:!¡?¿]+$/g, "").trim();
+  const name = raw.trim().replace(/\s+/g, " ").replace(/[.,;:!¡?¿]+$/g, "").trim();
   if (name.length < 2 || name.length > MAX_NAME_LENGTH) return null;
   if (/[\d@/\\]/.test(name)) return null;
   if (/https?:\/\//i.test(name)) return null;
