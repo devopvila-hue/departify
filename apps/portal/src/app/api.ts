@@ -239,6 +239,8 @@ export interface DepartmentTask {
   errorCode: string | null;
   errorMessage: string | null;
   timeoutMs: number;
+  /** Operating Loop: when the task is scheduled for the calendar. */
+  plannedDate?: string | null;
   source?: {
     type: "inbox_email";
     inboxItemId: string;
@@ -247,6 +249,15 @@ export interface DepartmentTask {
   } | {
     type: "chat_operation";
     operationKey: string;
+  } | {
+    type: "weekly_plan";
+    weekStartIso: string;
+    dayOfWeek: number;
+    planItemId: string;
+    requiresApproval: boolean;
+  } | {
+    type: string;
+    [key: string]: unknown;
   };
 }
 
@@ -623,6 +634,35 @@ export interface CompanyOperatingState {
   }[];
   activity: (ActivityView & { createdAt?: string })[];
   results: (ResultView & { createdAt?: string })[];
+}
+
+export interface WeeklyPlanItem {
+  readonly id: string;
+  readonly dayOfWeek: number;
+  readonly title: string;
+  readonly summary: string;
+  readonly capability: string;
+  readonly toolId: string;
+  readonly requiresApproval: boolean;
+  readonly plannedHour?: number;
+}
+
+export interface WeeklyPlan {
+  readonly id: string;
+  readonly organizationId: string;
+  readonly weekStartIso: string;
+  readonly objective: string;
+  readonly items: readonly WeeklyPlanItem[];
+  readonly status: "draft" | "accepted";
+  readonly createdAt: string;
+  readonly createdBy: string;
+  readonly acceptedAt: string | null;
+}
+
+export interface WeeklyPlanView {
+  readonly organizationId: string;
+  readonly plan: WeeklyPlan | null;
+  readonly weekStartIso: string;
 }
 
 export interface MarketingWorkItem {
@@ -1732,6 +1772,68 @@ export const api = {
     );
     if (result)
       invalidateOrg(org, ["conversation", "conversations", "overview"]);
+    return result;
+  },
+  weeklyPlanCurrent: (org: string) =>
+    cachedOrgGetJson<WeeklyPlanView>(
+      org,
+      "weekly-plan-current",
+      `/api/customer-zero/${org}/operating-loop/weekly-plan/current`,
+      60_000,
+    ),
+  weeklyPlanSave: async (
+    org: string,
+    payload: {
+      objective: string;
+      weekStartIso?: string;
+      items: Array<{
+        id?: string;
+        dayOfWeek: number;
+        title: string;
+        summary: string;
+        capability: string;
+        toolId: string;
+        requiresApproval?: boolean;
+        plannedHour?: number;
+      }>;
+    },
+  ) => {
+    const result = await postJson<WeeklyPlanView & {
+      error?: { code?: string; message?: string };
+    }>(`/api/customer-zero/${org}/operating-loop/weekly-plan`, payload);
+    if (result) invalidateOrg(org, ["weekly-plan-current"]);
+    return result;
+  },
+  weeklyPlanAccept: async (org: string, planId: string) => {
+    const result = await postJson<{
+      organizationId: string;
+      plan: WeeklyPlan;
+      tasksCreated: number;
+    } & {
+      error?: { code?: string; message?: string };
+    }>(`/api/customer-zero/${org}/operating-loop/weekly-plan/${planId}/accept`, {});
+    if (result && !result.error) {
+      invalidateOrg(org, ["weekly-plan-current", "tasks", "work-feed", "calendar", "results", "overview"]);
+    }
+    return result;
+  },
+  taskTransition: async (
+    org: string,
+    taskId: string,
+    status: "queued" | "running" | "waiting_approval" | "completed" | "failed" | "cancelled",
+  ) => {
+    const result = await fetchJson<{
+      organizationId: string;
+      task: DepartmentTask;
+    } & {
+      error?: { code?: string; message?: string };
+    }>(`/api/customer-zero/${org}/operating-loop/tasks/${taskId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    });
+    if (result && !result.error) {
+      invalidateOrg(org, ["tasks", "work-feed", "calendar", "results", "overview"]);
+    }
     return result;
   },
   archiveConversation: async (org: string, conversationId: string) => {

@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { api, type BusinessCalendarEntry } from "@/app/api";
 import { useOrg } from "@/app/org-context";
+import { cssVarsFor } from "@/components/DepartmentChip";
 import { Badge, Card, EmptyState } from "@/components/primitives";
+import { visualIdentityForDepartment } from "@/app/department-visual-identity";
 
 export function CalendarRoute(props: { departmentId?: "marketing" | "seo" }) {
   const { organizationId } = useOrg();
+  const navigate = useNavigate();
   const [entries, setEntries] = useState<BusinessCalendarEntry[]>([]);
   const [department, setDepartment] = useState(props.departmentId ?? "");
   const [status, setStatus] = useState("");
@@ -40,6 +44,15 @@ export function CalendarRoute(props: { departmentId?: "marketing" | "seo" }) {
         <p className="dfy-eyebrow">Departify</p>
         <h1>{props.departmentId ? `Calendario de ${props.departmentId === "marketing" ? "Marketing" : "SEO"}` : "Calendario"}</h1>
         <p className="dfy-hero__goal">El tiempo operativo de tu empresa, reunido en una sola vista.</p>
+        <div className="dfy-hero__actions">
+          <button
+            type="button"
+            className="dfy-button"
+            onClick={() => navigate("/weekly-plan")}
+          >
+            Planificar semana
+          </button>
+        </div>
       </section>
       <Card>
         <div className="dfy-calendar-filters" aria-label="Filtros de calendario">
@@ -49,11 +62,86 @@ export function CalendarRoute(props: { departmentId?: "marketing" | "seo" }) {
         </div>
         <p className="dfy-muted dfy-muted--small">Google Calendar: {externalState === "connected" ? "conectado" : externalState === "error" ? "necesita atención" : "no conectado"}</p>
       </Card>
-      {loading ? <Card><p className="dfy-muted">Cargando calendario…</p></Card> : error ? <Card><p className="dfy-alert" role="alert">No he podido cargar el calendario ahora mismo.</p><button type="button" className="dfy-button" onClick={load}>Reintentar</button></Card> : entries.length === 0 ? <Card><EmptyState title="No hay actividad en este rango" description="Aquí aparecerán tareas, aprobaciones, resultados y reuniones reales cuando existan." /></Card> : <div className="dfy-calendar-list">{entries.map((entry) => <Card key={entry.id}><div className="dfy-calendar-entry"><time dateTime={entry.startIso}>{formatDate(entry.startIso)}</time><div><strong>{entry.title}</strong><p>{entry.summary || "Sin detalle adicional."}</p><span className="dfy-muted dfy-muted--small">{entry.departmentId} · {typeLabel(entry.type)}</span></div><Badge tone={entry.status === "needs_approval" ? "warning" : entry.status === "failed" ? "danger" : entry.status === "completed" ? "success" : "neutral"}>{statusLabel(entry.status)}</Badge></div></Card>)}</div>}
+      {loading ? (
+        <Card><p className="dfy-muted">Cargando calendario…</p></Card>
+      ) : error ? (
+        <Card>
+          <p className="dfy-alert" role="alert">No he podido cargar el calendario ahora mismo.</p>
+          <button type="button" className="dfy-button" onClick={load}>Reintentar</button>
+        </Card>
+      ) : entries.length === 0 ? (
+        <Card>
+          <EmptyState
+            title="No hay actividad en este rango"
+            description="Aquí aparecerán tareas, aprobaciones, resultados y reuniones reales cuando existan."
+          />
+        </Card>
+      ) : (
+        <div className="dfy-calendar-list">
+          {entries.map((entry) => {
+            const identity = visualIdentityForDepartment(entry.departmentId);
+            const style = cssVarsFor(identity);
+            return (
+              <Card key={entry.id} style={style}>
+                <div className="dfy-calendar-entry" data-department={identity.id}>
+                  <span className="dfy-calendar-entry__strip" aria-hidden="true" />
+                  <div>
+                    <time dateTime={entry.startIso}>{formatDate(entry.startIso)}</time>
+                    <strong>{entry.title}</strong>
+                    <p>{entry.summary || "Sin detalle adicional."}</p>
+                    <span className="dfy-muted dfy-muted--small">
+                      {identity.label} · {typeLabel(entry.type)}
+                    </span>
+                  </div>
+                  <Badge
+                    tone={
+                      entry.status === "needs_approval"
+                        ? "warning"
+                        : entry.status === "failed"
+                          ? "danger"
+                          : entry.status === "completed"
+                            ? "success"
+                            : "neutral"
+                    }
+                  >
+                    {statusLabel(entry.status)}
+                  </Badge>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
 
-function formatDate(value: string): string { return new Intl.DateTimeFormat("es-ES", { weekday: "short", day: "2-digit", month: "short" }).format(new Date(value)); }
-function typeLabel(value: string): string { return ({ task: "Trabajo", result: "Resultado", approval: "Aprobación", meeting: "Reunión" } as Record<string, string>)[value] ?? value; }
-function statusLabel(value: string): string { return ({ pending: "Pendiente", needs_approval: "Necesita aprobación", scheduled: "Programado", completed: "Completado", failed: "Fallido", cancelled: "Cancelado" } as Record<string, string>)[value] ?? value; }
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat("es-ES", {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+  }).format(new Date(value));
+}
+function typeLabel(value: string): string {
+  return (
+    ({
+      task: "Trabajo",
+      result: "Resultado",
+      approval: "Aprobación",
+      meeting: "Reunión",
+    } as Record<string, string>)[value] ?? value
+  );
+}
+function statusLabel(value: string): string {
+  return (
+    ({
+      pending: "Pendiente",
+      needs_approval: "Necesita aprobación",
+      scheduled: "Programado",
+      completed: "Completado",
+      failed: "Fallido",
+      cancelled: "Cancelado",
+    } as Record<string, string>)[value] ?? value
+  );
+}

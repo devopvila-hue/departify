@@ -62,7 +62,10 @@ export function projectBusinessCalendar(input: {
 }): BusinessCalendarEntry[] {
   const entries: BusinessCalendarEntry[] = [];
   for (const task of input.tasks) {
-    const startIso = task.startedAt ?? task.createdAt;
+    // Operating Loop: planned tasks project to the calendar at their
+    // scheduled date so the CEO can plan a week ahead and see work
+    // before it actually starts.
+    const startIso = task.plannedDate ?? task.startedAt ?? task.createdAt;
     entries.push({
       id: `task:${task.id}`,
       organizationId: input.organizationId,

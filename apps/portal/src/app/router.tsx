@@ -17,6 +17,7 @@ import { RootRoute } from "@/routes/RootRoute";
 import { SettingsRoute } from "@/routes/SettingsRoute";
 import { ShellGate } from "@/components/ShellGate";
 import { TasksRoute } from "@/routes/TasksRoute";
+import { WeeklyPlanRoute } from "@/routes/WeeklyPlanRoute";
 import { CalendarRoute } from "@/routes/CalendarRoute";
 import { DepartmentDashboardRoute } from "@/routes/DepartmentDashboardRoute";
 import { SeoRoute } from "@/routes/SeoRoute";
@@ -107,6 +108,7 @@ export const router = createBrowserRouter([
       { path: "/inicio", element: <ControlPlaneRoute /> },
       { path: "/chat", element: <ChatRoute /> },
       { path: "/tareas", element: <TasksRoute /> },
+      { path: "/weekly-plan", element: <WeeklyPlanRoute /> },
       { path: "/inbox", element: <InboxRoute /> },
       { path: "/departamentos", element: <DepartmentsRoute /> },
       { path: "/conexiones", element: <ConnectionsRoute /> },

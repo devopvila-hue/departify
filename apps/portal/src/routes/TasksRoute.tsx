@@ -1,89 +1,161 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { api, type CompanyStatus, type HeadIdentity, type MarketingWorkItem, type DepartmentTask } from "@/app/api";
+import {
+  api,
+  type CompanyStatus,
+  type DepartmentResult,
+  type DepartmentTask,
+  type HeadIdentity,
+} from "@/app/api";
 import { useOrg } from "@/app/org-context";
-import { readable } from "@/app/readable";
-import { TasksIcon } from "@/components/icons";
+import { cssVarsFor, DepartmentChip } from "@/components/DepartmentChip";
 import { Badge } from "@/components/primitives";
+import {
+  DEPARTMENT_VISUAL_IDENTITY,
+  visualIdentityForDepartment,
+} from "@/app/department-visual-identity";
 
 /**
- * Tareas — the operational inbox.
+ * Tareas — the Operating Loop Kanban.
  *
- * Real work items, no demos. Clicking a task returns to the central
- * chat with the task as context, so the CEO never has to negotiate
- * the chat with a separate task UI.
+ * Columns map to DepartmentTask.status so the visual state is always
+ * the truthful backend state. Cards carry the department Visual
+ * Identity accent (border + chip) so the CEO recognizes the owning
+ * department before reading the badge text.
  */
+type KanbanColumnId = "todo" | "doing" | "approval" | "done";
+
+const COLUMNS: ReadonlyArray<{ id: KanbanColumnId; title: string }> = [
+  { id: "todo", title: "Por hacer" },
+  { id: "doing", title: "En curso" },
+  { id: "approval", title: "Esperando aprobación" },
+  { id: "done", title: "Hecho" },
+];
+
+function statusToColumn(status: string | undefined): KanbanColumnId {
+  switch (status) {
+    case "running":
+      return "doing";
+    case "waiting_approval":
+      return "approval";
+    case "completed":
+      return "done";
+    case "failed":
+    case "cancelled":
+      return "done";
+    case "queued":
+    default:
+      return "todo";
+  }
+}
+
 export function TasksRoute() {
   const { organizationId } = useOrg();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const focusedTaskId = searchParams.get("taskId");
   const [status, setStatus] = useState<CompanyStatus | null>(null);
-  const [departmentTasks, setDepartmentTasks] = useState<TaskListItem[]>([]);
+  const [tasks, setTasks] = useState<DepartmentTask[]>([]);
+  const [results, setResults] = useState<DepartmentResult[]>([]);
   const [head, setHead] = useState<HeadIdentity | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!organizationId) return;
-    const [statusData, handoff, workFeed] = await Promise.all([
+    const [statusData, handoff, workFeed, resultsResp] = await Promise.all([
       api.status(organizationId),
       api.handoff(organizationId),
       api.workFeed(organizationId),
+      api.results(organizationId),
     ]);
     if (statusData) setStatus(statusData);
     if (handoff) setHead(handoff.head);
-    setDepartmentTasks((workFeed?.tasks ?? []).map(toTaskListItem));
+    setTasks(workFeed?.tasks ?? []);
+    setResults(resultsResp?.results ?? []);
   }, [organizationId]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  async function runItem(itemId: string, action: "execute" | "approve") {
-    if (!organizationId) return;
-    setBusy(itemId);
+  const grouped = useMemo(() => {
+    const map: Record<KanbanColumnId, DepartmentTask[]> = {
+      todo: [],
+      doing: [],
+      approval: [],
+      done: [],
+    };
+    for (const task of tasks) map[statusToColumn(task.status)].push(task);
+    return map;
+  }, [tasks]);
+
+  const resultByTask = useMemo(() => {
+    const map = new Map<string, DepartmentResult>();
+    for (const result of results) {
+      if (result.relatedWorkItemId) map.set(result.relatedWorkItemId, result);
+    }
+    return map;
+  }, [results]);
+
+  async function moveTask(task: DepartmentTask, column: KanbanColumnId) {
+    if (!organizationId || busy) return;
+    const targetStatus =
+      column === "todo"
+        ? "queued"
+        : column === "doing"
+          ? "running"
+          : column === "approval"
+            ? "waiting_approval"
+            : task.status === "running" || task.status === "queued"
+              ? "cancelled"
+              : "completed";
+    setBusy(task.id);
     setError(null);
-    const result = await api.itemAction(organizationId, itemId, action);
+    const result = await api.taskTransition(
+      organizationId,
+      task.id,
+      targetStatus,
+    );
     setBusy(null);
-    if (!result || result.error) {
-      setError("Departify no ha podido terminar esto ahora mismo. Inténtalo de nuevo.");
+    if (!result || (result as { error?: { code?: string } }).error) {
+      setError(
+        "Departify no puede mover esta tarea en ese sentido. Las tareas terminan cuando la capacidad que las cierra termina su ejecución.",
+      );
       return;
     }
     await load();
   }
 
-  const legacyItems = status?.marketingWork?.items ?? [];
-  const items = mergeTaskItems(departmentTasks, legacyItems);
-  const departments = [
-    { id: "marketing", name: "Marketing", head },
-  ];
-
-  // Group by status for the inbox: needs_approval first (urgency),
-  // then running/pending, then completed/unavailable.
-  const grouped = {
-    pending: items.filter((it) => it.status === "needs_approval" || it.status === "waiting_approval"),
-    active: items.filter((it) => it.status === "running" || it.status === "pending" || it.status === "approved" || it.status === "queued"),
-    done: items.filter((it) => it.status === "completed"),
-    blocked: items.filter((it) => it.status === "unavailable" || it.status === "failed"),
-  };
-
-  function openInChat(itemId: string, title: string) {
-    const focus = encodeURIComponent(`¿En qué punto está "${title}"? (ref ${itemId})`);
+  function openInChat(task: DepartmentTask) {
+    const focus = encodeURIComponent(`¿En qué punto está "${task.title}"? (ref ${task.id})`);
     navigate(`/chat?focus=${focus}`);
   }
 
+  const planningAvailable =
+    tasks.length === 0 ||
+    (tasks.length > 0 && grouped.todo.length === 0 && grouped.doing.length === 0);
+
   return (
-    <div className="dfy-page">
+    <div className="dfy-page dfy-tasks-page" data-testid="tasks-route">
       <section className="dfy-hero">
         <p className="dfy-eyebrow">Tareas</p>
         <h1>El trabajo de tu empresa</h1>
         <p className="dfy-hero__lead">
-          Lo que están haciendo los departamentos, en curso, esperando
-          aprobación y terminado. Cualquier tarea abre su conversación en
-          el chat.
+          Lo que están haciendo los departamentos: por hacer, en curso,
+          esperando tu aprobación y hecho. Arrastra una tarjeta para
+          cambiar su estado cuando proceda.
         </p>
+        <div className="dfy-hero__actions">
+          <button
+            type="button"
+            className="dfy-button"
+            onClick={() => navigate("/weekly-plan")}
+          >
+            Planificar semana
+          </button>
+        </div>
       </section>
 
       {error && (
@@ -92,96 +164,96 @@ export function TasksRoute() {
         </p>
       )}
 
-      {items.length === 0 ? (
+      {tasks.length === 0 ? (
         <section className="dfy-card">
-          <TasksIcon size={28} />
           <h2>Aún no hay tareas</h2>
           <p>
             En cuanto el equipo empiece a trabajar verás aquí lo que hay
-            en curso. La forma más rápida de arrancar es ir al chat y
-            contarle a Departify qué quieres conseguir.
+            en curso. La forma más rápida de arrancar es planificar la
+            semana o pedirle a Departify lo que quieres conseguir.
           </p>
           <button
             type="button"
             className="dfy-button"
-            onClick={() => navigate("/chat")}
+            onClick={() => navigate("/weekly-plan")}
           >
-            Ir al chat
+            Planificar semana
           </button>
         </section>
       ) : (
-        <>
-          {grouped.pending.length > 0 && (
-            <TaskGroup
-              title="Esperan tu decisión"
-              empty={false}
-              items={grouped.pending}
-              head={head}
-              runningItem={busy}
-              focusedTaskId={focusedTaskId}
-              onAction={runItem}
-              onOpen={openInChat}
-              actionLabel="Aprobar"
-              actionKind="approve"
-            />
-          )}
-          {grouped.active.length > 0 && (
-            <TaskGroup
-              title="En curso"
-              items={grouped.active}
-              head={head}
-              runningItem={busy}
-              focusedTaskId={focusedTaskId}
-              onAction={runItem}
-              onOpen={openInChat}
-              actionLabel="Que lo hagan"
-              actionKind="execute"
-            />
-          )}
-          {grouped.blocked.length > 0 && (
-            <TaskGroup
-              title="Bloqueadas"
-              items={grouped.blocked}
-              head={head}
-              runningItem={busy}
-              focusedTaskId={focusedTaskId}
-              onAction={runItem}
-              onOpen={openInChat}
-              actionLabel="Pedir desbloqueo"
-              actionKind="execute"
-            />
-          )}
-          {grouped.done.length > 0 && (
-            <TaskGroup
-              title="Terminadas"
-              items={grouped.done}
-              head={head}
-              runningItem={busy}
-              focusedTaskId={focusedTaskId}
-              onAction={runItem}
-              onOpen={openInChat}
-              actionLabel="Reabrir"
-              actionKind="execute"
-            />
-          )}
-        </>
+        <div className="dfy-kanban" data-testid="tasks-kanban">
+          {COLUMNS.map((column) => {
+            const columnTasks = grouped[column.id];
+            const accentIdentity =
+              column.id === "approval"
+                ? DEPARTMENT_VISUAL_IDENTITY.direccion
+                : column.id === "done"
+                  ? DEPARTMENT_VISUAL_IDENTITY.ingenieria
+                  : DEPARTMENT_VISUAL_IDENTITY.marketing;
+            const style = cssVarsFor(accentIdentity);
+            return (
+              <section
+                key={column.id}
+                className="dfy-kanban__column"
+                style={style}
+                data-column={column.id}
+                data-testid={`kanban-${column.id}`}
+              >
+                <header className="dfy-kanban__column-head">
+                  <span>{column.title}</span>
+                  <span className="dfy-kanban__count">{columnTasks.length}</span>
+                </header>
+                {columnTasks.length === 0 ? (
+                  <p className="dfy-muted dfy-muted--small">
+                    Nada por aquí todavía.
+                  </p>
+                ) : (
+                  columnTasks.map((task) => (
+                    <KanbanCard
+                      key={task.id}
+                      task={task}
+                      result={resultByTask.get(task.id) ?? null}
+                      focused={task.id === focusedTaskId}
+                      busy={busy === task.id}
+                      onMove={(columnId) => moveTask(task, columnId)}
+                      onOpen={() => openInChat(task)}
+                    />
+                  ))
+                )}
+              </section>
+            );
+          })}
+        </div>
       )}
 
-      {departments.length > 0 && (
+      {planningAvailable && tasks.length > 0 && (
+        <section className="dfy-card">
+          <h2>¿Quieres planificar la semana?</h2>
+          <p>
+            El CEO define el objetivo semanal. Departify lo convierte en
+            tareas reales con fecha, departamento y capacidad.
+          </p>
+          <button
+            type="button"
+            className="dfy-button dfy-button--ghost"
+            onClick={() => navigate("/weekly-plan")}
+          >
+            Ir al plan semanal
+          </button>
+        </section>
+      )}
+
+      {head && (
         <section className="dfy-card">
           <h2>Departamentos trabajando</h2>
           <ul className="dfy-list">
-            {departments.map((d) => (
-              <li key={d.id}>
-                <strong>{d.name}</strong>
-                {d.head && (
-                  <span className="dfy-muted dfy-muted--small">
-                    {" "}
-                    · {d.head.name} ({d.head.role})
-                  </span>
-                )}
-              </li>
-            ))}
+            <li>
+              <DepartmentChip departmentId="marketing" showLabel />
+              <span className="dfy-muted dfy-muted--small">
+                {" "}
+                · {head.name} ({head.role})
+              </span>
+            </li>
           </ul>
         </section>
       )}
@@ -189,140 +261,155 @@ export function TasksRoute() {
   );
 }
 
-function TaskGroup(props: {
-  title: string;
-  empty?: boolean;
-  items: TaskListItem[];
-  head: HeadIdentity | null;
-  runningItem: string | null;
-  focusedTaskId: string | null;
-  onAction: (itemId: string, action: "execute" | "approve") => void;
-  onOpen: (itemId: string, title: string) => void;
-  actionLabel: string;
-  actionKind: "execute" | "approve";
-}) {
-  if (props.empty) return null;
+interface KanbanCardProps {
+  task: DepartmentTask;
+  result: DepartmentResult | null;
+  focused: boolean;
+  busy: boolean;
+  onMove: (column: KanbanColumnId) => void;
+  onOpen: () => void;
+}
+
+function KanbanCard(props: KanbanCardProps) {
+  const identity = visualIdentityForDepartment(props.task.departmentId);
+  const style = cssVarsFor(identity);
+  const isDone =
+    props.task.status === "completed" ||
+    props.task.status === "cancelled" ||
+    props.task.status === "failed";
   return (
-    <section className="dfy-card">
-      <h2>{props.title}</h2>
-      <ul className="dfy-task-list">
-        {props.items.map((item) => (
-            <li key={item.id} className={`dfy-task${item.id === props.focusedTaskId ? " dfy-task--focused" : ""}`}>
-            <div className="dfy-task__head">
-              <strong>{item.title}</strong>
-              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                {item.departmentId && (
-                  <Badge tone="neutral">
-                    {item.departmentId.toUpperCase()}
-                  </Badge>
-                )}
-                <span className={`dfy-task__status dfy-task__status--${item.status ?? "pending"}`}>
-                  {labelForStatus(item.status ?? "pending")}
-                </span>
-              </div>
-            </div>
-            {item.id === props.focusedTaskId && <p className="dfy-muted dfy-muted--small">Tarea vinculada al correo</p>}
-            <p className="dfy-muted">{item.description}</p>
-            {item.result && <p className="dfy-task__result">{readable(item.result)}</p>}
-            <div className="dfy-task__actions">
-              <button
-                type="button"
-                className="dfy-button dfy-button--ghost dfy-button--small"
-                onClick={() => props.onOpen(item.id, item.title)}
-              >
-                Abrir en el chat
-              </button>
-              {item.actionable && props.actionKind !== "execute" && (
-                <button
-                  type="button"
-                  className="dfy-button dfy-button--small"
-                  disabled={props.runningItem === item.id}
-                  onClick={() => props.onAction(item.id, "approve")}
-                >
-                  {props.actionLabel}
-                </button>
-              )}
-              {item.actionable && props.actionKind === "execute" && (
-                <button
-                  type="button"
-                  className="dfy-button dfy-button--small"
-                  disabled={props.runningItem === item.id}
-                  onClick={() => props.onAction(item.id, "execute")}
-                >
-                  {props.actionLabel}
-                </button>
-              )}
-            </div>
-          </li>
-        ))}
-      </ul>
-    </section>
+    <article
+      className={`dfy-kanban__card${props.focused ? " dfy-kanban__card--focused" : ""}`}
+      style={style}
+      data-department={identity.id}
+      data-task-id={props.task.id}
+    >
+      <button
+        type="button"
+        className="dfy-kanban__card-title"
+        onClick={props.onOpen}
+        aria-label={`Abrir ${props.task.title} en el chat`}
+      >
+        {props.task.title}
+      </button>
+      <div className="dfy-kanban__card-meta">
+        <DepartmentChip departmentId={props.task.departmentId} />
+        <span>{statusLabel(props.task.status)}</span>
+        <TimingBadge task={props.task} />
+      </div>
+      {props.task.summary ? (
+        <p className="dfy-muted dfy-muted--small">{props.task.summary}</p>
+      ) : null}
+      {props.result ? (
+        <button
+          type="button"
+          className="dfy-button dfy-button--small dfy-button--ghost"
+          onClick={props.onOpen}
+        >
+          Ver resultado
+        </button>
+      ) : null}
+      {!isDone ? (
+        <div className="dfy-kanban__card-meta">
+          {props.task.status === "queued" ? (
+            <button
+              type="button"
+              className="dfy-button dfy-button--small"
+              disabled={props.busy}
+              onClick={() => props.onMove("doing")}
+            >
+              Empezar
+            </button>
+          ) : null}
+          {props.task.status === "running" ? (
+            <button
+              type="button"
+              className="dfy-button dfy-button--small dfy-button--ghost"
+              disabled={props.busy}
+              onClick={() => props.onMove("todo")}
+            >
+              Pausar
+            </button>
+          ) : null}
+          {props.task.status === "waiting_approval" ? (
+            <button
+              type="button"
+              className="dfy-button dfy-button--small"
+              disabled={props.busy}
+              onClick={() => props.onMove("doing")}
+            >
+              Aprobar
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="dfy-button dfy-button--small dfy-button--ghost"
+            disabled={props.busy}
+            onClick={() => props.onMove("done")}
+          >
+            Archivar
+          </button>
+        </div>
+      ) : null}
+    </article>
   );
 }
 
-interface TaskListItem {
-  id: string;
-  title: string;
-  description: string;
-  status: string;
-  result?: string;
-  actionable: boolean;
-  departmentId?: string;
-}
-
-function toTaskListItem(task: DepartmentTask): TaskListItem {
-  return {
-    id: task.id,
-    title: task.title,
-    description: task.summary,
-    status: task.status,
-    actionable: false,
-    departmentId: task.departmentId,
-  };
-}
-
-function toLegacyTaskListItem(item: MarketingWorkItem): TaskListItem {
-  return {
-    id: item.id,
-    title: item.title,
-    description: item.description,
-    status: item.status ?? "pending",
-    ...(item.result ? { result: item.result } : {}),
-    actionable: true,
-    departmentId: "marketing",
-  };
-}
-
-function mergeTaskItems(
-  departmentTasks: readonly TaskListItem[],
-  legacyItems: readonly MarketingWorkItem[],
-): TaskListItem[] {
-  const byId = new Map<string, TaskListItem>(departmentTasks.map((item) => [item.id, item]));
-  for (const item of legacyItems) {
-    if (!byId.has(item.id)) byId.set(item.id, toLegacyTaskListItem(item));
+function TimingBadge({ task }: { task: DepartmentTask }) {
+  if (task.status === "completed" && task.startedAt && task.completedAt) {
+    const ms =
+      new Date(task.completedAt).getTime() -
+      new Date(task.startedAt).getTime();
+    return <span>· {humanDuration(ms)}</span>;
   }
-  return [...byId.values()];
+  if (task.status === "running" && task.startedAt) {
+    const ms = Date.now() - new Date(task.startedAt).getTime();
+    return <span>· {humanDuration(ms)}</span>;
+  }
+  if (task.status === "queued" && task.plannedDate) {
+    return <span>· {formatPlanned(task.plannedDate)}</span>;
+  }
+  return null;
 }
 
-function labelForStatus(status: string): string {
+function humanDuration(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `En curso · ${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) return `En curso · ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return `${hours} h ${remainingMinutes} min`;
+}
+
+function formatPlanned(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat("es-ES", {
+      weekday: "short",
+      day: "2-digit",
+      month: "short",
+    }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
+}
+
+function statusLabel(status: string): string {
   switch (status) {
-    case "needs_approval":
-      return "Esperando aprobación";
     case "queued":
       return "Pendiente";
-    case "approved":
-      return "Aprobado";
+    case "running":
+      return "En curso";
+    case "waiting_approval":
+      return "Esperando aprobación";
     case "completed":
       return "Terminado";
-    case "running":
-      return "En marcha";
     case "failed":
       return "Falló";
     case "cancelled":
-      return "Cancelada";
-    case "unavailable":
-      return "Bloqueada";
+      return "Cancelado";
     default:
-      return "Preparado";
+      return status;
   }
 }

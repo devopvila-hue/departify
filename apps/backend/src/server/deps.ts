@@ -15,6 +15,7 @@ import type { ConnectorRuntime, ConnectorRuntimeCandidate } from "@departify/con
 import type { SeoRepositoryLinkStore } from "../customer-zero/seo-repository.js";
 import type { LlmCredentialStore } from "../customer-zero/llm-credentials.js";
 import type { OrganizationBrandingStore } from "../customer-zero/organization-branding.js";
+import type { WeeklyPlanStore } from "../customer-zero/weekly-plans.js";
 
 /**
  * Server dependencies — Phase P0-A / P-B.
@@ -69,4 +70,6 @@ export interface ServerDeps {
   llmCredentials?: LlmCredentialStore;
   /** Durable organization-owned branding (logo + brand name). */
   branding?: OrganizationBrandingStore;
+  /** Durable organization-owned weekly operating plan (Operating Loop). */
+  weeklyPlans?: WeeklyPlanStore;
 }

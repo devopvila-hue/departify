@@ -11,9 +11,13 @@ export function Card(props: {
   action?: ReactNode;
   children: ReactNode;
   className?: string;
+  style?: React.CSSProperties;
 }) {
   return (
-    <section className={`dfy-card${props.className ? ` ${props.className}` : ""}`}>
+    <section
+      className={`dfy-card${props.className ? ` ${props.className}` : ""}`}
+      style={props.style}
+    >
       {(props.title || props.action) && (
         <header className="dfy-card__head">
           {props.title && <h2>{props.title}</h2>}

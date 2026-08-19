@@ -60,6 +60,14 @@ import {
   updateBrandName,
   uploadOrganizationLogo,
 } from "../../customer-zero/organization-branding.js";
+import {
+  currentWeekStartIso,
+  getWeeklyPlanStore,
+  materializeWeeklyPlanTasks,
+  transitionTaskStatus,
+  type WeeklyPlan,
+} from "../../customer-zero/weekly-plans.js";
+import type { DepartmentWorkStatus } from "../../customer-zero/department-work.js";
 import { loadAuthConfig } from "@departify/config";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { buildAnswersRawData } from "../../customer-zero/answers.js";
@@ -1214,6 +1222,182 @@ export async function registerCustomerZeroV2Routes(
       });
       request.log.info({ event: "branding_logo_deleted", organizationId });
       return reply.code(200).send(view);
+    },
+  );
+
+  // Operating Loop -------------------------------------------------------------
+  //
+  // Weekly operating plan. The bridge between "Chat proposes a plan" and
+  // "DepartmentTasks appear in Kanban + Calendar". Materialization goes
+  // through the existing DepartmentWorkStore so Kanban + Calendar pick
+  // up the new tasks without a parallel system.
+
+  server.get<{
+    Params: { organizationId: string };
+  }>(
+    "/api/customer-zero/:organizationId/operating-loop/weekly-plan/current",
+    async (request) => {
+      const { organizationId } = request.params;
+      await requireSession(organizationId, deps);
+      const store = deps.weeklyPlans ?? getWeeklyPlanStore();
+      const plan = await store.getCurrent(organizationId);
+      return {
+        organizationId,
+        plan,
+        weekStartIso: currentWeekStartIso(),
+      };
+    },
+  );
+
+  server.get<{
+    Params: { organizationId: string };
+  }>(
+    "/api/customer-zero/:organizationId/operating-loop/weekly-plan",
+    async (request) => {
+      const { organizationId } = request.params;
+      await requireSession(organizationId, deps);
+      const store = deps.weeklyPlans ?? getWeeklyPlanStore();
+      const plans = await store.listForOrg(organizationId);
+      return { organizationId, plans };
+    },
+  );
+
+  server.post<{
+    Params: { organizationId: string };
+    Body: {
+      objective?: string;
+      weekStartIso?: string;
+      items?: Array<{
+        id?: string;
+        dayOfWeek: number;
+        title: string;
+        summary: string;
+        capability: string;
+        toolId: string;
+        requiresApproval?: boolean;
+        plannedHour?: number;
+      }>;
+    };
+  }>(
+    "/api/customer-zero/:organizationId/operating-loop/weekly-plan",
+    async (request, reply) => {
+      const { organizationId } = request.params;
+      await requireSession(organizationId, deps);
+      const body = request.body ?? {};
+      const objective = (body.objective ?? "").trim();
+      if (!objective) {
+        return reply.code(400).send({
+          error: { code: "missing_objective", message: "Indica el objetivo de la semana." },
+        });
+      }
+      const items = (body.items ?? []).map((item, index) => ({
+        id: item.id ?? `wpi_${Date.now().toString(36)}${index}`,
+        dayOfWeek: Math.max(0, Math.min(6, Math.floor(item.dayOfWeek ?? 0))),
+        title: item.title.trim(),
+        summary: (item.summary ?? "").trim(),
+        capability: item.capability as DepartmentWorkCapability,
+        toolId: item.toolId.trim(),
+        requiresApproval: Boolean(item.requiresApproval),
+        ...(typeof item.plannedHour === "number" ? { plannedHour: item.plannedHour } : {}),
+      })).filter((item) => item.title.length > 0);
+      const store = deps.weeklyPlans ?? getWeeklyPlanStore();
+      const now = new Date().toISOString();
+      const plan = await store.upsert({
+        id: "",
+        organizationId,
+        weekStartIso: body.weekStartIso ?? currentWeekStartIso(),
+        objective,
+        items,
+        status: "draft",
+        createdAt: now,
+        createdBy: request.authUser?.id ?? organizationId,
+        acceptedAt: null,
+      });
+      return reply.code(201).send({ organizationId, plan });
+    },
+  );
+
+  server.post<{
+    Params: { organizationId: string; planId: string };
+  }>(
+    "/api/customer-zero/:organizationId/operating-loop/weekly-plan/:planId/accept",
+    async (request, reply) => {
+      const { organizationId, planId } = request.params;
+      await requireSession(organizationId, deps);
+      const store = deps.weeklyPlans ?? getWeeklyPlanStore();
+      const existing = await store.get(planId);
+      if (!existing || existing.organizationId !== organizationId) {
+        return reply.code(404).send({
+          error: { code: "plan_not_found", message: "No hemos encontrado ese plan." },
+        });
+      }
+      if (existing.status === "accepted") {
+        return reply.code(409).send({
+          error: { code: "plan_already_accepted", message: "Este plan ya fue aceptado." },
+        });
+      }
+      // Materialize: each plan item → durable DepartmentTask row with
+      // plannedDate + weekly_plan source.
+      const workStore = (deps.workStore ?? workStoreForRoutes());
+      const inputs = materializeWeeklyPlanTasks({
+        organizationId,
+        plan: existing,
+        requestedBy: request.authUser?.id ?? organizationId,
+      });
+      const created: DepartmentTask[] = [];
+      for (const input of inputs) {
+        created.push(await workStore.createTask(input));
+      }
+      const accepted: WeeklyPlan = {
+        ...existing,
+        status: "accepted",
+        acceptedAt: new Date().toISOString(),
+      };
+      await store.upsert(accepted);
+      request.log.info({
+        event: "weekly_plan_accepted",
+        organizationId,
+        planId,
+        tasksCreated: created.length,
+      });
+      return reply.code(200).send({ organizationId, plan: accepted, tasksCreated: created.length });
+    },
+  );
+
+  // Kanban status transition. Only allows transitions that the
+  // existing executor does not own (queued ↔ running/cancelled).
+  // The capability executor remains the only path that produces a
+  // DepartmentResult.
+  server.patch<{
+    Params: { organizationId: string; taskId: string };
+    Body: { status: DepartmentWorkStatus };
+  }>(
+    "/api/customer-zero/:organizationId/operating-loop/tasks/:taskId/status",
+    async (request, reply) => {
+      const { organizationId, taskId } = request.params;
+      await requireSession(organizationId, deps);
+      const workStore = deps.workStore ?? workStoreForRoutes();
+      const task = await workStore.getTask(taskId);
+      if (!task || task.organizationId !== organizationId) {
+        return reply.code(404).send({
+          error: { code: "task_not_found", message: "No hemos encontrado esa tarea." },
+        });
+      }
+      const to = request.body?.status;
+      if (!to) {
+        return reply.code(400).send({
+          error: { code: "missing_status", message: "Indica el estado destino." },
+        });
+      }
+      try {
+        const next = await workStore.updateTask(taskId, transitionTaskStatus(task, to));
+        return reply.code(200).send({ organizationId, task: next });
+      } catch (cause) {
+        if (cause instanceof Error) {
+          return reply.code(409).send({ error: { code: "invalid_transition", message: cause.message } });
+        }
+        throw cause;
+      }
     },
   );
 

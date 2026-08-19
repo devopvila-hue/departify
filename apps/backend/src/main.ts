@@ -57,6 +57,7 @@ import {
 } from "./customer-zero/marketing-connector.js";
 import { SupabaseLlmCredentialStore, setLlmCredentialStore } from "./customer-zero/llm-credentials.js";
 import { SupabaseOrganizationBrandingStore, setOrganizationBrandingStore } from "./customer-zero/organization-branding.js";
+import { SupabaseWeeklyPlanStore, setWeeklyPlanStore } from "./customer-zero/weekly-plans.js";
 
 // Load the local environment file when present. The backend does not ship
 // secrets; local development reads them from `.env` at the repo root.
@@ -112,6 +113,8 @@ try {
   setLlmCredentialStore(deps.llmCredentials);
   deps.branding = new SupabaseOrganizationBrandingStore(supabaseAuthConfig);
   setOrganizationBrandingStore(deps.branding);
+  deps.weeklyPlans = new SupabaseWeeklyPlanStore(supabaseAuthConfig);
+  setWeeklyPlanStore(deps.weeklyPlans);
   // Durable Google OAuth token persistence. Required in production —
   // tokens MUST survive Railway backend restarts. The in-memory
   // fallback is dev / tests only.

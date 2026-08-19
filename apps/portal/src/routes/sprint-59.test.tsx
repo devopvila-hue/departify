@@ -388,31 +388,44 @@ describe("Sprint 59 — Conversational Operating System", () => {
           department: { id: "d", name: "Marketing", status: "active", employeeAgentIds: [] },
           connections: [],
           conversation: [],
-          marketingWork: {
-            goal: "20 clientes",
-            summary: "Plan piloto en Barcelona.",
-            items: [
-              {
-                id: "item_1",
-                title: "Analizar el mercado",
-                description: "Identificar el segmento prioritario.",
-                kind: "analysis",
-                status: "running",
-              },
-            ],
-          },
+        };
+      }
+      if (url.includes("/work-feed")) {
+        return {
+          organizationId: "org_moon",
+          tasks: [
+            {
+              id: "task_1",
+              organizationId: "org_moon",
+              departmentId: "marketing",
+              objectiveId: null,
+              requestedBy: "user",
+              title: "Analizar el mercado",
+              summary: "Identificar el segmento prioritario.",
+              capability: "marketing.research",
+              toolId: "marketing.research",
+              status: "running",
+              statusMessage: "",
+              progress: 0.4,
+              requiredCapabilities: [],
+              createdAt: "2026-08-19T00:00:00Z",
+              startedAt: "2026-08-19T00:00:00Z",
+              completedAt: null,
+              resultId: null,
+              errorCode: null,
+              errorMessage: null,
+              timeoutMs: 300000,
+            },
+          ],
+          results: [],
+          newTasks: [],
+          newResults: [],
+          serverTime: "2026-08-19T00:00:00Z",
         };
       }
       return {
         organizationId: "org_moon",
-        companyName: "MOON Shared Living",
-        heads: [head],
-        decisions: [],
-        activity: [],
         results: [],
-        connections: [],
-        working: 1,
-        done: 0,
       };
     });
     render(
@@ -507,32 +520,42 @@ describe("Sprint 59 — Conversational Operating System", () => {
           department: { id: "d", name: "Marketing", status: "active", employeeAgentIds: [] },
           connections: [],
           conversation: [],
-          marketingWork: {
-            goal: "x",
-            summary: "x",
-            items: [
-              {
-                id: "item_1",
-                title: "Lanzar la primera campaña",
-                description: "x",
-                kind: "external_action",
-                status: "needs_approval",
-              },
-            ],
-          },
         };
       }
-      return {
-        organizationId: "org_moon",
-        companyName: "x",
-        heads: [],
-        decisions: [],
-        activity: [],
-        results: [],
-        connections: [],
-        working: 0,
-        done: 0,
-      };
+      if (url.includes("/work-feed")) {
+        return {
+          organizationId: "org_moon",
+          tasks: [
+            {
+              id: "task_approval",
+              organizationId: "org_moon",
+              departmentId: "marketing",
+              objectiveId: null,
+              requestedBy: "user",
+              title: "Lanzar la primera campaña",
+              summary: "x",
+              capability: "marketing.meta.ads.publish",
+              toolId: "marketing.meta.ads.publish",
+              status: "waiting_approval",
+              statusMessage: "",
+              progress: 0,
+              requiredCapabilities: [],
+              createdAt: "2026-08-19T00:00:00Z",
+              startedAt: null,
+              completedAt: null,
+              resultId: null,
+              errorCode: null,
+              errorMessage: null,
+              timeoutMs: 300000,
+            },
+          ],
+          results: [],
+          newTasks: [],
+          newResults: [],
+          serverTime: "2026-08-19T00:00:00Z",
+        };
+      }
+      return { organizationId: "org_moon", results: [] };
     });
     render(
       <MemoryRouter>
@@ -541,7 +564,8 @@ describe("Sprint 59 — Conversational Operating System", () => {
         </OrgProvider>
       </MemoryRouter>,
     );
-    expect(await screen.findByText(/esperando aprobación/i)).toBeInTheDocument();
+    const matches = await screen.findAllByText(/esperando aprobación/i);
+    expect(matches.length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /^aprobar$/i })).toBeInTheDocument();
   });
 
@@ -643,22 +667,42 @@ describe("Sprint 59 — Conversational Operating System", () => {
           department: { id: "d", name: "Marketing", status: "active", employeeAgentIds: [] },
           connections: [],
           conversation: [],
-          marketingWork: {
-            goal: "20 clientes",
-            summary: "Plan piloto.",
-            items: [
-              {
-                id: "item_1",
-                title: "Analizar el mercado",
-                description: "Identificar el segmento prioritario.",
-                kind: "analysis",
-                status: "running",
-              },
-            ],
-          },
         };
       }
-      return { organizationId: "org_moon", companyName: "x", heads: [], decisions: [], activity: [], results: [], connections: [], working: 1, done: 0 };
+      if (url.includes("/work-feed")) {
+        return {
+          organizationId: "org_moon",
+          tasks: [
+            {
+              id: "task_1",
+              organizationId: "org_moon",
+              departmentId: "marketing",
+              objectiveId: null,
+              requestedBy: "user",
+              title: "Analizar el mercado",
+              summary: "Identificar el segmento prioritario.",
+              capability: "marketing.research",
+              toolId: "marketing.research",
+              status: "running",
+              statusMessage: "",
+              progress: 0.4,
+              requiredCapabilities: [],
+              createdAt: "2026-08-19T00:00:00Z",
+              startedAt: "2026-08-19T00:00:00Z",
+              completedAt: null,
+              resultId: null,
+              errorCode: null,
+              errorMessage: null,
+              timeoutMs: 300000,
+            },
+          ],
+          results: [],
+          newTasks: [],
+          newResults: [],
+          serverTime: "2026-08-19T00:00:00Z",
+        };
+      }
+      return { organizationId: "org_moon", results: [] };
     });
     const { unmount } = render(
       <MemoryRouter>

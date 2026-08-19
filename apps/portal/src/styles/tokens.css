@@ -32,6 +32,50 @@
   --dfy-color-danger: #ff6961;
   --dfy-color-success: #7ce5a3;
 
+  /* ------------------------------------------------------------
+   * Department Visual Identity (Operating Loop).
+   *
+   * Single source of truth: every Kanban column, task card accent,
+   * calendar entry, result badge and approval chip reads from one
+   * of these sets. Hue is restrained and tuned to coexist with the
+   * existing Departify green accent; saturation is high enough to be
+   * recognized, low enough to stay premium.
+   *
+   * Apply via:
+   *   --dfy-dept-<id>-accent         ← primary stroke / dot / icon
+   *   --dfy-dept-<id>-tint           ← subtle tinted background
+   *   --dfy-dept-<id>-tint-strong    ← Kanban column header, badges
+   *   --dfy-dept-<id>-border         ← card lateral indicator
+   *
+   * NEVER paint full screens or saturated backgrounds; everything is
+   * an accent, a 2-3px border, a left indicator, or a tint at ≤ 10%
+   * alpha over the base surface.
+   * ------------------------------------------------------------ */
+  --dfy-dept-marketing-accent: #ff8b5e;
+  --dfy-dept-marketing-tint: rgba(255, 139, 94, 0.10);
+  --dfy-dept-marketing-tint-strong: rgba(255, 139, 94, 0.20);
+  --dfy-dept-marketing-border: rgba(255, 139, 94, 0.55);
+
+  --dfy-dept-seo-accent: #5ec8ff;
+  --dfy-dept-seo-tint: rgba(94, 200, 255, 0.10);
+  --dfy-dept-seo-tint-strong: rgba(94, 200, 255, 0.20);
+  --dfy-dept-seo-border: rgba(94, 200, 255, 0.55);
+
+  --dfy-dept-direccion-accent: #d8ff62; /* same hue as primary accent */
+  --dfy-dept-direccion-tint: rgba(216, 255, 98, 0.10);
+  --dfy-dept-direccion-tint-strong: rgba(216, 255, 98, 0.20);
+  --dfy-dept-direccion-border: rgba(216, 255, 98, 0.55);
+
+  --dfy-dept-ventas-accent: #c98bff;
+  --dfy-dept-ventas-tint: rgba(201, 139, 255, 0.10);
+  --dfy-dept-ventas-tint-strong: rgba(201, 139, 255, 0.20);
+  --dfy-dept-ventas-border: rgba(201, 139, 255, 0.55);
+
+  --dfy-dept-ingenieria-accent: #7ce5a3;
+  --dfy-dept-ingenieria-tint: rgba(124, 229, 163, 0.10);
+  --dfy-dept-ingenieria-tint-strong: rgba(124, 229, 163, 0.20);
+  --dfy-dept-ingenieria-border: rgba(124, 229, 163, 0.55);
+
   --dfy-font-sans:
     "Geist", Inter, ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -2243,6 +2287,212 @@ select {
   background: var(--dfy-color-surface);
   color: var(--dfy-color-muted-strong);
   font-size: 0.9rem;
+}
+
+/* ------------------------------------------------------------
+ * Department Visual Identity — surfaces.
+ * The colors live in :root as --dfy-dept-<id>-*. Components consume
+ * them via data-department="..." so we never hardcode hues per file.
+ * ------------------------------------------------------------ */
+
+.dfy-dept-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--dfy-font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--dept-border, var(--dfy-color-border));
+  background: var(--dept-tint, transparent);
+  color: var(--dept-accent, var(--dfy-color-muted));
+}
+.dfy-dept-chip__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dept-accent, var(--dfy-color-muted));
+}
+
+.dfy-card--dept {
+  position: relative;
+  border-left: 3px solid var(--dept-border, var(--dfy-color-border));
+}
+
+/* Kanban ---------------------------------------------------------- */
+
+.dfy-kanban {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+@media (max-width: 920px) {
+  .dfy-kanban {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 540px) {
+  .dfy-kanban {
+    grid-template-columns: 1fr;
+  }
+}
+
+.dfy-kanban__column {
+  background: var(--dept-tint, var(--dfy-color-surface));
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-md);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 240px;
+}
+.dfy-kanban__column-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--dfy-font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dept-accent, var(--dfy-color-muted));
+}
+.dfy-kanban__count {
+  background: var(--dept-tint-strong, var(--dfy-color-surface-raised));
+  color: inherit;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--dept-border, var(--dfy-color-border-strong));
+}
+.dfy-kanban__card {
+  background: var(--dfy-color-surface);
+  border: 1px solid var(--dfy-color-border);
+  border-left: 3px solid var(--dept-border, var(--dfy-color-border));
+  border-radius: var(--dfy-radius-sm);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.dfy-kanban__card:hover {
+  border-color: var(--dept-border, var(--dfy-color-border-strong));
+  background: var(--dfy-color-surface-raised);
+}
+.dfy-kanban__card-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--dfy-color-text);
+  line-height: 1.3;
+}
+.dfy-kanban__card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-family: var(--dfy-font-mono);
+  font-size: 0.7rem;
+  color: var(--dfy-color-muted);
+}
+
+/* Home summary ---------------------------------------------------- */
+
+.dfy-home-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.dfy-home-summary__card {
+  background: var(--dfy-color-surface);
+  border: 1px solid var(--dfy-color-border);
+  border-left: 3px solid var(--dept-border, var(--dfy-color-border));
+  border-radius: var(--dfy-radius-md);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dfy-home-summary__label {
+  font-family: var(--dfy-font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dept-accent, var(--dfy-color-muted));
+}
+.dfy-home-summary__count {
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: var(--dfy-color-text);
+  line-height: 1;
+}
+
+/* Weekly plan ----------------------------------------------------- */
+
+.dfy-plan-day {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 10px 0;
+  border-top: 1px solid var(--dfy-color-border);
+}
+.dfy-plan-day:first-of-type {
+  border-top: none;
+}
+.dfy-plan-day__label {
+  font-family: var(--dfy-font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dfy-color-muted);
+  padding-top: 4px;
+}
+.dfy-plan-day__items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dfy-plan-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--dept-border, var(--dfy-color-border));
+  border-left: 3px solid var(--dept-border, var(--dfy-color-border));
+  border-radius: var(--dfy-radius-sm);
+  background: var(--dept-tint, var(--dfy-color-surface));
+}
+.dfy-plan-item__title {
+  font-size: 0.92rem;
+  color: var(--dfy-color-text);
+}
+.dfy-plan-item__summary {
+  font-size: 0.78rem;
+  color: var(--dfy-color-muted);
+}
+
+/* Calendar entry accent strip ------------------------------------- */
+
+.dfy-calendar-entry {
+  display: grid;
+  grid-template-columns: 4px 1fr auto;
+  gap: 12px;
+  align-items: start;
+}
+.dfy-calendar-entry__strip {
+  width: 4px;
+  align-self: stretch;
+  border-radius: 2px;
+  background: var(--dept-border, var(--dfy-color-border));
 }
 
 .dfy-task__actions {

@@ -103,6 +103,15 @@ export function HomeRoute() {
           Háblalo con tus palabras. Departify sabe qué departamento tiene que
           trabajar y ya tiene a quién poner con ello.
         </p>
+        <div className="dfy-hero__actions">
+          <button
+            type="button"
+            className="dfy-button"
+            onClick={() => navigate("/weekly-plan")}
+          >
+            Planificar semana
+          </button>
+        </div>
       </section>
 
       <Card title="Actividad de tu empresa">

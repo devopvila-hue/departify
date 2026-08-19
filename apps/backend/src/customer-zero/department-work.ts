@@ -166,6 +166,12 @@ export interface DepartmentTask {
   readonly errorMessage: string | null;
   /** Wall-clock deadline. Tasks that exceed it are auto-failed. */
   readonly timeoutMs: number;
+  /**
+   * Optional date the task is scheduled for (Operating Loop). When set,
+   * the calendar projection uses this as the entry's start time even if
+   * the task has not started yet, so the CEO can plan a week ahead.
+   */
+  readonly plannedDate?: string | null;
   /** Optional provenance for work created from a normalized Inbox item. */
   readonly source?: {
     readonly type: "inbox_email";
@@ -175,6 +181,12 @@ export interface DepartmentTask {
   } | {
     readonly type: "chat_operation";
     readonly operationKey: string;
+  } | {
+    readonly type: "weekly_plan";
+    readonly weekStartIso: string;
+    readonly dayOfWeek: number;
+    readonly planItemId: string;
+    readonly requiresApproval: boolean;
   } | {
     readonly type: "video_generation";
     readonly idempotencyKey: string;
