@@ -315,4 +315,101 @@ describe("Sprint 64 — Live Activity / Native OpenClaw experience", () => {
     expect(typeof received?.at).toBe("number");
     expect(received!.at!).toBeGreaterThan(0);
   });
+
+  it("B1: /message/stream returns text/event-stream with progressive activity frames and a terminal result", async () => {
+    const org = await startOrg();
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message/stream`,
+      payload: { message: "hola" },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/event-stream");
+    const raw = response.body as string;
+    // Parse SSE frames: event: X\ndata: {...}\n\n
+    const frames = raw
+      .split("\n\n")
+      .filter((f) => f.trim().length > 0)
+      .map((f) => {
+        let eventName = "message";
+        let data = "";
+        for (const line of f.split("\n")) {
+          if (line.startsWith("event:")) eventName = line.slice(6).trim();
+          else if (line.startsWith("data:")) data += line.slice(5).trim();
+        }
+        return { eventName, data: data ? (JSON.parse(data) as Record<string, unknown>) : null };
+      });
+    const activityFrames = frames.filter((f) => f.eventName === "activity");
+    const resultFrame = frames.find((f) => f.eventName === "result");
+    // At least "received" + "retrieving_context" + "delegated" + "streaming".
+    const states = activityFrames
+      .map((f) => f.data?.state as string | undefined)
+      .filter(Boolean);
+    expect(states.indexOf("received")).toBeGreaterThanOrEqual(0);
+    expect(states.indexOf("retrieving_context")).toBeGreaterThan(
+      states.indexOf("received"),
+    );
+    expect(states.indexOf("delegated")).toBeGreaterThan(
+      states.indexOf("retrieving_context"),
+    );
+    expect(states.indexOf("streaming")).toBeGreaterThan(
+      states.indexOf("delegated"),
+    );
+    // Terminal result frame carries the reply.
+    expect(resultFrame).toBeDefined();
+    expect(typeof resultFrame?.data?.reply).toBe("string");
+    expect((resultFrame?.data?.reply as string).length).toBeGreaterThan(0);
+  });
+
+  it("B2: /message/stream never leaks internal timeline jargon (Product Identity Boundary)", async () => {
+    const org = await startOrg();
+    const response = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/command-center/message/stream`,
+      payload: { message: "hola" },
+    });
+    expect(response.statusCode).toBe(200);
+    const raw = response.body as string;
+    expect(raw).not.toContain("compaction");
+    expect(raw).not.toContain("leak");
+    expect(raw).not.toContain("recovery");
+    expect(raw).not.toContain("T1_backend_request_received");
+    expect(raw).not.toContain("OpenClaw");
+    expect(raw).not.toContain("Pensando…");
+    expect(raw).not.toContain("Analizando…");
+    expect(raw).not.toContain("Finalizando…");
+  });
+
+  it("B3: /message/stream emits 'received' BEFORE the engine returns (progressive feedback)", async () => {
+    const org = await startOrg();
+    engine.sendDelayMs = 80;
+    try {
+      const response = await authedInject({
+        method: "POST",
+        url: `/api/customer-zero/${org}/command-center/message/stream`,
+        payload: { message: "hola" },
+      });
+      expect(response.statusCode).toBe(200);
+      const raw = response.body as string;
+      const frames = raw
+        .split("\n\n")
+        .filter((f) => f.trim().length > 0)
+        .map((f) => {
+          let eventName = "message";
+          let data = "";
+          for (const line of f.split("\n")) {
+            if (line.startsWith("event:")) eventName = line.slice(6).trim();
+            else if (line.startsWith("data:")) data += line.slice(5).trim();
+          }
+          return { eventName, data: data ? (JSON.parse(data) as Record<string, unknown>) : null };
+        });
+      const received = frames.find(
+        (f) => f.eventName === "activity" && f.data?.state === "received",
+      );
+      expect(received).toBeDefined();
+      expect(typeof received?.data?.at).toBe("number");
+    } finally {
+      engine.sendDelayMs = 0;
+    }
+  });
 });

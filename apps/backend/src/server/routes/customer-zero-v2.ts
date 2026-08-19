@@ -3692,6 +3692,251 @@ export async function registerCustomerZeroV2Routes(
     },
   );
 
+  /** Sprint 64 — Live Activity streaming endpoint. Same pipeline as
+   *  /command-center/message but the activity events are pushed to the
+   *  client as Server-Sent Events the moment they happen, so the CEO sees
+   *  "Recibido" → "Revisando tu información" → "Marketing está trabajando"
+   *  → "Escribiendo" in real time instead of waiting for the full round-trip.
+   *
+   *  Wire format (text/event-stream):
+   *    event: activity\ndata: {work_state event}\n\n   (0..n, progressive)
+   *    event: result\ndata: {CeoMessageResult}\n\n     (terminal, always last)
+   *    event: error\ndata: {error object}\n\n          (terminal on failure)
+   *
+   *  The Product Identity Boundary is preserved: only product-language
+   *  activity messages are emitted; the internal timeline stays in logs.
+   */
+  server.post(
+    "/api/customer-zero/:organizationId/command-center/message/stream",
+    {
+      schema: {
+        tags: ["command-center"],
+        summary: "Stream a CEO message with live activity events (SSE)",
+        params: {
+          type: "object",
+          required: ["organizationId"],
+          properties: { organizationId: { type: "string" } },
+        },
+        body: {
+          type: "object",
+          required: ["message"],
+          properties: {
+            message: { type: "string", minLength: 1 },
+            conversationId: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+        response: {
+          200: { type: "string" },
+          404: { type: "object", properties: { error: { type: "string" } } },
+          400: { type: "object", additionalProperties: true },
+          429: { type: "object", additionalProperties: true },
+          502: { type: "object", additionalProperties: true },
+          503: { type: "object", additionalProperties: true },
+          504: { type: "object", additionalProperties: true },
+          409: { type: "object", additionalProperties: true },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId } = request.params as { organizationId: string };
+      const body = request.body as { message: string; conversationId?: string };
+      const startedMonotonicAt = performance.now();
+      const correlationId = String(
+        request.headers["x-departify-correlation-id"] ?? request.id,
+      );
+      const requestReceivedElapsedMs = traceRequestReceived(
+        correlationId,
+        organizationId,
+        startedMonotonicAt,
+      );
+      const session = await requireSession(organizationId, deps);
+      const trace = newCeoTurnTrace(session, correlationId, startedMonotonicAt);
+      trace.timeline.T1_backend_request_received = requestReceivedElapsedMs;
+
+      // Take over the raw response so we can stream SSE frames.
+      reply.hijack();
+      const raw = reply.raw;
+      raw.setHeader("content-type", "text/event-stream; charset=utf-8");
+      raw.setHeader("cache-control", "no-cache");
+      raw.setHeader("connection", "keep-alive");
+      raw.setHeader("x-departify-correlation-id", correlationId);
+      raw.setHeader("x-accel-buffering", "no");
+      raw.flushHeaders?.();
+
+      const send = (event: string, data: unknown): void => {
+        raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      };
+      const end = (): void => {
+        try {
+          raw.end();
+        } catch {
+          /* client may have disconnected */
+        }
+      };
+
+      // Emit "received" the moment auth succeeds — the earliest honest
+      // signal. This is the same event the JSON endpoint folds into the
+      // final response, but here it reaches the client immediately.
+      send("activity", {
+        kind: "work_state",
+        state: "received",
+        message: "Recibido. Empezamos.",
+        at: Date.now(),
+      });
+
+      const captureActivity = (
+        state:
+          | "received"
+          | "retrieving_context"
+          | "delegated"
+          | "working"
+          | "analyzing"
+          | "tool_started"
+          | "tool_completed"
+          | "preparing_result"
+          | "streaming"
+          | "completed"
+          | "blocked"
+          | "error",
+        message: string,
+        extra?: { departmentId?: string; capability?: string },
+      ) => {
+        send("activity", {
+          kind: "work_state",
+          state,
+          message,
+          ...(extra?.departmentId ? { departmentId: extra.departmentId } : {}),
+          ...(extra?.capability ? { capability: extra.capability } : {}),
+          at: Date.now(),
+        });
+      };
+
+      // Golden Image admin commands — allowlist-only, env-gated, never
+      // exposed to non-admins. Same behaviour as the JSON endpoint.
+      const adminCommand = parseAdminCommand(body.message);
+      if (
+        adminCommand &&
+        isAdminCommandAuthorized(request.authUser ?? undefined)
+      ) {
+        try {
+          const adminView =
+            adminCommand.command === "models"
+              ? await readAdminModelsView(session)
+              : await readAdminSkillsView(session);
+          const adminReply = JSON.stringify(adminView, null, 2);
+          try {
+            await session.conversations.addMessage(
+              session.state.currentConversationId ?? "",
+              "user",
+              body.message,
+            );
+          } catch {
+            // Admin commands must not fail because conversation persistence
+            // is unavailable.
+          }
+          send("result", {
+            organizationId,
+            reply: adminReply,
+            events: [],
+            routing: {
+              intent: "admin_command",
+              departments: [],
+              rationale: `Admin command /${adminCommand.command} accepted.`,
+            },
+            conversationId: session.state.currentConversationId ?? null,
+          });
+          end();
+          return;
+        } catch (adminError) {
+          request.log.error(
+            { err: adminError, organizationId, command: adminCommand.command },
+            "Admin command introspection failed",
+          );
+        }
+      }
+
+      try {
+        captureActivity(
+          "retrieving_context",
+          activityMessageFor("retrieving_context"),
+        );
+        const runtime = await buildCeoRuntimeForRequest(
+          session,
+          deps,
+          body.message,
+          trace,
+          request.authUser?.id,
+        );
+        if (runtime) {
+          captureActivity(
+            "delegated",
+            activityMessageFor("delegated", {
+              departmentId: "marketing",
+            }),
+            { departmentId: "marketing" },
+          );
+        }
+        const result = await processCeoMessage(
+          session,
+          body.message,
+          body.conversationId,
+          deps.marketing,
+          deps.engineRuntimePolicy,
+          runtime,
+          trace,
+          deps,
+          request.authUser?.id,
+          // Sprint 64 — Live Activity: the sink writes each event to the
+          // SSE stream as it happens, so the CEO sees progress in real time.
+          captureActivity,
+        );
+        traceStage(trace, "T15_backend_response_finalization", {
+          responseStatus: ceoTurnResponseStatus(trace),
+          finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
+        });
+        emitCeoTurnTrace(session, runtime?.trace ?? trace, result);
+        const responseStatus = ceoTurnResponseStatus(runtime?.trace ?? trace);
+        if (responseStatus >= 400) {
+          const errorCode =
+            (runtime?.trace ?? trace).engineErrorCode ?? "ENGINE_EXECUTION";
+          send("error", {
+            code: errorCode,
+            message:
+              "No he podido completar esa respuesta porque el motor de negocio ha fallado. Vuelve a intentarlo.",
+            requestId: correlationId,
+            statusCode: responseStatus,
+          });
+          end();
+          return;
+        }
+        send("result", result);
+        end();
+      } catch (cause) {
+        if (cause instanceof MaxActiveConversationsError) {
+          send("error", {
+            code: "MAX_ACTIVE_CONVERSATIONS",
+            message: cause.message,
+            activeCount: cause.activeCount,
+            maxActive: MAX_ACTIVE_CONVERSATIONS_VALUE,
+            statusCode: 409,
+          });
+          end();
+          return;
+        }
+        emitCeoTurnFailureTrace(trace, cause);
+        send("error", {
+          code: "INTERNAL",
+          message:
+            "No he podido completar esa respuesta. Vuelve a intentarlo.",
+          requestId: correlationId,
+          statusCode: 500,
+        });
+        end();
+      }
+    },
+  );
+
   /** DNA suggestion approval/rejection — Sprint 60. Only explicit CEO
    *  approval invokes the canonical Company DNA mutation path. */
   server.post(

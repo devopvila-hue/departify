@@ -1738,6 +1738,123 @@ export const api = {
       ]);
     return result;
   },
+  /**
+   * Sprint 64 — Live Activity streaming. POSTs to the SSE endpoint and
+   * invokes `onActivity` for every progressive work_state event as it
+   * arrives, then resolves with the terminal result. Falls back to the
+   * JSON endpoint if the stream is unavailable or malformed, so the chat
+   * never breaks on older backends.
+   */
+  commandCenterMessageStream: async (
+    org: string,
+    message: string,
+    conversationId: string | undefined,
+    correlationId: string,
+    onActivity: (event: CommandCenterEvent) => void,
+  ): Promise<
+    (CommandCenterMessageResult & {
+      conversationId?: string;
+      error?: MaxActiveConversationsError;
+    }) | null
+  > => {
+    const url = `/api/customer-zero/${org}/command-center/message/stream`;
+    const headers = buildHeaders();
+    headers.set("content-type", "application/json");
+    headers.set("accept", "text/event-stream");
+    headers.set("x-departify-correlation-id", correlationId);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(
+          conversationId ? { message, conversationId } : { message },
+        ),
+      });
+      if (!response.ok || !response.body) {
+        // Non-streaming path (e.g. auth boundary or proxy). Fall back to
+        // the JSON endpoint so the CEO still gets a reply.
+        return api.commandCenterMessage(
+          org,
+          message,
+          conversationId,
+          correlationId,
+        );
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let result:
+        | (CommandCenterMessageResult & {
+            conversationId?: string;
+            error?: MaxActiveConversationsError;
+          })
+        | null = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        // SSE frames are separated by a blank line.
+        let sep: number;
+        while ((sep = buffer.indexOf("\n\n")) !== -1) {
+          const frame = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          let eventName = "message";
+          let data = "";
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) eventName = line.slice(6).trim();
+            else if (line.startsWith("data:")) data += line.slice(5).trim();
+          }
+          if (!data) continue;
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(data);
+          } catch {
+            continue;
+          }
+          if (eventName === "activity") {
+            onActivity(parsed as CommandCenterEvent);
+          } else if (eventName === "result") {
+            result = parsed as CommandCenterMessageResult & {
+              conversationId?: string;
+              error?: MaxActiveConversationsError;
+            };
+          } else if (eventName === "error") {
+            result = {
+              organizationId: org,
+              reply: "",
+              events: [],
+              routing: { intent: "error", departments: [], rationale: "" },
+              connectionSuggestion: null,
+              pendingToolId: null,
+              conversationId: conversationId ?? null,
+              error: parsed as MaxActiveConversationsError,
+            } as CommandCenterMessageResult & {
+              conversationId?: string;
+              error?: MaxActiveConversationsError;
+            };
+          }
+        }
+      }
+      if (result && !result.error)
+        invalidateOrg(org, [
+          "overview",
+          "work-feed",
+          "results",
+          "calendar",
+          "command-center-opening",
+          "conversations",
+        ]);
+      return result;
+    } catch {
+      // Stream transport failed — fall back to the JSON endpoint.
+      return api.commandCenterMessage(
+        org,
+        message,
+        conversationId,
+        correlationId,
+      );
+    }
+  },
   // Durable conversations (Phase P-B part 15 + 26).
   conversations: (org: string) =>
     cachedOrgGetJson<ConversationListView>(

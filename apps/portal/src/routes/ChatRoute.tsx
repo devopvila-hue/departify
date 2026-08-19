@@ -451,11 +451,21 @@ export function ChatRoute() {
           value,
           correlationId,
         )
-      : await api.commandCenterMessage(
+      : await api.commandCenterMessageStream(
           organizationId,
           value,
           undefined,
           correlationId,
+          // Sprint 64 — Live Activity: each progressive work_state event
+          // from the SSE stream replaces the optimistic label in real
+          // time, so the CEO sees "Recibido" → "Revisando tu información"
+          // → "Marketing está trabajando" → "Escribiendo" as it happens.
+          (event) => {
+            if (generation !== loadGenerationRef.current) return;
+            if (event.kind === "work_state" && event.message) {
+              setProcessStatus(event.message);
+            }
+          },
         );
     if (generation !== loadGenerationRef.current) return;
     setBusy(false);
