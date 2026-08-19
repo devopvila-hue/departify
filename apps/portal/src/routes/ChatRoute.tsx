@@ -445,11 +445,20 @@ export function ChatRoute() {
           conversationId?: string;
         })
       | null = currentConversationId
-      ? await api.sendConversationMessage(
+      ? await api.sendConversationMessageStream(
           organizationId,
           currentConversationId,
           value,
           correlationId,
+          // Sprint 65 P0 — Live Activity on every conversation turn, not
+          // only the opening one: each progressive work_state event from
+          // the SSE stream replaces the optimistic label in real time.
+          (event) => {
+            if (generation !== loadGenerationRef.current) return;
+            if (event.kind === "work_state" && event.message) {
+              setProcessStatus(event.message);
+            }
+          },
         )
       : await api.commandCenterMessageStream(
           organizationId,

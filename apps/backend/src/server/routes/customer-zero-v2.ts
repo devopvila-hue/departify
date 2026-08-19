@@ -10054,8 +10054,11 @@ function mergeLiveActivity(
  * Map a backend pipeline stage to the human product micro-copy shown in
  * the chat. OpenClaw / tool names never leak; we translate the
  * capability or department into a verb the CEO understands.
+ *
+ * Exported so the conversation-message SSE endpoint can share the
+ * same product-language surface (Sprint 65 P0).
  */
-function activityMessageFor(
+export function activityMessageFor(
   state: "retrieving_context" | "delegated" | "working" | "tool_started" | "preparing_result" | "streaming" | "completed",
   hint?: { departmentId?: string; capability?: string },
 ): string {

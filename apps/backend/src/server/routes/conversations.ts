@@ -46,6 +46,7 @@ import {
   processCeoMessage,
   requireSession,
   MaxActiveConversationsError,
+  activityMessageFor,
 } from "./customer-zero-v2.js";
 import type { ServerDeps } from "../deps.js";
 
@@ -452,6 +453,285 @@ export async function registerConversationRoutes(
         .header("x-departify-correlation-id", correlationId)
         .code(200)
         .send(result);
+    },
+  );
+
+  /** Sprint 65 P0 — Live Activity streaming for ongoing conversations.
+   *  Same pipeline as `/conversations/:conversationId/messages` but the
+   *  activity events are pushed to the client as Server-Sent Events the
+   *  moment they happen, so the CEO sees the same progressive product
+   *  language ("Recibido" → "Revisando tu información" → "Marketing está
+   *  trabajando" → "Escribiendo") on every conversation turn, not just
+   *  on the opening one.
+   *
+   *  Wire format (text/event-stream) reuses the contract from
+   *  /command-center/message/stream so the portal SSE parser works
+   *  identically:
+   *    event: activity\ndata: {work_state event}\n\n   (0..n, progressive)
+   *    event: result\ndata: {CeoMessageResult}\n\n     (terminal, always last)
+   *    event: error\ndata: {error object}\n\n          (terminal on failure)
+   *
+   *  Compaction runs after the engine result is streamed, just like the
+   *  JSON endpoint. The activity stream is purely a transport concern;
+   *  the canonical conversation state is still governed by the JSON
+   *  endpoint — there is no second source of truth.
+   */
+  server.post(
+    "/api/customer-zero/:organizationId/conversations/:conversationId/messages/stream",
+    {
+      schema: {
+        tags: ["command-center"],
+        summary:
+          "Stream a CEO message inside a durable conversation with live activity events (SSE)",
+        params: {
+          type: "object",
+          required: ["organizationId", "conversationId"],
+          properties: {
+            organizationId: { type: "string" },
+            conversationId: { type: "string" },
+          },
+        },
+        body: {
+          type: "object",
+          required: ["message"],
+          properties: { message: { type: "string", minLength: 1 } },
+          additionalProperties: false,
+        },
+        response: {
+          200: { type: "string" },
+          404: { type: "object", properties: { error: { type: "string" } } },
+          400: { type: "object", additionalProperties: true },
+          429: { type: "object", additionalProperties: true },
+          502: { type: "object", additionalProperties: true },
+          503: { type: "object", additionalProperties: true },
+          504: { type: "object", additionalProperties: true },
+          409: { type: "object", additionalProperties: true },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId, conversationId } = request.params as {
+        organizationId: string;
+        conversationId: string;
+      };
+      const body = request.body as { message: string };
+      const startedMonotonicAt = performance.now();
+      const correlationId = String(
+        request.headers["x-departify-correlation-id"] ?? request.id,
+      );
+      const requestReceivedElapsedMs = traceRequestReceived(
+        correlationId,
+        organizationId,
+        startedMonotonicAt,
+      );
+      const session = await requireSession(organizationId, deps);
+      const trace = createCeoTurnTrace(session, correlationId, startedMonotonicAt);
+      trace.timeline.T1_backend_request_received = requestReceivedElapsedMs;
+      const conversation = await session.conversations.get(
+        organizationId,
+        conversationId,
+      );
+      if (!conversation) {
+        return reply.code(404).send({ error: "Conversation not found." });
+      }
+      session.state.currentConversationId = conversation.id;
+      traceStage(trace, "T3_conversation_session_resolution_complete");
+
+      // Take over the raw response so we can stream SSE frames.
+      reply.hijack();
+      const raw = reply.raw;
+      raw.setHeader("content-type", "text/event-stream; charset=utf-8");
+      raw.setHeader("cache-control", "no-cache");
+      raw.setHeader("connection", "keep-alive");
+      raw.setHeader("x-departify-correlation-id", correlationId);
+      raw.setHeader("x-accel-buffering", "no");
+      raw.flushHeaders?.();
+
+      const send = (event: string, data: unknown): void => {
+        try {
+          raw.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        } catch {
+          /* client may have disconnected mid-write */
+        }
+      };
+      const end = (): void => {
+        try {
+          raw.end();
+        } catch {
+          /* client may have disconnected */
+        }
+      };
+
+      // Emit "received" the moment auth succeeds — the earliest honest
+      // signal. Same event the JSON endpoint folds into the response, but
+      // here it reaches the client immediately.
+      send("activity", {
+        kind: "work_state",
+        state: "received",
+        message: "Recibido. Empezamos.",
+        at: Date.now(),
+      });
+
+      const captureActivity = (
+        state:
+          | "received"
+          | "retrieving_context"
+          | "delegated"
+          | "working"
+          | "analyzing"
+          | "tool_started"
+          | "tool_completed"
+          | "preparing_result"
+          | "streaming"
+          | "completed"
+          | "blocked"
+          | "error",
+        message: string,
+        extra?: { departmentId?: string; capability?: string },
+      ) => {
+        send("activity", {
+          kind: "work_state",
+          state,
+          message,
+          ...(extra?.departmentId ? { departmentId: extra.departmentId } : {}),
+          ...(extra?.capability ? { capability: extra.capability } : {}),
+          at: Date.now(),
+        });
+      };
+
+      try {
+        captureActivity(
+          "retrieving_context",
+          activityMessageFor("retrieving_context"),
+        );
+        const runtime = await buildCeoRuntimeForRequest(
+          session,
+          deps,
+          body.message,
+          trace,
+          request.authUser?.id,
+        );
+        if (runtime) {
+          captureActivity(
+            "delegated",
+            activityMessageFor("delegated", {
+              departmentId: "marketing",
+            }),
+            { departmentId: "marketing" },
+          );
+        }
+        const result = await processCeoMessage(
+          session,
+          body.message,
+          conversationId,
+          deps.marketing,
+          deps.engineRuntimePolicy,
+          runtime,
+          trace,
+          deps,
+          request.authUser?.id,
+          // Sprint 65 P0 — the sink writes each event to the SSE stream
+          // as it happens, so the CEO sees progress on every turn.
+          captureActivity,
+        );
+        traceStage(trace, "T15_backend_response_finalization", {
+          responseStatus: ceoTurnResponseStatus(trace),
+          finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
+        });
+        emitCeoTurnTrace(session, trace, result);
+        const responseStatus = ceoTurnResponseStatus(trace);
+        if (responseStatus >= 400) {
+          const errorCode = trace.engineErrorCode ?? "ENGINE_EXECUTION";
+          send("error", {
+            code: errorCode,
+            message:
+              "No he podido completar esa respuesta porque el motor de negocio ha fallado. Vuelve a intentarlo.",
+            requestId: correlationId,
+            statusCode: responseStatus,
+          });
+          end();
+          return;
+        }
+
+        // Compaction after the engine result is streamed, identical to
+        // the JSON endpoint. Compaction is best-effort; a failure must
+        // never break the SSE response.
+        try {
+          traceStage(trace, "T14_secondary_compaction_started");
+          const persistedConversationId = result.conversationId || conversationId;
+          const allMessages = await session.conversations.listMessages(
+            organizationId,
+            persistedConversationId,
+          );
+          const totalChars = allMessages.reduce(
+            (sum, m) => sum + m.content.length,
+            0,
+          );
+          if (shouldCompact(totalChars)) {
+            const { older } = splitForCompaction(allMessages);
+            const persisted = await session.conversations.get(
+              organizationId,
+              persistedConversationId,
+            );
+            const priorIndex = persisted?.compactedUpToMessageId
+              ? allMessages.findIndex(
+                  (message) => message.id === persisted.compactedUpToMessageId,
+                )
+              : -1;
+            const newOlder = older.filter(
+              (message) =>
+                allMessages.findIndex(
+                  (candidate) => candidate.id === message.id,
+                ) > priorIndex,
+            );
+            if (newOlder.length > 0) {
+              const lastFolded = newOlder[newOlder.length - 1] as ConversationMessage;
+              const delta = summarizeOldMessages(
+                newOlder.map((m) => ({ role: m.role, content: m.content })),
+              );
+              const summary = [persisted?.summary, delta]
+                .filter(Boolean)
+                .join("\n\n");
+              await session.conversations.saveCompaction(
+                organizationId,
+                persistedConversationId,
+                summary,
+                lastFolded.id,
+                (persisted?.compactionMessageCount ?? 0) + newOlder.length,
+              );
+            }
+          }
+          traceStage(trace, "T14_secondary_compaction_completed");
+        } catch {
+          traceStage(trace, "T14_secondary_compaction_failed", {
+            errorClass: "secondary_write",
+          });
+        }
+
+        send("result", result);
+        end();
+      } catch (cause) {
+        if (cause instanceof MaxActiveConversationsError) {
+          send("error", {
+            code: "MAX_ACTIVE_CONVERSATIONS",
+            message: cause.message,
+            activeCount: cause.activeCount,
+            maxActive: MAX_ACTIVE_CONVERSATIONS,
+            statusCode: 409,
+          });
+          end();
+          return;
+        }
+        emitCeoTurnFailureTrace(trace, cause);
+        send("error", {
+          code: "INTERNAL",
+          message:
+            "No he podido completar esa respuesta. Vuelve a intentarlo.",
+          requestId: correlationId,
+          statusCode: 500,
+        });
+        end();
+      }
     },
   );
 

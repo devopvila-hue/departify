@@ -1901,6 +1901,118 @@ export const api = {
       invalidateOrg(org, ["conversation", "conversations", "overview"]);
     return result;
   },
+  /**
+   * Sprint 65 P0 — Same transport as `commandCenterMessageStream` but
+   * for an EXISTING conversation (every turn after the opening one).
+   * Without this, the CEO only sees the optimistic label on every turn
+   * after the first; with it, the same progressive product activity
+   * reaches the portal regardless of which message in the session we
+   * are processing. Falls back to the JSON endpoint if the stream is
+   * unavailable or malformed, so the chat never breaks on older
+   * backends.
+   */
+  sendConversationMessageStream: async (
+    org: string,
+    conversationId: string,
+    message: string,
+    correlationId: string,
+    onActivity: (event: CommandCenterEvent) => void,
+  ): Promise<
+    (CommandCenterMessageResult & {
+      conversationId?: string;
+      error?: MaxActiveConversationsError;
+    }) | null
+  > => {
+    const url = `/api/customer-zero/${org}/conversations/${conversationId}/messages/stream`;
+    const headers = buildHeaders();
+    headers.set("content-type", "application/json");
+    headers.set("accept", "text/event-stream");
+    headers.set("x-departify-correlation-id", correlationId);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ message }),
+      });
+      if (!response.ok || !response.body) {
+        // Non-streaming path (e.g. auth boundary or proxy). Fall back to
+        // the JSON endpoint so the CEO still gets a reply.
+        return api.sendConversationMessage(
+          org,
+          conversationId,
+          message,
+          correlationId,
+        );
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let result:
+        | (CommandCenterMessageResult & {
+            conversationId?: string;
+            error?: MaxActiveConversationsError;
+          })
+        | null = null;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let sep: number;
+        while ((sep = buffer.indexOf("\n\n")) !== -1) {
+          const frame = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + 2);
+          let eventName = "message";
+          let data = "";
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) eventName = line.slice(6).trim();
+            else if (line.startsWith("data:")) data += line.slice(5).trim();
+          }
+          if (!data) continue;
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(data);
+          } catch {
+            continue;
+          }
+          if (eventName === "activity") {
+            onActivity(parsed as CommandCenterEvent);
+          } else if (eventName === "result") {
+            result = parsed as CommandCenterMessageResult & {
+              conversationId?: string;
+              error?: MaxActiveConversationsError;
+            };
+          } else if (eventName === "error") {
+            result = {
+              organizationId: org,
+              reply: "",
+              events: [],
+              routing: { intent: "error", departments: [], rationale: "" },
+              connectionSuggestion: null,
+              pendingToolId: null,
+              conversationId: conversationId,
+              error: parsed as MaxActiveConversationsError,
+            } as CommandCenterMessageResult & {
+              conversationId?: string;
+              error?: MaxActiveConversationsError;
+            };
+          }
+        }
+      }
+      // We mutated the conversation; the canonical transcript is now
+      // stale. Invalidate so the next reload reads the new assistant
+      // message exactly once.
+      invalidateOrg(org, ["conversation", "conversations", "overview"]);
+      return result;
+    } catch {
+      // Stream transport failed — fall back to the JSON endpoint.
+      return api.sendConversationMessage(
+        org,
+        conversationId,
+        message,
+        correlationId,
+      );
+    }
+  },
   weeklyPlanCurrent: (org: string) =>
     cachedOrgGetJson<WeeklyPlanView>(
       org,
