@@ -848,15 +848,25 @@ export type CommandCenterEvent =
       kind: "work_state";
       state:
         | "received"
+        | "retrieving_context"
         | "delegated"
+        | "working"
         | "analyzing"
         | "tool_started"
         | "tool_completed"
         | "preparing_result"
+        | "streaming"
         | "completed"
         | "blocked"
         | "error";
       message: string;
+      /** Department currently doing the work (drives the accent). */
+      departmentId?: string;
+      /** Optional capability id currently in use. */
+      capability?: string;
+      /** When the activity was emitted (epoch ms). Lets the portal
+       *  compute elapsed time without trusting a UI clock. */
+      at?: number;
     };
 
 export interface CommandCenterRouting {

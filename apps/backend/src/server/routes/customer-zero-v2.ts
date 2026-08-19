@@ -307,6 +307,7 @@ import {
   revokeGoogleConnection,
   type GoogleCapability,
   type GoogleTokenProvider,
+  type GoogleTokenSummary,
 } from "../../customer-zero/google-tokens.js";
 import type { CompanyDiscoveryReport } from "@departify/business-discovery";
 import type { ServerDeps } from "../deps.js";
@@ -3522,6 +3523,46 @@ export async function registerCustomerZeroV2Routes(
       const trace = newCeoTurnTrace(session, correlationId, startedMonotonicAt);
       trace.timeline.T1_backend_request_received = requestReceivedElapsedMs;
       traceStage(trace, "T2_auth_tenant_resolution_complete");
+
+      // Live Activity — emit "received" the moment auth succeeds. This is
+      // the earliest honest signal we can give the CEO: "we have the
+      // message and we are starting". It precedes every other piece of
+      // work so the portal can show feedback BEFORE the engine even
+      // starts. The events list is folded into the final response.
+      const activity: CommandCenterEvent[] = [
+        {
+          kind: "work_state",
+          state: "received",
+          message: "Recibido. Empezamos.",
+          at: Date.now(),
+        },
+      ];
+      const captureActivity = (
+        state:
+          | "received"
+          | "retrieving_context"
+          | "delegated"
+          | "working"
+          | "analyzing"
+          | "tool_started"
+          | "tool_completed"
+          | "preparing_result"
+          | "streaming"
+          | "completed"
+          | "blocked"
+          | "error",
+        message: string,
+        extra?: { departmentId?: string; capability?: string },
+      ) => {
+        activity.push({
+          kind: "work_state",
+          state,
+          message,
+          ...(extra?.departmentId ? { departmentId: extra.departmentId } : {}),
+          ...(extra?.capability ? { capability: extra.capability } : {}),
+          at: Date.now(),
+        });
+      };
       // Golden Image admin commands — allowlist-only, env-gated, never
       // exposed to non-admins. The Product Identity Boundary stays intact:
       // regular Departify customers who happen to type "/models" see the
@@ -3571,6 +3612,10 @@ export async function registerCustomerZeroV2Routes(
         }
       }
       try {
+        captureActivity(
+          "retrieving_context",
+          activityMessageFor("retrieving_context"),
+        );
         const runtime = await buildCeoRuntimeForRequest(
           session,
           deps,
@@ -3578,6 +3623,15 @@ export async function registerCustomerZeroV2Routes(
           trace,
           request.authUser?.id,
         );
+        if (runtime) {
+          captureActivity(
+            "delegated",
+            activityMessageFor("delegated", {
+              departmentId: "marketing",
+            }),
+            { departmentId: "marketing" },
+          );
+        }
         const result = await processCeoMessage(
           session,
           body.message,
@@ -3588,6 +3642,11 @@ export async function registerCustomerZeroV2Routes(
           trace,
           deps,
           request.authUser?.id,
+          // Sprint 64 — Live Activity: feed pipeline events back to
+          // the in-progress list so the response carries the full
+          // ordered activity trail. A streaming endpoint could swap
+          // this sink for an SSE writer without changing processCeoMessage.
+          captureActivity,
         );
         traceStage(trace, "T15_backend_response_finalization", {
           responseStatus: ceoTurnResponseStatus(trace),
@@ -3612,7 +3671,10 @@ export async function registerCustomerZeroV2Routes(
         return reply
           .header("x-departify-correlation-id", correlationId)
           .code(200)
-          .send(result);
+          .send({
+            ...result,
+            events: mergeLiveActivity(result.events ?? [], activity),
+          });
       } catch (cause) {
         if (cause instanceof MaxActiveConversationsError) {
           return reply.code(409).send({
@@ -4667,7 +4729,17 @@ async function buildRuntimeBridge(
 ): Promise<RuntimeBridgeInput | null> {
   if (!deps.engine) return null;
   const workStore = workStoreForRoutes();
-  const [conversation, connections, tasks, results, companyDna, approvals, activeObjective, recentMessages, retrievedMessages, googleSummaries] = await Promise.all([
+  // Sprint 64 — Live Activity / context compilation: the previous
+  // implementation called getGoogleTokenStore().listForOrg() TWICE per
+  // turn (once here, once inside buildCanonicalConnectionViews via
+  // buildCatalogConnectionViews). Each call is a Supabase round trip;
+  // the second is fully redundant because both readers project the
+  // same row set. Read once, share the result with the connection view
+  // builder via an internal helper.
+  const googleSummaries = await getGoogleTokenStore().listForOrg(
+    session.organizationId,
+  );
+  const [conversation, connections, tasks, results, companyDna, approvals, activeObjective, recentMessages, retrievedMessages] = await Promise.all([
     session.state.currentConversationId
       ? session.conversations.get(session.organizationId, session.state.currentConversationId)
       : Promise.resolve(null),
@@ -4676,6 +4748,7 @@ async function buildRuntimeBridge(
       session.state.locale,
       undefined,
       { probeExternal: false },
+      googleSummaries,
     ),
     workStore.listTasksForOrg(session.organizationId, 50),
     workStore.listResultsForOrg(session.organizationId, 20),
@@ -4697,7 +4770,6 @@ async function buildRuntimeBridge(
           8,
         )
       : Promise.resolve([]),
-    getGoogleTokenStore().listForOrg(session.organizationId),
   ]);
   const recentConversation = [...recentMessages, ...retrievedMessages]
     .filter((item, index, all) => all.findIndex((candidate) => candidate.id === item.id) === index)
@@ -5334,6 +5406,33 @@ export async function processCeoMessage(
   trace?: CeoTurnTraceState,
   deps: ServerDeps = {},
   userId?: string,
+  /**
+   * Sprint 64 — Live Activity sink. The route handler may pass a
+   * callback that receives each backend activity event as the
+   * pipeline progresses. The sink receives the same (state, message,
+   * extra) signature as the in-route `captureActivity` helper so a
+   * streaming endpoint can swap its body for an SSE writer without
+   * changing `processCeoMessage`. Omitting the argument preserves the
+   * legacy behaviour (events collected and emitted at the end of the
+   * turn).
+   */
+  activitySink?: (
+    state:
+      | "received"
+      | "retrieving_context"
+      | "delegated"
+      | "working"
+      | "analyzing"
+      | "tool_started"
+      | "tool_completed"
+      | "preparing_result"
+      | "streaming"
+      | "completed"
+      | "blocked"
+      | "error",
+    message: string,
+    extra?: { departmentId?: string; capability?: string },
+  ) => void,
 ): Promise<CeoMessageResult> {
   let conversation: ConversationRecord;
   try {
@@ -5564,6 +5663,14 @@ export async function processCeoMessage(
         traceStage(trace, "T4_request_sent_to_engine_adapter", {
           contextBytes: Buffer.byteLength(nativeContext, "utf8"),
         });
+        traceStage(trace, "T5_routing_decided", {
+          route: "native_openclaw",
+          hasCapabilities: runtime.context.capabilities !== undefined,
+        });
+        traceStage(trace, "T10_first_visible_event", {
+          event: "delegated",
+          departmentId: "marketing",
+        });
       }
       let activeSessionId = runtime.sessionId;
       let activeContext = nativeContext;
@@ -5580,6 +5687,19 @@ export async function processCeoMessage(
           ? { timeline: (stage: string, metadata?: Readonly<Record<string, unknown>>) => traceStage(trace, stage, metadata) }
           : {}),
       });
+
+      // T9 — first useful assistant content received. Today the adapter
+      // collects all chunks before returning, so T9 == T8. Once we move to
+      // a streaming response, T9 will be earlier than T8 and the portal
+      // gets a real "first useful event" before persistence finishes.
+      if (trace) {
+        const firstUseful =
+          nativeResult.text && nativeResult.text.trim().length > 0;
+        traceStage(trace, "T9_first_useful_assistant_content", {
+          received: firstUseful,
+          bytes: firstUseful ? Buffer.byteLength(nativeResult.text, "utf8") : 0,
+        });
+      }
 
       const needsRecovery =
         nativeResult.status === "failed" ||
@@ -5664,6 +5784,13 @@ export async function processCeoMessage(
         }
       }
       if (trace) trace.openclawTextBytes = Buffer.byteLength(nativeResult.text ?? "", "utf8");
+      // Sprint 64 — Live Activity: the moment the engine returns a
+      // usable assistant message, switch the activity pill from
+      // "Marketing está trabajando…" to "Escribiendo…". The CEO sees
+      // the transition between delegation and delivery.
+      if (activitySink && nativeResult.text && nativeResult.text.trim().length > 0) {
+        activitySink("streaming", "Escribiendo…");
+      }
       const selectedTools = nativeResult.toolCalls?.map((call) => call.name) ?? [];
       if (trace) {
         trace.selectedToolNames = selectedTools;
@@ -9171,6 +9298,12 @@ export async function buildCanonicalConnectionViews(
   locale: SupportedLocale,
   hostingerStatus?: HostingerConnectionStatus,
   options?: { probeExternal?: boolean },
+  /** Sprint 64 — Live Activity / context compilation: callers that
+   *  already fetched the Google token summaries for the same turn
+   *  (the runtime bridge does) may pass the result in to avoid a
+   *  redundant Supabase round trip. Omitting the argument preserves
+   *  the legacy behaviour: the function reads once internally. */
+  preFetchedGoogleSummaries?: readonly GoogleTokenSummary[],
 ): Promise<ToolConnectionView[]> {
   const catalog = await buildCatalogConnectionViews(session, locale);
   if (options?.probeExternal === false && !hostingerStatus) return catalog;
@@ -9182,7 +9315,9 @@ export async function buildCanonicalConnectionViews(
   } else {
     catalog.push(hostingerView);
   }
-  const googleIdentity = (await getGoogleTokenStore().listForOrg(session.organizationId))[0];
+  const googleIdentity = preFetchedGoogleSummaries !== undefined
+    ? preFetchedGoogleSummaries[0]
+    : (await getGoogleTokenStore().listForOrg(session.organizationId))[0];
   if (!googleIdentity) return catalog;
   const googleToolIds = new Set(["gmail", "google_calendar", "google_drive", "google_workspace", "youtube"]);
   return catalog.map((entry) =>
@@ -9638,6 +9773,73 @@ function providerForInboxSource(source: string): EmailProvider | null {
 
 function replySubject(subject: string): string {
   return /^re\s*:/i.test(subject.trim()) ? subject.trim() : `Re: ${subject.trim() || "Tu correo"}`;
+}
+
+/**
+ * Merge the live work-state activity emitted by the chat pipeline with
+ * the structured CommandCenterEvent[] returned by processCeoMessage.
+ *
+ * The activity list is appended FIRST so the portal renders it in
+ * chronological order; the CEO sees the earliest "Recibido" signal
+ * followed by the richer events produced later. Deduplicate by message
+ * + state to avoid the same transition appearing twice when an event
+ * already covers it (e.g. a `connection_need` already carries the
+ * "delegated" intent).
+ */
+function mergeLiveActivity(
+  primary: readonly CommandCenterEvent[],
+  activity: readonly CommandCenterEvent[],
+): CommandCenterEvent[] {
+  if (activity.length === 0) return [...primary];
+  const seen = new Set<string>();
+  const merged: CommandCenterEvent[] = [];
+  for (const event of [...activity, ...primary]) {
+    const key =
+      event.kind === "work_state"
+        ? `work_state:${event.state}:${event.message}`
+        : `${event.kind}:${JSON.stringify(event)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(event);
+  }
+  return merged;
+}
+
+/**
+ * Map a backend pipeline stage to the human product micro-copy shown in
+ * the chat. OpenClaw / tool names never leak; we translate the
+ * capability or department into a verb the CEO understands.
+ */
+function activityMessageFor(
+  state: "retrieving_context" | "delegated" | "working" | "tool_started" | "preparing_result" | "streaming" | "completed",
+  hint?: { departmentId?: string; capability?: string },
+): string {
+  const dept = hint?.departmentId;
+  const cap = hint?.capability;
+  switch (state) {
+    case "retrieving_context":
+      return "Revisando tu información…";
+    case "delegated":
+      return dept === "marketing"
+        ? "Marketing está trabajando…"
+        : dept === "seo"
+          ? "SEO está revisando tu web…"
+          : "Departify está organizando la respuesta…";
+    case "working":
+      return "Preparando…";
+    case "tool_started":
+      if (cap?.startsWith("seo.audit")) return "Auditando tu web…";
+      if (cap?.startsWith("marketing.ads")) return "Revisando tus campañas…";
+      if (cap?.startsWith("email")) return "Revisando tu correo…";
+      if (cap?.startsWith("calendar")) return "Revisando tu calendario…";
+      return "Consultando tus datos…";
+    case "preparing_result":
+      return "Preparando el resultado…";
+    case "streaming":
+      return "Escribiendo…";
+    case "completed":
+      return "Listo.";
+  }
 }
 
 export function createWorkExecutor(

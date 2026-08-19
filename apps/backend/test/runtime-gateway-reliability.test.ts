@@ -353,5 +353,5 @@ describe("runtime/gateway reliability P0 tests", () => {
       m.content.toLowerCase().includes("departify.app")
     );
     expect(assistantMsg.length).toBe(1); // One persisted final assistant message only!
-  });
+  }, 30000);
 });

@@ -1288,11 +1288,25 @@ describe("P0 — Central Chat reality", () => {
     expect(body.reply).toContain("Hola");
     // The assistant reply is present as a transcript event (never replaced).
     expect(body.events.some((e: { kind: string }) => e.kind === "transcript")).toBe(true);
-    // No "Mensaje recibido" / "Listo" work-state pills for a greeting.
-    const workStates = body.events.filter(
-      (e: { kind: string }) => e.kind === "work_state",
-    );
-    expect(workStates).toEqual([]);
+    // Live activity from real backend stages is allowed (received /
+    // retrieving_context). The CE0 must NEVER see the fake timer pills.
+    const serialized = JSON.stringify(body.events);
+    expect(serialized).not.toContain("Mensaje recibido");
+    expect(serialized).not.toContain('"Listo"');
+    expect(serialized).not.toContain("Pensando…");
+    expect(serialized).not.toContain("Analizando…");
+    expect(serialized).not.toContain("Finalizando…");
+    // When the turn is a simple greeting, no real backend stage past
+    // retrieving_context (which is always emitted before context is
+    // ready) should appear in the response — no delegation, no tools.
+    const workStates = (body.events as Array<{
+      kind: string;
+      state?: string;
+    }>).filter((e) => e.kind === "work_state");
+    const states = workStates.map((e) => e.state);
+    expect(states).not.toContain("delegated");
+    expect(states).not.toContain("tool_started");
+    expect(states).not.toContain("preparing_result");
   });
 
   it("T: Elvira-ready card is NOT emitted after a CEO message", async () => {
@@ -1387,7 +1401,14 @@ describe("P0 — Central Chat reality", () => {
     expect(searchMaxResults).toContain(3);
     expect(first.json().reply).toContain("cliente@acme.com");
     expect(first.json().events.find((event: { kind: string; speaker?: string }) => event.kind === "transcript").speaker).toBe("departify");
-    expect(first.json().events.some((event: { kind: string }) => event.kind === "work_state")).toBe(false);
+    // Real activity events from the live backend pipeline ARE allowed
+    // (they map to actual stages: received, retrieving_context, delegated,
+    // working). The fake "Mensaje recibido" / "Listo" pills are not.
+    const u2Serialized = JSON.stringify(first.json().events);
+    expect(u2Serialized).not.toContain("Mensaje recibido");
+    expect(u2Serialized).not.toContain('"Listo"');
+    expect(u2Serialized).not.toContain("Pensando…");
+    expect(u2Serialized).not.toContain("Analizando…");
 
     const second = await authedInject({
       method: "POST",

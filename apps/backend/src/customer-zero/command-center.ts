@@ -104,8 +104,27 @@ export type CommandCenterEvent =
     }
   | {
       kind: "work_state";
-      state: "received" | "delegated" | "analyzing" | "tool_started" | "tool_completed" | "preparing_result" | "completed" | "blocked" | "error";
+      state:
+        | "received"
+        | "retrieving_context"
+        | "delegated"
+        | "working"
+        | "analyzing"
+        | "tool_started"
+        | "tool_completed"
+        | "preparing_result"
+        | "streaming"
+        | "completed"
+        | "blocked"
+        | "error";
       message: string;
+      /** Department currently doing the work (drives the accent). */
+      departmentId?: string;
+      /** Optional capability id currently in use (drives micro-copy). */
+      capability?: string;
+      /** When the activity was emitted (epoch ms). Lets the portal compute
+       *  the time between activities for honest timing display. */
+      at?: number;
     };
 
 /** A work item projected for the CEO. */

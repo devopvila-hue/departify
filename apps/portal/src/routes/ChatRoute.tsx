@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import {
@@ -21,6 +22,29 @@ import {
   SparkIcon,
   TasksIcon,
 } from "@/components/icons";
+
+/**
+ * Sprint 64 — Live Activity: pick the freshest work_state event from
+ * the backend response. Backend emits these progressively as the
+ * request moves through auth → context compilation → routing → tool
+ * use → persistence. The CEO sees real activity, never a fake pill.
+ */
+function latestWorkState(
+  events: readonly CommandCenterEvent[] | undefined,
+): { message: string; state?: string; departmentId?: string } | null {
+  if (!events) return null;
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event && event.kind === "work_state") {
+      return {
+        message: event.message,
+        ...(event.state ? { state: event.state } : {}),
+        ...(event.departmentId ? { departmentId: event.departmentId } : {}),
+      };
+    }
+  }
+  return null;
+}
 
 function visibleAssistantMessage(content: string): string {
   return content
@@ -397,7 +421,14 @@ export function ChatRoute() {
     });
     setBusy(true);
     setError(null);
-    setProcessStatus("Departify está pensando…");
+    // Sprint 64 — Live Activity P0: optimistic product micro-copy the
+    // moment the CEO submits. No fake "Pensando…" pill: this label is
+    // honest because the request has been accepted locally. The portal
+    // replaces it with the latest real backend activity (received /
+    // retrieving_context / delegated / working / tool_started) when
+    // the response arrives — and with streamed events when the chat
+    // endpoint emits them progressively.
+    setProcessStatus("Departify · Recibido");
     setInput("");
     // Sending a new message always returns focus to the latest exchange,
     // even if the CEO was reading older history. Distinct from passive
@@ -428,7 +459,18 @@ export function ChatRoute() {
         );
     if (generation !== loadGenerationRef.current) return;
     setBusy(false);
-    setProcessStatus(null);
+    // Sprint 64 — Live Activity: the latest backend work_state event is
+    // the honest label for what the assistant is doing right now. The
+    // optimistic "Recibido" is replaced with the freshest message the
+    // backend emitted for THIS turn. ProcessStatus is cleared AFTER we
+    // render the assistant reply, so the activity is briefly visible
+    // even on fast responses.
+    const latestActivity = result ? latestWorkState(result.events) : null;
+    if (latestActivity) {
+      setProcessStatus(latestActivity.message);
+    } else {
+      setProcessStatus(null);
+    }
     // If the transport failed after the backend persisted a valid pair, the
     // durable transcript is the completion gate. Recover it before showing a
     // generic error; an old assistant message is not sufficient evidence.
@@ -588,7 +630,7 @@ export function ChatRoute() {
   );
 }
 
-function ConversationList(props: {
+function ConversationListInner(props: {
   transcript: {
     role: "user" | "assistant";
     content: string;
@@ -599,6 +641,11 @@ function ConversationList(props: {
   onNavigate: (path: string) => void;
 }) {
   const { transcript, events, isFresh, onNavigate } = props;
+  // Sprint 64 — Frontend perf: ConversationList is wrapped in
+  // React.memo so the parent ChatRoute can update live activity
+  // pills (processStatus) without re-rendering every transcript
+  // bubble. Transcript + events are the only props the list
+  // actually depends on; onNavigate is stable for the route lifetime.
   if (transcript.length === 0 && events.length === 0) {
     if (isFresh) {
       return (
@@ -662,6 +709,13 @@ function ConversationList(props: {
     </div>
   );
 }
+
+// Sprint 64 — Frontend perf: memoise the conversation list so a parent
+// update to live activity / process status does NOT re-render every
+// bubble. The default shallow-equal check is sufficient: transcript +
+// events only change when the backend returns a new turn, and
+// `onNavigate` is stable across the route lifetime.
+const ConversationList = React.memo(ConversationListInner);
 
 function inferSpeaker(
   events: readonly CommandCenterEvent[],
