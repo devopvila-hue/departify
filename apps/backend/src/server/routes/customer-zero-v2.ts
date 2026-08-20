@@ -153,6 +153,11 @@ import {
   type CapabilityResolutionState,
 } from "../../customer-zero/founder-build-mode.js";
 import {
+  FounderBuildExecutor,
+  detectFounderBuildCommand,
+  isFounderBuildCommand,
+} from "../../customer-zero/founder-build-executor.js";
+import {
   getSeoRepositoryLinkStore,
   inspectGithubRepository,
   type SeoRepositoryInspection,
@@ -6094,6 +6099,69 @@ async function runCeoMessageTurn(
       "pdf_generation",
       "blocked",
     );
+  }
+
+  // Sprint 67 P0.7 — Founder Build Mode interception.
+  // When the founder sends a build command (install skill, remove skill, etc.),
+  // it must BYPASS the business pipeline (routeCommandCenter → Marketing/SEO/Elvira)
+  // and execute directly through the FounderBuildExecutor.
+  // This is the architectural bottleneck removal: founder build commands never
+  // enter the department routing pipeline.
+  {
+    const founderBuildCommand = detectFounderBuildCommand(operationalMessage);
+    if (founderBuildCommand && deps.engine && userId) {
+      // Check founder authorization
+      const founderAuth = checkFounderAuthorization(
+        userId,
+        organizationId,
+      );
+
+      if (founderAuth) {
+        // Founder is authorized — execute through privileged plane
+        const executor = new FounderBuildExecutor(deps.engine);
+        const result = await executor.execute(
+          founderBuildCommand,
+          organizationId,
+          userId,
+        );
+
+        // Audit log
+        const auditEntry: Omit<import("../../customer-zero/founder-build-mode.js").AuditTrailEntry, "timestamp"> = {
+          actor: userId,
+          operation: `founder_build_${founderBuildCommand.type}`,
+          tool: "founder_build_executor",
+          result: result.success ? "success" : "failure",
+        };
+        if (result.details) {
+          (auditEntry as Record<string, unknown>).details = JSON.stringify(result.details);
+        }
+        auditLog(auditEntry);
+
+        const reply = result.message;
+
+        return completeDeterministicOperationTurn(
+          session,
+          conversation,
+          message,
+          reply,
+          "founder_build",
+          result.success ? "success" : "blocked",
+        );
+      }
+
+      // Non-founder detected — reject with clear message
+      const isEs = session.state.locale !== "en";
+      return completeDeterministicOperationTurn(
+        session,
+        conversation,
+        message,
+        isEs
+          ? "Solo el founder puede ejecutar comandos de build."
+          : "Only the founder can execute build commands.",
+        "founder_build",
+        "blocked",
+      );
+    }
   }
 
   // ENGINE 02.4 — pending side effects are a deterministic control-plane

@@ -213,7 +213,9 @@ export interface RoutingDecision {
     | "capability_status"
     | "meta_product_question"
     | "department_request"
-    | "system_help_question";
+    | "system_help_question"
+    | "founder_build"
+    | "pdf_generation";
   /** Departments that acted or were considered. Today only `marketing`. */
   readonly departments: readonly string[];
   /** Why this decision was made. */
