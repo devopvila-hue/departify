@@ -199,6 +199,16 @@ export interface CustomerZeroSessionState {
   marketingDiagnosis?: MarketingDiagnosis;
   /** The team Elvira formed for the current goal. */
   marketingTeam?: TeamFormationResult;
+  /**
+   * Sprint 68 Incident 02 — Active work tracking.
+   * Set when a CEO message starts processing; cleared when the result is
+   * emitted. Allows the client to detect that work is still in progress
+   * after a refresh/reconnect without duplicating execution.
+   */
+  activeWork?: {
+    readonly message: string;
+    readonly startedAt: number;
+  } | undefined;
 }
 
 export interface DiscoveryTurn {

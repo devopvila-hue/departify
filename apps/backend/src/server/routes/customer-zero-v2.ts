@@ -4105,7 +4105,34 @@ export async function registerCustomerZeroV2Routes(
             }),
             { departmentId: "marketing" },
           );
+
+          // Sprint 68 Incident 02 — Meaningful acknowledgement.
+          // After runtime is built and work is accepted, emit a context-aware
+          // acknowledgement so the CEO knows Departify understood the request
+          // and is working on it. This must NOT block execution.
+          // Uses structured session state (pending work) as primary signal;
+          // message analysis is fallback only.
+          const ackMessage = buildWorkAcknowledgement(
+            body.message,
+            session.state.locale,
+            session.state,
+          );
+          if (ackMessage) {
+            send("activity", {
+              state: "acknowledged",
+              message: ackMessage,
+            });
+          }
         }
+
+        // Sprint 68 Incident 02 — Active work tracking.
+        // Set before processCeoMessage so a reconnecting client can detect
+        // that work is still in progress. Cleared when result is emitted.
+        session.state.activeWork = {
+          message: body.message,
+          startedAt: Date.now(),
+        };
+
         const result = await processCeoMessage(
           session,
           body.message,
@@ -4128,6 +4155,10 @@ export async function registerCustomerZeroV2Routes(
           finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
         });
         emitCeoTurnTrace(session, runtime?.trace ?? trace, result);
+        // Sprint 68 Incident 02 — Clear active work tracking.
+        // The result is about to be emitted; work is no longer in progress.
+        session.state.activeWork = undefined;
+
         const responseStatus = ceoTurnResponseStatus(runtime?.trace ?? trace);
         if (responseStatus >= 400) {
           const errorCode =
@@ -4162,6 +4193,9 @@ export async function registerCustomerZeroV2Routes(
         send("result", result);
         end();
       } catch (cause) {
+        // Sprint 68 Incident 02 — Clear active work on any error path.
+        session.state.activeWork = undefined;
+
         if (cause instanceof MaxActiveConversationsError) {
           send("error", {
             code: "MAX_ACTIVE_CONVERSATIONS",
@@ -11413,6 +11447,101 @@ export function activityMessageFor(
     case "completed":
       return "Listo.";
   }
+}
+
+/**
+ * Sprint 68 Incident 02 — Build a meaningful work acknowledgement.
+ *
+ * Uses structured session state (pending work) as PRIMARY signal.
+ * Message analysis is FALLBACK only — no duplicate routing layer.
+ *
+ * Returns null for trivial messages where acknowledgement would be noise.
+ * Acknowledgements are brief: one sentence, action-oriented (ROSA policy).
+ */
+export function buildWorkAcknowledgement(
+  message: string,
+  locale: string = "es",
+  sessionState?: { pendingEmailWork?: unknown; pendingCalendarWork?: unknown; pendingFacebookPagesWork?: unknown },
+): string | null {
+  const isEs = locale !== "en";
+
+  // ── PRIMARY: structured session state ──────────────────────────────
+  // If there's pending work, the intent is already known — use it directly.
+  // This runs BEFORE trivial/short filters because pending work is a strong
+  // signal even for short messages like "Sí", "Dale", "Publica".
+  if (sessionState?.pendingEmailWork) {
+    return isEs
+      ? "Entendido. Voy a preparar el correo."
+      : "Got it. I'll prepare the email.";
+  }
+  if (sessionState?.pendingCalendarWork) {
+    return isEs
+      ? "Entendido. Voy a revisar tu calendario."
+      : "Got it. I'll check your calendar.";
+  }
+  if (sessionState?.pendingFacebookPagesWork) {
+    return isEs
+      ? "Entendido. Voy a revisar la publicación."
+      : "Got it. I'll review the post.";
+  }
+
+  // ── FALLBACK: message analysis ─────────────────────────────────────
+  // Only when no structured state is available.
+
+  // Don't acknowledge trivial messages
+  const TRIVIAL_PATTERN = /^\s*(hola|buenos\s*días|buenas|gracias|hello|hi|thanks|sí|no|ok|vale)\s*[.!?]?\s*$/i;
+  if (TRIVIAL_PATTERN.test(message)) return null;
+
+  // Don't acknowledge very short messages (< 15 chars) without business keywords
+  if (message.trim().length < 15) {
+    const hasBusinessKeyword = /\b(email|correo|mail|calendario|calendar|web|seo|marketing|enviar|crear|modificar|cambiar|revisar|analizar)\b/i.test(message);
+    if (!hasBusinessKeyword) return null;
+  }
+
+  if (/\b(enviar|manda|envía|email|correo|mail)\b/i.test(message)) {
+    return isEs
+      ? "Entendido. Voy a preparar el correo."
+      : "Got it. I'll prepare the email.";
+  }
+
+  if (/\b(calendario|calendar|evento|reunión|meeting|cita)\b/i.test(message)) {
+    return isEs
+      ? "Entendido. Voy a revisar tu calendario."
+      : "Got it. I'll check your calendar.";
+  }
+
+  if (/\b(seo|posicionamiento|web|página|website|audit|auditoría)\b/i.test(message)) {
+    return isEs
+      ? "Entendido. Voy a revisar la web."
+      : "Got it. I'll review the website.";
+  }
+
+  if (/\b(marketing|campaña|campañas|publicidad|ads|redes\s+sociales|social\s+media)\b/i.test(message)) {
+    return isEs
+      ? "Entendido. Voy a revisar el marketing."
+      : "Got it. I'll review the marketing.";
+  }
+
+  if (/\b(informe|reporte|report|análisis|dashboard|datos|resultados|cifras)\b/i.test(message)) {
+    return isEs
+      ? "Entendido. Voy a preparar el análisis."
+      : "Got it. I'll prepare the analysis.";
+  }
+
+  if (/\b(drive|archivo|documento|file|document|pdf)\b/i.test(message)) {
+    return isEs
+      ? "Entendido. Voy a buscar eso en tus archivos."
+      : "Got it. I'll search your files.";
+  }
+
+  // Generic work request (longer messages are likely real work)
+  if (message.trim().length > 50) {
+    return isEs
+      ? "Entendido. Voy a trabajar en ello."
+      : "Got it. I'll work on it.";
+  }
+
+  return null;
 }
 
 export function createWorkExecutor(

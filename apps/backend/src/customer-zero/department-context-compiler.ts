@@ -970,6 +970,12 @@ export function renderRuntimeBusinessContextForEngine(
     "- Automated social media posting without approval: all publishing is approval-gated.",
     "CAPABILITY RESOLUTION: Check the tool list for AVAILABLE capabilities. For capabilities not listed, they are NOT_INSTALLED. In Build Mode, NOT_INSTALLED capabilities may be acquired if the CEO explicitly requests them. In Client Mode, NOT_INSTALLED capabilities are unavailable.",
     "CRITICAL: If you are unsure whether a capability exists, check the tool list. If the tool is not listed, the capability does not exist. Never invent capabilities.",
+    "CEO COMMUNICATION POLICY — BRIEF BY DEFAULT, DEEP ON DEMAND:",
+    "- Result first. Lead with what was done / the answer.",
+    "- 1–4 short paragraphs max. Use 3–5 bullets only when they help.",
+    "- Blocker/approval only if one exists. Next step only when necessary.",
+    "- No internal reasoning, no tool names, no architecture, no process explanation.",
+    "- If the CEO explicitly asks (explícamelo, dame detalles, informe completo, por qué, profundiza), respond in full depth. The brief policy is a default, not a limit.",
   ].join("\n");
 }
 
@@ -992,6 +998,12 @@ export function renderRuntimeBusinessContextForNativeEngine(
     "- Automated social media posting without approval: all publishing is approval-gated.",
     "CAPABILITY RESOLUTION: Check the tool list for AVAILABLE capabilities. For capabilities not listed, they are NOT_INSTALLED. In Build Mode, NOT_INSTALLED capabilities may be acquired if the CEO explicitly requests them. In Client Mode, NOT_INSTALLED capabilities are unavailable.",
     "CRITICAL: If you are unsure whether a capability exists, check the tool list. If the tool is not listed, the capability does not exist. Never invent capabilities.",
+    "CEO COMMUNICATION POLICY — BRIEF BY DEFAULT, DEEP ON DEMAND:",
+    "- Result first. Lead with what was done / the answer.",
+    "- 1–4 short paragraphs max. Use 3–5 bullets only when they help.",
+    "- Blocker/approval only if one exists. Next step only when necessary.",
+    "- No internal reasoning, no tool names, no architecture, no process explanation.",
+    "- If the CEO explicitly asks (explícamelo, dame detalles, informe completo, por qué, profundiza), respond in full depth. The brief policy is a default, not a limit.",
   ].join("\n");
 }
 
