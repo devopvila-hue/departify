@@ -6109,7 +6109,15 @@ async function runCeoMessageTurn(
           // messages. Create a fresh session and retry ONCE. This is safe
           // because no tool mutations have happened yet (the error occurs
           // before the agent starts).
-          if (errorMsg.includes("context_overflow") || errorMsg.includes("Context overflow") || errorMsg.includes("prompt too large")) {
+          if (
+            errorMsg.includes("context_overflow") ||
+            errorMsg.includes("Context overflow") ||
+            errorMsg.includes("prompt too large") ||
+            errorMsg.includes("Auto-compaction could not recover") ||
+            errorMsg.includes("content is too long") ||
+            errorMsg.includes("Max allowed tokens") ||
+            errorMsg.includes("already_compacted_recently")
+          ) {
             console.warn("[founder-direct] Context overflow, resetting session", {
               sessionKey: founderSessionKey,
               error: errorMsg,
