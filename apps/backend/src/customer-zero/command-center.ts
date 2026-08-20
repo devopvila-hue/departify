@@ -1494,13 +1494,14 @@ export function buildProactiveOpening(
   const objective = work?.goal ?? session.state.onboarding?.goal ?? null;
 
   // Honest proactivity trigger: the proactive card only appears when
-  // there is something grounded to say — an active work plan (items
-  // in motion, waiting on a connection, approvals) or a company
-  // objective to advance. P0 Product Consistency — Elvira is the
-  // Marketing head, not a global fallback. The proactive card talks
-  // as "Departify" for general/transversal context and only mentions
-  // Elvira when the work actually belongs to Marketing.
-  if (objective || marketingActive) {
+  // there is real marketing work in motion (items, approvals, blocked
+  // tasks). An onboarding goal alone is NOT sufficient — a "hola"
+  // must not invent activity that does not exist. P0 Product
+  // Consistency — Elvira is the Marketing head, not a global fallback.
+  // The proactive card talks as "Departify" for general/transversal
+  // context and only mentions Elvira when the work actually belongs
+  // to Marketing.
+  if (marketingActive) {
     const isMarketingOwned = !!work;
     events.push({
       kind: "intent_proactive",
@@ -1699,8 +1700,8 @@ function buildProactiveStrategyMessage(
   if (items.length === 0) {
     return t(
       locale,
-      `Para conseguir tu objetivo (${objective}), Elvira está organizando el primer plan. Te aviso en cuanto tenga algo concreto que puedas revisar.`,
-      `To achieve your goal (${objective}), Elvira is organising the first plan. I'll notify you as soon as she has something concrete to review.`,
+      `Para conseguir tu objetivo (${objective}), Departify está organizando el primer plan. Te aviso en cuanto tenga algo concreto que puedas revisar.`,
+      `To achieve your goal (${objective}), Departify is organising the first plan. I'll notify you as soon as there is something concrete to review.`,
     );
   }
 

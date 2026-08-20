@@ -121,7 +121,13 @@ export function ChatRoute() {
    * reply. Cleared at the start of every turn so a stale chip can never
    * fire while a new turn is in flight. Clicking a chip replays its
    * `request` through the SAME `send()` path as a typed message.
+   *
+   * Sprint 67 P0.2 — previous NBA are preserved in a ref so they can
+   * be restored when a turn fails. This prevents the "appear then
+   * disappear" Customer Zero observed when an error wiped the chips
+   * from a prior successful response.
    */
+  const previousNextActionsRef = useRef<readonly CommandCenterNextAction[]>([]);
   const [nextActions, setNextActions] = useState<
     readonly CommandCenterNextAction[]
   >([]);
@@ -455,7 +461,9 @@ export function ChatRoute() {
   async function send(overrideValue?: string) {
     const value = (overrideValue ?? input).trim();
     if (!organizationId || !value || busy) return;
-    // Stale chips must not survive into the new turn.
+    // Stale chips must not survive into the new turn. Preserve them in
+    // a ref so they can be restored if the turn fails (P0.2 fix).
+    previousNextActionsRef.current = nextActions;
     setNextActions([]);
     const correlationId =
       typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -587,6 +595,10 @@ export function ChatRoute() {
       const backendMessage =
         backendError?.message ?? "Departify no ha podido responderte ahora mismo. Vuelve a intentarlo en un momento.";
       setError(backendMessage);
+      // P0.2 — restore previous NBA when the turn failed. The chips
+      // from the last successful response should not disappear just
+      // because this turn errored.
+      setNextActions(previousNextActionsRef.current);
       return;
     }
     console.info("[chat-timeline]", {

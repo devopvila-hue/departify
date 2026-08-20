@@ -6030,6 +6030,45 @@ async function runCeoMessageTurn(
     );
   }
 
+  // Sprint 67 P0.2 — greeting fast path. A simple salutation does not
+  // need the full engine pipeline. Respond in < 1 s with a product
+  // greeting that also captures the entrepreneur's preferred name if
+  // still unknown. This prevents the ~20 s latency Customer Zero
+  // observed on "hola".
+  //
+  // Only activates when the native engine is NOT available: when it is,
+  // the engine handles greetings with full context (and tests that mock
+  // the engine expect it to be called).
+  const GREETING_PATTERN =
+    /^\s*(hola|buenos[ ]?días|buenas|gracias|muchas gracias|hello|hi|thanks|thank you)\s*[.!?]?\s*$/i;
+  if (GREETING_PATTERN.test(operationalMessage) && !runtime?.nativeBusinessTools) {
+    const isEs = session.state.locale !== "en";
+    const name = session.state.entrepreneurPreferredName;
+    let greetingReply: string;
+    if (name) {
+      greetingReply = isEs
+        ? `¡Hola, ${name}! Estoy aquí. Dime qué necesitas y lo ponemos en marcha.`
+        : `Hi, ${name}! I'm here. Tell me what you need and we'll get started.`;
+    } else {
+      // Ask for the entrepreneur's name naturally — one time only.
+      // Mark the opportunity as used so future greetings don't re-ask.
+      await markEntrepreneurNameAskedOnce(session, deps);
+      greetingReply = isEs
+        ? "¡Hola! Antes de seguir, ¿cómo quieres que te llame?"
+        : "Hi! Before we continue, what should I call you?";
+    }
+    return completeRuntimeCeoTurn(
+      session,
+      conversation,
+      message,
+      greetingReply,
+      [],
+      ["success"],
+      null,
+      trace,
+    );
+  }
+
   let nativeEngineFailure = false;
   let nativeMutationDeferred = false;
   if (runtime?.nativeBusinessTools && shouldUseNativeAgentPath(operationalMessage)) {
@@ -6225,27 +6264,42 @@ async function runCeoMessageTurn(
         nativeResult.status === "completed" &&
         !nativeMutationRequiresDeterministicGate(operationalMessage)
       ) {
-        if (trace && detectUnbackedWorkClaim(nativeResult.text)) {
-          trace.productTruthCalled = true;
-          trace.finalResponseSource = "product_truth";
+        // Sprint 67 P0.2 — engine error text must never be persisted as a
+        // Departify reply. When postGenerationFailure is true AND the text
+        // matches a known engine error pattern, treat it as a generation
+        // failure so the backend returns a humanized product error instead.
+        if (nativeResult.postGenerationFailure && isEngineErrorText(nativeResult.text)) {
+          if (trace) {
+            trace.finalResponseSource = "error_fallback";
+            trace.nativeResponseTerminal = false;
+            trace.openclawStatus = "failed";
+            trace.engineErrorCode = "ENGINE_ERROR_TEXT_LEAK";
+            trace.toolResultStatuses = ["generation_failed"];
+          }
+          nativeEngineFailure = true;
+        } else {
+          if (trace && detectUnbackedWorkClaim(nativeResult.text)) {
+            trace.productTruthCalled = true;
+            trace.finalResponseSource = "product_truth";
+          }
+          if (trace) {
+            trace.nativeResponseTerminal = true;
+            trace.finalResponseSource ??= "openclaw";
+          }
+          const nativeWorkResult = selectedExposedTools.includes("departify.work.deliverable")
+            ? (await workStoreForRoutes().listResultsForOrg(organizationId, 1))[0] ?? null
+            : null;
+          return completeRuntimeCeoTurn(
+            session,
+            conversation,
+            message,
+            nativeResult.text,
+            selectedTools,
+            ["success"],
+            nativeWorkResult,
+            trace,
+          );
         }
-        if (trace) {
-          trace.nativeResponseTerminal = true;
-          trace.finalResponseSource ??= "openclaw";
-        }
-        const nativeWorkResult = selectedExposedTools.includes("departify.work.deliverable")
-          ? (await workStoreForRoutes().listResultsForOrg(organizationId, 1))[0] ?? null
-          : null;
-        return completeRuntimeCeoTurn(
-          session,
-          conversation,
-          message,
-          nativeResult.text,
-          selectedTools,
-          ["success"],
-          nativeWorkResult,
-          trace,
-        );
       }
       const nativeHasFinalText = nativeResult.text.trim().length > 0;
       if (nativeResult.status === "completed" || nativeHasFinalText) {
@@ -10408,9 +10462,30 @@ export function isInternalRuntimeLeak(text: string): boolean {
   return false;
 }
 
+/**
+ * Detects known engine error strings that OpenClaw may persist as assistant
+ * messages when the agent run fails. These are NOT conversational content —
+ * they must never be shown to the customer as Departify's reply.
+ */
+export function isEngineErrorText(text: string): boolean {
+  if (!text) return false;
+  const lower = text.toLowerCase().trim();
+  const patterns = [
+    "the agent run failed before producing a reply",
+    "agent run failed",
+    "run failed before producing",
+    "the agent failed to respond",
+    "no he podido completar esa respuesta porque el motor",
+    "el motor terminó sin devolver",
+    "engine completed without returning",
+    "i couldn't complete that response because the business engine failed",
+  ];
+  return patterns.some((p) => lower.includes(p));
+}
+
 export function sanitizeResponseText(text: string, locale = "es"): string {
   if (!text) return text;
-  if (isInternalRuntimeLeak(text)) {
+  if (isInternalRuntimeLeak(text) || isEngineErrorText(text)) {
     return locale === "en"
       ? "I could not complete this request. Your conversation is saved; you can try again."
       : "No he podido completar esta petición. Tu conversación está guardada; puedes volver a intentarlo.";
