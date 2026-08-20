@@ -53,7 +53,7 @@ import {
 import type { ServerDeps } from "../deps.js";
 import { checkFounderAuthorization } from "../../customer-zero/founder-build-mode.js";
 import { getFounderRunExecutor } from "../../customer-zero/founder-run-executor.js";
-import { founderRunStore, type FounderRunEvent } from "../../customer-zero/founder-run-store.js";
+import { founderRunStore, redactFounderSensitiveInput, type FounderRunEvent } from "../../customer-zero/founder-run-store.js";
 
 /** Maximum user-visible active conversations for any organization. */
 export const MAX_ACTIVE_CONVERSATIONS = 5;
@@ -647,7 +647,7 @@ export async function registerConversationRoutes(
           });
 
           // Add user message to conversation
-          await session.conversations.addMessage(conversationId, "user", body.message);
+          await session.conversations.addMessage(conversationId, "user", redactFounderSensitiveInput(body.message));
 
           // Submit durable run — fire-and-forget
           const executor = getFounderRunExecutor(deps.engine);
@@ -656,9 +656,9 @@ export async function registerConversationRoutes(
             userId: request.authUser.id,
             message: body.message,
             onChunk: chunkSink,
-            onPersist: (run) => {
-              void session.conversations.addMessage(conversationId, "assistant", run.finalText ?? "");
-            },
+            onPersist: (run) => session.conversations
+              .addMessage(conversationId, "assistant", run.finalText ?? "")
+              .then(() => undefined),
           });
 
           // Emit the runId so the portal can reconnect if SSE drops

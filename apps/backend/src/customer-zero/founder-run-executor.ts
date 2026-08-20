@@ -333,9 +333,16 @@ export class FounderRunExecutor {
         }
       }
 
-      // Final result check
+      // Terminal success must only be emitted after the caller has had a
+      // chance to persist the final transcript. Otherwise an SSE client can
+      // render the answer and then observe a post-generation terminal race.
       if (result && result.status === "completed" && result.text) {
-        this.store.markCompleted(run.id, result.text);
+        const transcriptPersistence = await this.persistFinalTranscript(
+          run.id,
+          result.text,
+          onPersist,
+        );
+        this.store.markCompleted(run.id, result.text, transcriptPersistence);
       } else if (result) {
         const code =
           (result as { errorCode?: string })?.errorCode ?? "NO_TEXT";
@@ -349,24 +356,25 @@ export class FounderRunExecutor {
       lock();
     }
 
-    // Persist the terminal result to a durable transcript, independent of
-    // any HTTP/SSE connection. The caller supplies this callback (e.g. to
-    // write the assistant message to the conversation store).
-    if (onPersist) {
-      try {
-        const terminal = this.store.get(run.id);
-        if (terminal && terminal.finalText) {
-          await onPersist(terminal);
-        }
-      } catch (persistError) {
-        console.error("[founder-run] onPersist callback failed", {
-          runId: run.id,
-          error:
-            persistError instanceof Error
-              ? persistError.message
-              : String(persistError),
-        });
-      }
+  }
+
+  private async persistFinalTranscript(
+    runId: string,
+    finalText: string,
+    onPersist?: (run: FounderRun) => Promise<void> | void,
+  ): Promise<FounderRun["transcriptPersistence"]> {
+    if (!onPersist) return "not_requested";
+    const current = this.store.get(runId);
+    if (!current) return "failed";
+    try {
+      await onPersist({ ...current, finalText });
+      return "persisted";
+    } catch (persistError) {
+      console.error("[founder-run] onPersist callback failed", {
+        runId,
+        error: persistError instanceof Error ? persistError.message : String(persistError),
+      });
+      return "failed";
     }
   }
 

@@ -348,10 +348,12 @@ describe("Sprint 67 P0.8 — FounderRunExecutor Background Execution", () => {
       onPersist: (run) => persistResolve(run),
     });
 
-    await completion.waitForTerminal(store, runId, 10_000);
-    // onPersist is called asynchronously after waitForTerminal resolves
+    const terminal = await completion.waitForTerminal(store, runId, 10_000);
+    // A terminal success is not observable until its transcript callback has
+    // resolved; otherwise SSE can publish success before durable persistence.
     const persistedRun = await persistPromise;
     expect(persistedRun.finalText).toBe("Final text for persistence.");
+    expect(terminal?.transcriptPersistence).toBe("persisted");
   });
 });
 

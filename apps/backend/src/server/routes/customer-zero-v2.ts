@@ -164,7 +164,7 @@ import {
 } from "../../customer-zero/founder-build-executor.js";
 import { getFounderRunExecutor } from "../../customer-zero/founder-run-executor.js";
 import { founderRunCompletion } from "../../customer-zero/founder-run-executor.js";
-import { founderRunStore, type FounderRunEvent } from "../../customer-zero/founder-run-store.js";
+import { founderRunStore, redactFounderSensitiveInput, type FounderRunEvent } from "../../customer-zero/founder-run-store.js";
 import {
   getSeoRepositoryLinkStore,
   inspectGithubRepository,
@@ -3979,7 +3979,7 @@ export async function registerCustomerZeroV2Routes(
 
           // Ensure conversation exists and add user message
           const conversation = await ensureConversation(session, body.message, body.conversationId);
-          await session.conversations.addMessage(conversation.id, "user", body.message);
+          await session.conversations.addMessage(conversation.id, "user", redactFounderSensitiveInput(body.message));
 
           // Submit durable run — fire-and-forget
           const executor = getFounderRunExecutor(deps.engine);
@@ -3988,9 +3988,9 @@ export async function registerCustomerZeroV2Routes(
             userId: request.authUser.id,
             message: body.message,
             onChunk: chunkSink,
-            onPersist: (run) => {
-              void session.conversations.addMessage(conversation.id, "assistant", run.finalText ?? "");
-            },
+            onPersist: (run) => session.conversations
+              .addMessage(conversation.id, "assistant", run.finalText ?? "")
+              .then(() => undefined),
           });
 
           // Emit the runId so the portal can reconnect if SSE drops
@@ -6213,9 +6213,9 @@ async function runCeoMessageTurn(
         // Persist the final assistant text durably even if this connection
         // dies before waitForTerminal resolves. The executor calls this
         // regardless of request lifecycle.
-        onPersist: (run) => {
-          void session.conversations.addMessage(conversation.id, "assistant", run.finalText ?? "");
-        },
+        onPersist: (run) => session.conversations
+          .addMessage(conversation.id, "assistant", run.finalText ?? "")
+          .then(() => undefined),
       });
 
       if (trace) {
@@ -6260,6 +6260,16 @@ async function runCeoMessageTurn(
       // Sprint 67 P0.8 — Structured status handling. NO error-string
       // matching. The terminal run carries a structured status + errorCode.
       if (terminalRun.status === "completed" && terminalRun.finalText) {
+        if (trace) {
+          trace.openclawStatus = "completed";
+          trace.nativeResponseTerminal = true;
+          trace.assistantTextBytes = Buffer.byteLength(terminalRun.finalText, "utf8");
+          if (terminalRun.transcriptPersistence === "persisted") {
+            traceStage(trace, "T14_persistence_completed");
+          } else if (terminalRun.transcriptPersistence === "failed") {
+            traceStage(trace, "T14_persistence_failed", { errorClass: "secondary_write" });
+          }
+        }
         return completeDeterministicOperationTurn(
           session,
           conversation,

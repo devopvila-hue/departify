@@ -47,6 +47,8 @@ export interface FounderRun {
   finalText?: string;
   errorCode?: string;
   errorMessage?: string;
+  /** Transcript outcome recorded before the successful terminal event. */
+  transcriptPersistence?: "persisted" | "failed" | "not_requested";
 
   metadata: Record<string, unknown>;
 }
@@ -57,6 +59,14 @@ export interface FounderRunEvent {
   eventType: string;
   data: Record<string, unknown>;
   createdAt: number;
+}
+
+/** Keep recognizable GitHub credentials out of run inspection and replay. */
+export function redactFounderSensitiveInput(input: string): string {
+  return input
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{10,}\b/g, "[redacted GitHub credential]")
+    .replace(/\bgh[pousr]_[A-Za-z0-9]{10,}\b/g, "[redacted GitHub credential]")
+    .replace(/\b((?:github\s+)?(?:personal\s+access\s+)?token|pat)\s*[:=]\s*\S+/gi, "$1=[redacted credential]");
 }
 
 export type FounderRunEventType =
@@ -145,13 +155,14 @@ export class FounderRunStore extends EventEmitter {
     }
 
     const now = Date.now();
+    const safeInput = redactFounderSensitiveInput(params.input);
     const run: FounderRun = {
       id: randomUUID(),
       organizationId: params.organizationId,
       userId: params.userId,
       sessionKey: params.sessionKey,
       status: "queued",
-      input: params.input,
+      input: safeInput,
       createdAt: now,
       lastActivityAt: now,
       toolCallCount: 0,
@@ -160,7 +171,7 @@ export class FounderRunStore extends EventEmitter {
 
     this.runs.set(run.id, run);
     this.events.set(run.id, []);
-    this.appendEvent(run.id, "run.created", { input: params.input });
+    this.appendEvent(run.id, "run.created", { input: safeInput });
     this.emit("run:updated", run);
     return run;
   }
@@ -210,13 +221,18 @@ export class FounderRunStore extends EventEmitter {
     this.emit("run:updated", run!);
   }
 
-  markCompleted(runId: string, finalText: string): void {
+  markCompleted(
+    runId: string,
+    finalText: string,
+    transcriptPersistence: FounderRun["transcriptPersistence"] = "not_requested",
+  ): void {
     const run = this.mustGet(runId);
     const now = Date.now();
     run.status = "completed";
     run.finalText = finalText;
     run.completedAt = now;
     run.lastActivityAt = now;
+    run.transcriptPersistence = transcriptPersistence;
     this.appendEvent(runId, "assistant.final", {
       text: finalText,
       toolCallCount: run.toolCallCount,
