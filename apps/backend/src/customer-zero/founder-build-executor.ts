@@ -429,9 +429,25 @@ export class FounderBuildExecutor {
         textLength: result.text?.length ?? 0,
       });
 
+      // Sprint 67 P0.7 — NO fallback text. If OpenClaw returned empty,
+      // surface the error explicitly instead of fabricating success.
+      if (!result.text) {
+        const code = (result as { errorCode?: string }).errorCode ?? "EMPTY_RESPONSE";
+        console.error("[founder-build] OpenClaw returned no text", {
+          commandType,
+          status: result.status,
+          errorCode: code,
+        });
+        return {
+          success: false,
+          message: `Error: OpenClaw no generó respuesta (status: ${result.status}, code: ${code}).`,
+          details: { status: result.status, commandType, sessionId: session },
+        };
+      }
+
       return {
         success: result.status === "completed",
-        message: result.text || "Comando ejecutado.",
+        message: result.text,
         details: {
           status: result.status,
           commandType,

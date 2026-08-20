@@ -6197,11 +6197,28 @@ async function runCeoMessageTurn(
           });
         }
 
+        // Sprint 67 P0.7 — NO fallback text. If OpenClaw returned empty,
+        // surface the error explicitly instead of fabricating success.
+        if (!result.text) {
+          const code = (result as { errorCode?: string }).errorCode ?? "EMPTY_RESPONSE";
+          console.error("[founder-direct] OpenClaw returned no text", {
+            status: result.status,
+            errorCode: code,
+            sessionId: founderSessionId,
+          });
+          return completeDeterministicOperationTurn(
+            session, conversation, message,
+            `Error: OpenClaw no generó respuesta (status: ${result.status}, code: ${code}). Intenta de nuevo.`,
+            "founder_build",
+            "blocked",
+          );
+        }
+
         return completeDeterministicOperationTurn(
           session,
           conversation,
           message,
-          result.text || "Comando ejecutado.",
+          result.text,
           "founder_build",
           result.status === "completed" ? "success" : "blocked",
         );
