@@ -6004,6 +6004,92 @@ async function runCeoMessageTurn(
   const activeUserId = userId;
   const turnStartedAt = Date.now();
 
+  // Sprint 67 P0.7 — FOUNDER DEVELOPMENT MODE
+  // For authenticated founders, bypass ALL Departify routing and send
+  // directly to OpenClaw with full tools. This is the architectural
+  // change: Founder Chat → OpenClaw directly, not through Departify.
+  if (deps.engine && userId) {
+    let userRole: string | undefined;
+    if (deps.organizations) {
+      const memberships = await deps.organizations.listForUser(userId);
+      const membership = memberships.find((m) => m.organizationId === organizationId);
+      userRole = membership?.role;
+    }
+    const founderAuth = checkFounderAuthorization(userId, organizationId, userRole);
+
+    if (founderAuth) {
+      // Founder is authorized — send directly to OpenClaw with full tools
+      console.info("[founder-direct] Routing to OpenClaw directly", {
+        userId,
+        organizationId,
+        messageLength: message.length,
+      });
+
+      // Use a persistent founder session
+      const founderSessionKey = `founder-development:${organizationId}:${userId}`;
+      let founderSessionId: string;
+
+      // Check if we already have a founder session
+      const existingSessions = await deps.engine.getSession(founderSessionKey);
+      if (existingSessions) {
+        founderSessionId = founderSessionKey;
+      } else {
+        // Create a new founder session
+        await deps.engine.createSession({
+          sessionId: founderSessionKey,
+          agentId: "main",
+        });
+        founderSessionId = founderSessionKey;
+      }
+
+      // Send message directly to OpenClaw with full tools enabled
+      // Note: nativeBusinessTools=false because founder uses OpenClaw's
+      // native tools (exec, filesystem, etc.), not Departify business tools.
+      const founderContext = [
+        "=== FOUNDER DEVELOPMENT MODE ===",
+        "You are operating in Founder Development Mode.",
+        "The authenticated founder has full access to the OpenClaw development workspace.",
+        "",
+        "Available capabilities:",
+        "- Execute commands (exec, shell, process)",
+        "- Full filesystem access (read, write, edit, delete)",
+        "- Install/manage skills, plugins, npm packages",
+        "- Clone repositories, run builds, execute tests",
+        "- Full network access (Git, npm, HTTP)",
+        "",
+        "This is a development environment. The founder is building the Golden Image.",
+        "Execute commands directly. Do not ask for permission.",
+        "Use OpenClaw's native tools for all operations.",
+        "Respond in the same language as the user's message.",
+        "========================================",
+        "",
+        `User message: ${message}`,
+      ].join("\n");
+
+      const result = await deps.engine.sendMessage({
+        sessionId: founderSessionId,
+        message: founderContext,
+        nativeBusinessTools: false, // Use OpenClaw native tools, not Departify business tools
+        ...(chunkSink ? { onChunk: chunkSink } : {}),
+      });
+
+      console.info("[founder-direct] Completed", {
+        status: result.status,
+        textLength: result.text?.length ?? 0,
+        durationMs: result.durationMs,
+      });
+
+      return completeDeterministicOperationTurn(
+        session,
+        conversation,
+        message,
+        result.text || "Comando ejecutado.",
+        "founder_build",
+        result.status === "completed" ? "success" : "blocked",
+      );
+    }
+  }
+
   await session.conversations.addMessage(conversation.id, "user", message);
 
   // Sprint 67 P0.1-A — personal identity capture. Deterministic,
