@@ -1799,6 +1799,8 @@ export const api = {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let founderRunId: string | null = null;
+      let founderRunConversationId: string | null = null;
       let result:
         | (CommandCenterMessageResult & {
             conversationId?: string;
@@ -1841,6 +1843,13 @@ export const api = {
                 onChunk({ text: c.text, finished: c.finished === true });
               }
             }
+          } else if (eventName === "founder_run") {
+            // Sprint 67 P0.8 — Durable founder run. The backend submitted
+            // a background run and is streaming events. Store the runId
+            // so the portal can reconnect if SSE drops.
+            const fr = parsed as { runId?: string; conversationId?: string };
+            if (fr.runId) founderRunId = fr.runId;
+            if (fr.conversationId) founderRunConversationId = fr.conversationId;
           } else if (eventName === "result") {
             result = parsed as CommandCenterMessageResult & {
               conversationId?: string;
@@ -1872,6 +1881,13 @@ export const api = {
           "command-center-opening",
           "conversations",
         ]);
+      // Attach founder run metadata so the portal can recover on disconnect
+      if (result && founderRunId) {
+        (result as { founderRunId?: string }).founderRunId = founderRunId;
+      }
+      if (result && founderRunConversationId && !result.conversationId) {
+        result.conversationId = founderRunConversationId;
+      }
       return result;
     } catch {
       // Hotfix — STOP / cancel. The CEO aborted the in-flight SSE
@@ -1986,10 +2002,12 @@ export const api = {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let founderRunId: string | null = null;
       let result:
         | (CommandCenterMessageResult & {
             conversationId?: string;
             error?: MaxActiveConversationsError;
+            founderRunId?: string;
           })
         | null = null;
       while (true) {
@@ -2016,21 +2034,22 @@ export const api = {
           if (eventName === "activity") {
             onActivity(parsed as CommandCenterEvent);
           } else if (eventName === "content_delta") {
-            // Sprint 67 P0 — progressive assistant text. The reducer
-            // concatenates these in order so the assistant bubble streams
-            // in real time. The final `result` event still carries the
-            // authoritative final text — chunks are a transport, not a
-            // second source of truth.
             if (onChunk) {
               const c = parsed as { text?: string; finished?: boolean };
               if (typeof c.text === "string") {
                 onChunk({ text: c.text, finished: c.finished === true });
               }
             }
+          } else if (eventName === "founder_run") {
+            // Sprint 67 P0.8 — Durable founder run. Store the runId
+            // so the portal can reconnect if SSE drops.
+            const fr = parsed as { runId?: string; conversationId?: string };
+            if (fr.runId) founderRunId = fr.runId;
           } else if (eventName === "result") {
             result = parsed as CommandCenterMessageResult & {
               conversationId?: string;
               error?: MaxActiveConversationsError;
+              founderRunId?: string;
             };
           } else if (eventName === "error") {
             result = {
@@ -2045,6 +2064,7 @@ export const api = {
             } as CommandCenterMessageResult & {
               conversationId?: string;
               error?: MaxActiveConversationsError;
+              founderRunId?: string;
             };
           }
         }
@@ -2053,6 +2073,10 @@ export const api = {
       // stale. Invalidate so the next reload reads the new assistant
       // message exactly once.
       invalidateOrg(org, ["conversation", "conversations", "overview"]);
+      // Attach founder run metadata so the portal can recover on disconnect
+      if (result && founderRunId) {
+        result.founderRunId = founderRunId;
+      }
       return result;
     } catch {
       // Hotfix — STOP / cancel. The CEO aborted the in-flight SSE
@@ -2071,6 +2095,78 @@ export const api = {
       );
     }
   },
+
+  // ── Sprint 67 P0.8 — Founder Run API ──────────────────────────────
+
+  /**
+   * Get the active founder run for the current session (if any).
+   * Used by the portal to recover from SSE disconnects or page refreshes.
+   */
+  getActiveFounderRun: async (
+    org: string,
+  ): Promise<{
+    run: {
+      id: string;
+      status: string;
+      input: string;
+      createdAt: number;
+      startedAt: number | null;
+      completedAt: number | null;
+      toolCallCount: number;
+      currentStep: string | null;
+      finalText: string | null;
+      errorCode: string | null;
+      errorMessage: string | null;
+    } | null;
+    events: Array<{ id: number; runId: string; eventType: string; data: Record<string, unknown>; createdAt: number }>;
+  } | null> => {
+    try {
+      const headers = buildHeaders();
+      const response = await fetch(
+        `/api/customer-zero/${org}/founder/runs/active`,
+        { headers },
+      );
+      if (!response.ok) return null;
+      return await response.json();
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * Get a specific founder run by ID. Used to poll for completion
+   * when the SSE connection drops mid-run.
+   */
+  getFounderRun: async (
+    org: string,
+    runId: string,
+  ): Promise<{
+    id: string;
+    status: string;
+    input: string;
+    createdAt: number;
+    startedAt: number | null;
+    completedAt: number | null;
+    toolCallCount: number;
+    currentStep: string | null;
+    finalText: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    events: Array<{ id: number; runId: string; eventType: string; data: Record<string, unknown>; createdAt: number }>;
+  } | null> => {
+    try {
+      const headers = buildHeaders();
+      const response = await fetch(
+        `/api/customer-zero/${org}/founder/runs/${runId}`,
+        { headers },
+      );
+      if (!response.ok) return null;
+      return await response.json();
+    } catch {
+      return null;
+    }
+  },
+
   weeklyPlanCurrent: (org: string) =>
     cachedOrgGetJson<WeeklyPlanView>(
       org,

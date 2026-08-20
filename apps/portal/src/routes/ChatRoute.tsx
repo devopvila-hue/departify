@@ -219,6 +219,13 @@ export function ChatRoute() {
     }
     if (generation !== loadGenerationRef.current) return;
     setOpening(false);
+
+    // Sprint 67 P0.8 — Check for active founder runs on mount.
+    // If the page was refreshed while a founder run was in progress,
+    // this recovers the run and displays the result.
+    if (organizationId) {
+      void checkActiveFounderRun(organizationId);
+    }
   }, [organizationId, loadConversation]);
 
   const loadOlderMessages = useCallback(async () => {
@@ -432,6 +439,121 @@ export function ChatRoute() {
   }
 
   /**
+   * Sprint 67 P0.8 — Founder Run Recovery.
+   * When the SSE connection drops during a founder run, the run continues
+   * in the background. This function polls the founder-runs API until the
+   * run reaches a terminal state, then recovers the result.
+   *
+   * @param founderRunId — the runId emitted by the backend in the `founder_run` SSE event
+   * @param userMessage — the original user message for transcript recovery
+   */
+  async function recoverFounderRun(
+    orgId: string,
+    founderRunId: string,
+    userMessage: string,
+  ): Promise<boolean> {
+    const generation = loadGenerationRef.current;
+    const MAX_POLL_ATTEMPTS = 60; // 5 minutes at 5s intervals
+    const POLL_INTERVAL_MS = 5_000;
+
+    for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt++) {
+      if (generation !== loadGenerationRef.current) return false;
+
+      const run = await api.getFounderRun(orgId, founderRunId);
+      if (!run) return false;
+
+      if (run.status === "completed" && run.finalText) {
+        // Run completed successfully — recover the transcript
+        if (generation !== loadGenerationRef.current) return false;
+        setTranscript((prev) => {
+          const last = prev.at(-1);
+          if (last?.role === "user" && last.content === userMessage) {
+            return [...prev, { role: "assistant", content: visibleAssistantMessage(run.finalText!) }];
+          }
+          return [
+            ...prev,
+            { role: "user", content: userMessage },
+            { role: "assistant", content: visibleAssistantMessage(run.finalText!) },
+          ];
+        });
+        setEvents([]);
+        setError(null);
+        console.info("[founder-run-recovery]", {
+          runId: founderRunId,
+          status: "recovered",
+          toolCallCount: run.toolCallCount,
+          attempts: attempt + 1,
+        });
+        return true;
+      }
+
+      if (run.status === "failed" || run.status === "cancelled") {
+        // Run failed — surface the structured error
+        console.info("[founder-run-recovery]", {
+          runId: founderRunId,
+          status: run.status,
+          errorCode: run.errorCode,
+          attempts: attempt + 1,
+        });
+        return false;
+      }
+
+      // Run still in progress — wait and poll again
+      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    }
+
+    console.warn("[founder-run-recovery]", {
+      runId: founderRunId,
+      status: "poll_timeout",
+      attempts: MAX_POLL_ATTEMPTS,
+    });
+    return false;
+  }
+
+  /**
+   * Sprint 67 P0.8 — Check for any active founder run on mount/reconnect.
+   * If the page was refreshed while a founder run was in progress, this
+   * recovers the run and displays the result.
+   */
+  async function checkActiveFounderRun(orgId: string): Promise<void> {
+    try {
+      const active = await api.getActiveFounderRun(orgId);
+      if (!active?.run) return;
+
+      const run = active.run;
+      if (run.status === "running" || run.status === "queued") {
+        // There's an active run — show writing indicator and poll
+        console.info("[founder-run-reconnect]", {
+          runId: run.id,
+          status: run.status,
+          input: run.input.slice(0, 80),
+        });
+        setIsWriting(true);
+        setIsGenerating(true);
+        setBusy(true);
+
+        const recovered = await recoverFounderRun(orgId, run.id, run.input);
+        setBusy(false);
+        setIsWriting(false);
+        setIsGenerating(false);
+
+        if (recovered) {
+          requestFollowToLatest();
+        }
+      } else if (run.status === "completed" && run.finalText) {
+        // Run completed while we were away — check if transcript already has it
+        // (don't duplicate if the conversation store already has the message)
+        console.info("[founder-run-reconnect]", {
+          runId: run.id,
+          status: "already_completed",
+        });
+      }
+    } catch {
+      // Best-effort — don't break the chat if the check fails
+    }
+  }
+
+  /**
    * Hotfix — STOP / cancel. The CEO presses the STOP button while
    * Departify is generating. We invalidate the load generation token
    * so any late events from the aborted fetch are dropped, abort
@@ -570,6 +692,34 @@ export function ChatRoute() {
       typeof result.reply !== "string" ||
       result.reply.trim().length === 0
     ) {
+      // Sprint 67 P0.8 — Founder Run Recovery. If the backend emitted a
+      // founderRunId, the run is still executing in the background. Poll
+      // the founder-runs API until it completes, then recover the result.
+      const founderRunId = result && typeof result === "object"
+        ? (result as { founderRunId?: string }).founderRunId
+        : undefined;
+      if (founderRunId) {
+        console.info("[chat-timeline]", {
+          correlationId,
+          stage: "T16_portal_founder_run_recovery_start",
+          founderRunId,
+        });
+        const founderRecovered = await recoverFounderRun(
+          organizationId,
+          founderRunId,
+          value,
+        );
+        if (founderRecovered) {
+          console.info("[chat-timeline]", {
+            correlationId,
+            stage: "T16_portal_founder_run_recovered",
+            elapsedMs:
+              Math.round((performance.now() - clientStartedAt) * 100) / 100,
+          });
+          return;
+        }
+      }
+
       const recovered = await recoverCompletedTurn(
         organizationId,
         currentConversationId ?? result?.conversationId ?? null,

@@ -122,6 +122,14 @@ function mockFetch(): void {
           json: async () => conversations,
         } as Response);
       }
+      // Sprint 67 P0.8 — Founder run active check (best-effort, no active run in tests)
+      if (u.includes("/founder/runs/active")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ run: null, events: [] }),
+        } as Response);
+      }
       // SSE stream — pop the next pending one.
       const entry = pendingResponses.shift();
       if (entry) {

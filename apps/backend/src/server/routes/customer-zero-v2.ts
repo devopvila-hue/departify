@@ -157,6 +157,9 @@ import {
   detectFounderBuildCommand,
   isFounderBuildCommand,
 } from "../../customer-zero/founder-build-executor.js";
+import { getFounderRunExecutor } from "../../customer-zero/founder-run-executor.js";
+import { founderRunCompletion } from "../../customer-zero/founder-run-executor.js";
+import { founderRunStore, type FounderRunEvent } from "../../customer-zero/founder-run-store.js";
 import {
   getSeoRepositoryLinkStore,
   inspectGithubRepository,
@@ -224,24 +227,6 @@ import {
   type ConnectionCardView,
 } from "../../customer-zero/connections-domain.js";
 import { isCapabilityAvailable } from "../../customer-zero/capability-registry.js";
-
-// Sprint 67 P0.7 — Founder session execution mutex.
-// Prevents concurrent requests from hitting the same OpenClaw founder session,
-// which causes EmbeddedAttemptSessionTakeoverError (session file changed while
-// embedded prompt lock was released). Each founder session key maps to a
-// promise chain — a new request waits for the previous one to complete before
-// proceeding.
-const founderSessionMutex = new Map<string, Promise<void>>();
-
-function acquireFounderSessionLock(sessionKey: string): Promise<() => void> {
-  const previous = founderSessionMutex.get(sessionKey) ?? Promise.resolve();
-  let release: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  founderSessionMutex.set(sessionKey, previous.then(() => current));
-  return previous.then(() => release!);
-}
 
 import {
   accountLabelForCredentials,
@@ -3887,6 +3872,19 @@ export async function registerCustomerZeroV2Routes(
         });
       };
 
+      // Sprint 67 P0 — progressive assistant text chunk sink for SSE.
+      const chunkSink = (chunk: { text: string; finished: boolean }): void => {
+        try {
+          send("content_delta", {
+            text: chunk.text,
+            finished: chunk.finished,
+            at: Date.now(),
+          });
+        } catch {
+          /* client may have disconnected mid-write */
+        }
+      };
+
       // Golden Image admin commands — allowlist-only, env-gated, never
       // exposed to non-admins. Same behaviour as the JSON endpoint.
       const adminCommand = parseAdminCommand(body.message);
@@ -3928,6 +3926,115 @@ export async function registerCustomerZeroV2Routes(
             { err: adminError, organizationId, command: adminCommand.command },
             "Admin command introspection failed",
           );
+        }
+      }
+
+      // ── Sprint 67 P0.8 — DURABLE FOUNDER RUN INTERCEPT ────────────
+      // For authenticated founders, submit a durable run and subscribe
+      // to store events. The execution is fully decoupled from this HTTP
+      // connection — if SSE disconnects, the run continues in background.
+      // The portal can reconnect via /founder/runs/:runId/stream.
+      if (deps.engine && request.authUser?.id) {
+        let userRole: string | undefined;
+        if (deps.organizations) {
+          const memberships = await deps.organizations.listForUser(request.authUser.id);
+          const membership = memberships.find((m) => m.organizationId === organizationId);
+          userRole = membership?.role;
+        }
+        const founderAuth = checkFounderAuthorization(
+          request.authUser.id,
+          organizationId,
+          userRole,
+        );
+
+        if (founderAuth) {
+          console.info("[founder-sse] Intercepting founder message for durable run (command-center)", {
+            userId: request.authUser.id,
+            organizationId,
+          });
+
+          // Ensure conversation exists and add user message
+          const conversation = await ensureConversation(session, body.message, body.conversationId);
+          await session.conversations.addMessage(conversation.id, "user", body.message);
+
+          // Submit durable run — fire-and-forget
+          const executor = getFounderRunExecutor(deps.engine);
+          const runId = executor.submit({
+            organizationId,
+            userId: request.authUser.id,
+            message: body.message,
+            onChunk: chunkSink,
+            onPersist: (run) =>
+              session.conversations.addMessage(conversation.id, "assistant", run.finalText ?? ""),
+          });
+
+          // Emit the runId so the portal can reconnect if SSE drops
+          send("founder_run", { runId, conversationId: conversation.id });
+
+          // Subscribe to store events and forward as SSE frames
+          let sseClosed = false;
+          const onRunEvent = (eventRunId: string, event: FounderRunEvent): void => {
+            if (sseClosed || eventRunId !== runId) return;
+            send("event", event);
+
+            if (event.eventType === "run.completed") {
+              const run = founderRunStore.get(runId);
+              send("result", {
+                organizationId,
+                reply: run?.finalText ?? "",
+                events: [],
+                routing: { intent: "founder_build", departments: [], rationale: "" },
+                connectionSuggestion: null,
+                pendingToolId: null,
+                conversationId: conversation.id,
+              });
+              end();
+            } else if (event.eventType === "run.failed" || event.eventType === "run.cancelled") {
+              const run = founderRunStore.get(runId);
+              send("error", {
+                code: run?.errorCode ?? "FOUNDER_RUN_FAILED",
+                message: run?.errorMessage ?? "El run terminó sin respuesta.",
+                requestId: correlationId,
+              });
+              end();
+            }
+          };
+          founderRunStore.on("run:event", onRunEvent);
+
+          const onSseClose = (): void => {
+            sseClosed = true;
+            founderRunStore.off("run:event", onRunEvent);
+          };
+          raw.on("close", onSseClose);
+          raw.on("error", onSseClose);
+
+          // Heartbeat to keep connection alive during long runs
+          const heartbeat = setInterval(() => {
+            if (sseClosed) {
+              clearInterval(heartbeat);
+              return;
+            }
+            try {
+              raw.write(`: keep-alive\n\n`);
+            } catch {
+              onSseClose();
+            }
+          }, 15_000);
+          heartbeat.unref();
+
+          // Check if run already completed while we were setting up
+          const existingRun = founderRunStore.get(runId);
+          if (existingRun && (existingRun.status === "completed" || existingRun.status === "failed")) {
+            onRunEvent(runId, {
+              id: 0,
+              runId,
+              eventType: existingRun.status === "completed" ? "run.completed" : "run.failed",
+              data: {},
+              createdAt: Date.now(),
+            });
+          }
+
+          return; // Skip normal processCeoMessage flow
         }
       }
 
@@ -3989,17 +4096,7 @@ export async function registerCustomerZeroV2Routes(
           captureActivity,
           // Sprint 67 P0 — surface progressive assistant text as the
           // model streams, without waiting for agent.wait to settle.
-          (chunk: { text: string; finished: boolean }) => {
-            try {
-              send("content_delta", {
-                text: chunk.text,
-                finished: chunk.finished,
-                at: Date.now(),
-              });
-            } catch {
-              /* client may have disconnected mid-write */
-            }
-          },
+          chunkSink,
         );
         traceStage(trace, "T15_backend_response_finalization", {
           responseStatus: ceoTurnResponseStatus(trace),
@@ -6042,191 +6139,108 @@ async function runCeoMessageTurn(
         userId,
         organizationId,
         messageLength: message.length,
+        mode: "durable-run",
       });
 
-      // Use a persistent founder session
-      const founderSessionKey = `founder-development:${organizationId}:${userId}`;
+      // Sprint 67 P0.8 — DURABLE FOUNDER RUN.
+      //
+      // The browser connection MUST NOT own the OpenClaw execution.
+      // We submit the message to the shared FounderRunExecutor which runs
+      // OpenClaw in the background, independent of this HTTP/SSE request.
+      // - If SSE disconnects → RUN CONTINUES
+      // - If browser refreshes → RUN CONTINUES
+      // - If portal reconnects → shows the CURRENT RUN via runId
+      // - If execution takes 5 minutes → it's allowed (10 min safety net)
+      //
+      // The old inline mutex + sendMessage is replaced: the executor owns
+      // the per-session lock (acquireSessionLock) and survives the request.
+      // We ONLY await the terminal state; we never own the execution.
+      const runId = getFounderRunExecutor(deps.engine).submit({
+        organizationId,
+        userId,
+        message,
+        onChunk: chunkSink,
+        // Persist the final assistant text durably even if this connection
+        // dies before waitForTerminal resolves. The executor calls this
+        // regardless of request lifecycle.
+        onPersist: (run) =>
+          session.conversations.addMessage(conversation.id, "assistant", run.finalText ?? ""),
+      });
 
-      // Sprint 67 P0.7 — Serialize access to the founder session.
-      // Concurrent requests to the same OpenClaw session cause
-      // EmbeddedAttemptSessionTakeoverError (session file changed while
-      // embedded prompt lock was released). The mutex ensures only one
-      // agent.run executes against this session at a time; subsequent
-      // requests wait for the current run to complete.
-      const releaseLock = await acquireFounderSessionLock(founderSessionKey);
+      if (trace) {
+        trace.openclawCalled = true;
+        trace.finalResponseSource = "openclaw";
+      }
 
-      let founderSessionId: string;
-      try {
-        // Check if we already have a founder session
-        const existingSessions = await deps.engine.getSession(founderSessionKey);
-        if (existingSessions) {
-          founderSessionId = founderSessionKey;
-        } else {
-          // Create a new founder session
-          await deps.engine.createSession({
-            sessionId: founderSessionKey,
-            agentId: "main",
-          });
-          founderSessionId = founderSessionKey;
-        }
+      console.info("[founder-direct] Submitted durable run", {
+        runId,
+        sessionKey: `founder-development:${organizationId}:${userId}`,
+      });
 
-        // Send message directly to OpenClaw with full tools enabled
-        // Note: nativeBusinessTools=false because founder uses OpenClaw's
-        // native tools (exec, filesystem, etc.), not Departify business tools.
-        const founderContext = [
-          "=== FOUNDER DEVELOPMENT MODE ===",
-          "You are operating in Founder Development Mode.",
-          "The authenticated founder has full access to the OpenClaw development workspace.",
-          "",
-          "Available capabilities:",
-          "- Execute commands (exec, shell, process)",
-          "- Full filesystem access (read, write, edit, delete)",
-          "- Install/manage skills, plugins, npm packages",
-          "- Clone repositories, run builds, execute tests",
-          "- Full network access (Git, npm, HTTP)",
-          "",
-          "This is a development environment. The founder is building the Golden Image.",
-          "Execute commands directly. Do not ask for permission.",
-          "Use OpenClaw's native tools for all operations.",
-          "Respond in the same language as the user's message.",
-          "========================================",
-          "",
-          `User message: ${message}`,
-        ].join("\n");
+      // Await the terminal state. Execution is decoupled — the executor
+      // continues even if this request is abandoned or times out.
+      const terminalRun = await founderRunCompletion.waitForTerminal(
+        founderRunStore,
+        runId,
+      );
 
-        let result;
-        try {
-          result = await deps.engine.sendMessage({
-            sessionId: founderSessionId,
-            message: founderContext,
-            nativeBusinessTools: false,
-            ...(chunkSink ? { onChunk: chunkSink } : {}),
-          });
-
-          // Sprint 67 P0.7 — The EngineAdapter swallows EngineErrors and
-          // returns { text: "", status: "failed" } instead of throwing.
-          // Detect failed results and handle context overflow directly.
-          if (result.status === "failed" && !result.text) {
-            const code = (result as { errorCode?: string }).errorCode ?? "UNKNOWN";
-            console.warn("[founder-direct] Engine returned failed result", {
-              errorCode: code,
-              sessionKey: founderSessionKey,
-            });
-            // Close the stuck session and create a fresh one, then retry.
-            // This handles context overflow and any other stuck-session state.
-            try {
-              await deps.engine.closeSession(founderSessionId);
-            } catch {
-              // Ignore close errors
-            }
-            await deps.engine.createSession({ sessionId: founderSessionKey, agentId: "main" });
-            founderSessionId = founderSessionKey;
-            result = await deps.engine.sendMessage({
-              sessionId: founderSessionId,
-              message: founderContext,
-              nativeBusinessTools: false,
-              ...(chunkSink ? { onChunk: chunkSink } : {}),
-            });
-          }
-        } catch (sendError) {
-          const errorMsg = sendError instanceof Error ? sendError.message : String(sendError);
-
-          // Context overflow: the founder session has accumulated too many
-          // messages. Create a fresh session and retry ONCE. This is safe
-          // because no tool mutations have happened yet (the error occurs
-          // before the agent starts).
-          if (
-            errorMsg.includes("context_overflow") ||
-            errorMsg.includes("Context overflow") ||
-            errorMsg.includes("prompt too large") ||
-            errorMsg.includes("Auto-compaction could not recover") ||
-            errorMsg.includes("content is too long") ||
-            errorMsg.includes("Max allowed tokens") ||
-            errorMsg.includes("already_compacted_recently")
-          ) {
-            console.warn("[founder-direct] Context overflow, resetting session", {
-              sessionKey: founderSessionKey,
-              error: errorMsg,
-            });
-            try {
-              await deps.engine.closeSession(founderSessionId);
-            } catch {
-              // Ignore close errors
-            }
-            await deps.engine.createSession({ sessionId: founderSessionKey, agentId: "main" });
-            founderSessionId = founderSessionKey;
-            result = await deps.engine.sendMessage({
-              sessionId: founderSessionId,
-              message: founderContext,
-              nativeBusinessTools: false,
-              ...(chunkSink ? { onChunk: chunkSink } : {}),
-            });
-          } else {
-            // For all other errors (including session takeover), do NOT retry.
-            // Retrying a multi-step tool turn can duplicate mutations.
-            console.error("[founder-direct] OpenClaw error", {
-              error: errorMsg,
-              sessionKey: founderSessionKey,
-            });
-            throw sendError;
-          }
-        }
-
-        // Update trace state for founder-direct path
-        if (trace) {
-          trace.openclawCalled = true;
-          trace.openclawStatus = result.status === "completed" ? "ok" : "failed";
-          trace.finalResponseSource = "openclaw";
-        }
-
-        console.info("[founder-direct] Completed", {
-          status: result.status,
-          textLength: result.text?.length ?? 0,
-          durationMs: result.durationMs,
-          hasToolCalls: Array.isArray((result as { toolCalls?: unknown }).toolCalls),
-          toolCallCount: ((result as { toolCalls?: Array<{ name: string }> }).toolCalls ?? []).length,
-        });
-
-        // Sprint 67 P0.7 — If OpenClaw returned completed with no text,
-        // log the full result for diagnosis. This happens when the agent
-        // loop finishes but no final assistant message is captured.
-        if (result.status === "completed" && !result.text) {
-          console.warn("[founder-direct] Empty text on completed result — dumping result keys", {
-            resultKeys: Object.keys(result as object),
-            sessionId: founderSessionId,
-          });
-        }
-
-        // Sprint 67 P0.7 — NO fallback text. If OpenClaw returned empty,
-        // surface the error explicitly instead of fabricating success.
-        if (!result.text) {
-          const code = (result as { errorCode?: string }).errorCode ?? "EMPTY_RESPONSE";
-          console.error("[founder-direct] OpenClaw returned no text", {
-            status: result.status,
-            errorCode: code,
-            sessionId: founderSessionId,
-          });
-          return completeDeterministicOperationTurn(
-            session, conversation, message,
-            `Error: OpenClaw no generó respuesta (status: ${result.status}, code: ${code}). Intenta de nuevo.`,
-            "founder_build",
-            "blocked",
-          );
-        }
-
+      if (!terminalRun) {
+        console.error("[founder-direct] Run did not reach terminal state", { runId });
         return completeDeterministicOperationTurn(
           session,
           conversation,
           message,
-          result.text,
+          "Error: el run no llegó a estado terminal. Intenta de nuevo.",
           "founder_build",
-          result.status === "completed" ? "success" : "blocked",
+          "blocked",
         );
-      } finally {
-        // Always release the lock, even if the request failed.
-        // This ensures the next queued request can proceed.
-        releaseLock();
       }
+
+      console.info("[founder-direct] Durable run completed", {
+        runId,
+        status: terminalRun.status,
+        textLength: terminalRun.finalText?.length ?? 0,
+        toolCallCount: terminalRun.toolCallCount,
+        durationMs:
+          (terminalRun.completedAt ?? Date.now()) -
+          (terminalRun.startedAt ?? terminalRun.createdAt),
+      });
+
+      // Sprint 67 P0.8 — Structured status handling. NO error-string
+      // matching. The terminal run carries a structured status + errorCode.
+      if (terminalRun.status === "completed" && terminalRun.finalText) {
+        return completeDeterministicOperationTurn(
+          session,
+          conversation,
+          message,
+          terminalRun.finalText,
+          "founder_build",
+          "success",
+          null,
+          null,
+          true, // assistant text already persisted via onPersist
+        );
+      }
+
+      // Terminal but failed/cancelled → surface the structured error.
+      // NO fabricated success, NO generic "no podido responder" placeholder.
+      const errorCode = terminalRun.errorCode ?? "UNKNOWN";
+      const errorMessage =
+        terminalRun.errorMessage ?? "El run terminó sin respuesta utilizable.";
+      console.error("[founder-direct] Run ended without success", {
+        runId,
+        status: terminalRun.status,
+        errorCode,
+        errorMessage,
+      });
+      return completeDeterministicOperationTurn(
+        session,
+        conversation,
+        message,
+        `Error en run (${errorCode}): ${errorMessage}`,
+        "founder_build",
+        "blocked",
+      );
     }
   }
 
@@ -8020,15 +8034,22 @@ async function completeDeterministicOperationTurn(
   status: "success" | "blocked" | "cancelled" | "already_verified",
   connectionSuggestion: ConnectionSuggestion | null = null,
   workResult: DepartmentResult | null = null,
+  skipAssistantPersist: boolean = false,
 ): Promise<CeoMessageResult> {
-  try {
-    await session.conversations.addMessage(conversation.id, "assistant", reply);
-  } catch (cause) {
-    console.info("[runtime-business-context]", {
-      event: "assistant_persist_failed",
-      organizationHash: safeTraceHash(session.organizationId),
-      error: cause instanceof Error ? cause.message : "unknown",
-    });
+  // Sprint 67 P0.8 — Durable founder runs already persisted the assistant
+  // message via the executor's onPersist callback (connection-independent).
+  // When that happened, skip the redundant transcript insert here to avoid
+  // duplicate messages in the conversation.
+  if (!skipAssistantPersist) {
+    try {
+      await session.conversations.addMessage(conversation.id, "assistant", reply);
+    } catch (cause) {
+      console.info("[runtime-business-context]", {
+        event: "assistant_persist_failed",
+        organizationHash: safeTraceHash(session.organizationId),
+        error: cause instanceof Error ? cause.message : "unknown",
+      });
+    }
   }
   session.state.conversation = [
     ...session.state.conversation,

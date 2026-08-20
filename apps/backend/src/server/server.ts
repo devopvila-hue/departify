@@ -17,6 +17,7 @@ import { registerMarketingRoutes } from "./routes/marketing-routes.js";
 import { registerConnectorRuntimeRoutes } from "./routes/connector-runtime.js";
 import { registerDepartmentRoutes } from "./routes/department-routes.js";
 import { registerVideoRoutes, recoverAllActiveVideoJobsOnBoot } from "./routes/video.js";
+import { registerFounderRunRoutes } from "./routes/founder-runs.js";
 import type { ServerDeps } from "./deps.js";
 
 export async function buildServer(
@@ -70,6 +71,7 @@ export async function buildServer(
   await registerConnectorRuntimeRoutes(server, deps);
   await registerDepartmentRoutes(server, deps);
   await registerVideoRoutes(server, deps);
+  await registerFounderRunRoutes(server, deps);
 
   // Recovery: Automatically recover and resume all active VideoJobs on server boot-up
   void recoverAllActiveVideoJobsOnBoot(deps);
