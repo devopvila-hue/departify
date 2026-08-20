@@ -5344,6 +5344,9 @@ export function classifyMessageIntent(message: string): MessageIntentCategory {
   if (isCalendarApproval(trimmed) || isCalendarCancellation(trimmed)) return "HEAVY";
   // Pending operation decisions are always HEAVY.
   if (classifyPendingOperationDecision(trimmed)) return "HEAVY";
+  // Follow-up with format modifiers (e.g., "sí, en PDF", "en Drive", "por email")
+  // These reference a previous proposal and need full context.
+  if (isFollowUpWithFormatModifier(trimmed)) return "HEAVY";
   // Very short messages (< 15 chars) that don't contain business keywords
   // are likely trivial conversation.
   if (trimmed.length < 15) {
@@ -5353,6 +5356,29 @@ export function classifyMessageIntent(message: string): MessageIntentCategory {
     if (!hasBusinessKeyword) return "LIGHTWEIGHT";
   }
   return "HEAVY";
+}
+
+/**
+ * Detect follow-up messages that reference a previous proposal with a format
+ * modifier. Examples:
+ *  - "sí, en PDF"
+ *  - "ok, en Drive"
+ *  - "dale, por email"
+ *  - "sí, guárdalo"
+ *  - "en PDF por favor"
+ *
+ * These are always HEAVY because they need the previous turn's context to
+ * understand what action to take.
+ */
+function isFollowUpWithFormatModifier(message: string): boolean {
+  const lower = message.toLocaleLowerCase("es-ES");
+  // Format modifiers that indicate a follow-up referencing a previous proposal
+  const formatModifiers = /\b(en\s+pdf|por\s+email|en\s+drive|en\s+un\s+documento|guárdalo|guárdala|envíalo|envíala|compártelo|compártela|descárgalo|descárgala)\b/i;
+  if (formatModifiers.test(lower)) return true;
+  // Confirmation + format modifier pattern: "sí/ok/dale/vale + comma + modifier"
+  const confirmationWithModifier = /^(?:sí|si|ok|dale|vale|de\s+acuerdo|perfecto|genial|bien)\s*[,;]\s*(?:en\s+pdf|por\s+email|en\s+drive|en\s+un\s+documento|guárdalo|guárdala|envíalo|envíala)/i;
+  if (confirmationWithModifier.test(message)) return true;
+  return false;
 }
 
 function nativeMutationRequiresDeterministicGate(message: string): boolean {
@@ -6497,9 +6523,29 @@ async function runCeoMessageTurn(
   // router. That would create a second reasoning path/session and can return
   // a plausible-looking response that is not the failed turn's context.
   if (nativeEngineFailure) {
-    const reply = session.state.locale === "en"
-      ? "I couldn't complete that response because the business engine failed. No alternate action was started; please try again."
-      : "No he podido completar esa respuesta porque el motor de negocio ha fallado. No he iniciado ninguna acción alternativa; vuelve a intentarlo.";
+    // Check if the message references a capability that doesn't exist
+    const lower = message.toLocaleLowerCase("es-ES");
+    const referencesPdf = /\b(pdf|genera.*pdf|crear.*pdf|exporta.*pdf|render.*pdf)\b/i.test(lower);
+    const referencesImage = /\b(imagen|imagen.*genera|crear.*imagen|genera.*imagen)\b/i.test(lower);
+
+    let reply: string;
+    if (referencesPdf) {
+      // Specific error for PDF — the capability doesn't exist
+      reply = session.state.locale === "en"
+        ? "I can't generate PDF files — that capability isn't available yet. I can help you with:\n• Creating a document in Google Drive\n• Sending a summary by email\n• Showing the information here in the chat\n\nWhat would you prefer?"
+        : "No puedo generar archivos PDF — esa capacidad aún no está disponible. Puedo ayudarte con:\n• Crear un documento en Google Drive\n• Enviar un resumen por email\n• Mostrar la información aquí en el chat\n\n¿Qué prefieres?";
+    } else if (referencesImage) {
+      // Specific error for image generation — the capability doesn't exist
+      reply = session.state.locale === "en"
+        ? "I can't generate images — that capability isn't available yet. I can help you with other tasks. What do you need?"
+        : "No puedo generar imágenes — esa capacidad aún no está disponible. Puedo ayudarte con otras tareas. ¿Qué necesitas?";
+    } else {
+      // Generic error with context preservation
+      reply = session.state.locale === "en"
+        ? "I couldn't complete that request. No action was taken — you can try again or ask me something different."
+        : "No pude completar esa solicitud. No se tomó ninguna acción — puedes intentarlo de nuevo o pedirme algo diferente.";
+    }
+
     return completeRuntimeCeoTurn(
       session,
       conversation,
