@@ -5837,6 +5837,9 @@ async function executeRuntimeTool(
       const results = await workStore.listResultsForOrg(session.organizationId, 20);
       return { status: "success", operation: call.name, summary: `Hay ${results.length} resultados duraderos.`, data: { results: results.map((result) => ({ id: result.id, title: result.title, summary: result.summary })) } };
     }
+
+    default:
+      return { status: "blocked", operation: call.name, summary: `Operación no reconocida: ${call.name}` };
   }
 }
 
@@ -9046,19 +9049,17 @@ async function runPdfGenerationTurn(
   try {
     const workStore = workStoreForRoutes();
     const results = await workStore.listResultsForOrg(organizationId, 5);
-    if (results.length > 0) {
-      const latestResult = results[0];
-      if (latestResult.content && latestResult.content.length > 0) {
-        content = latestResult.content;
-        title = latestResult.title || title;
-        departmentId = latestResult.departmentId;
-        resultId = latestResult.id;
-        console.info("[pdf-turn] Content resolved from DepartmentResult", {
-          resultId: latestResult.id,
-          contentLength: content.length,
-          title: title.slice(0, 50),
-        });
-      }
+    const latestResult = results[0];
+    if (latestResult && latestResult.content && latestResult.content.length > 0) {
+      content = latestResult.content;
+      title = latestResult.title || title;
+      departmentId = latestResult.departmentId;
+      resultId = latestResult.id;
+      console.info("[pdf-turn] Content resolved from DepartmentResult", {
+        resultId: latestResult.id,
+        contentLength: content.length,
+        title: title.slice(0, 50),
+      });
     }
   } catch (error) {
     console.warn("[pdf-turn] Failed to query work store:", error);
@@ -9076,6 +9077,7 @@ async function runPdfGenerationTurn(
       // Look for the most recent assistant message with ANY content
       for (let i = recentMessages.length - 1; i >= 0; i--) {
         const msg = recentMessages[i];
+        if (!msg) continue;
         if (msg.role === "assistant" && msg.content.length > 10) {
           content = msg.content;
           // Extract title from the first line if it looks like a heading
@@ -9101,6 +9103,7 @@ async function runPdfGenerationTurn(
     const transcript = session.state.conversation;
     for (let i = transcript.length - 1; i >= 0; i--) {
       const msg = transcript[i];
+      if (!msg) continue;
       if (msg.role === "assistant" && msg.content.length > 10) {
         content = msg.content;
         const firstLine = content.split("\n")[0]?.trim();
@@ -9190,8 +9193,8 @@ async function runPdfGenerationTurn(
     artifact = await pdfStore.create({
       organizationId,
       conversationId: conversation.id,
-      departmentId,
-      resultId,
+      departmentId: departmentId ?? "",
+      resultId: resultId ?? "",
       origin: "chat_pdf_request",
       filename: pdfResult.filename,
       bytes: pdfResult.bytes,
@@ -9220,9 +9223,10 @@ async function runPdfGenerationTurn(
   const signedUrl = view?.signedUrl;
 
   // Build the response
+  const sizeKB = ((pdfResult.size ?? 0) / 1024).toFixed(1);
   const reply = isEs
-    ? `PDF preparado.\n\n**${title}**\n${(pdfResult.size / 1024).toFixed(1)} KB\n\n${signedUrl ? `[Ver/Descargar PDF](${signedUrl})` : "El PDF está listo para descargar."}`
-    : `PDF ready.\n\n**${title}**\n${(pdfResult.size / 1024).toFixed(1)} KB\n\n${signedUrl ? `[View/Download PDF](${signedUrl})` : "The PDF is ready to download."}`;
+    ? `PDF preparado.\n\n**${title}**\n${sizeKB} KB\n\n${signedUrl ? `[Ver/Descargar PDF](${signedUrl})` : "El PDF está listo para descargar."}`
+    : `PDF ready.\n\n**${title}**\n${sizeKB} KB\n\n${signedUrl ? `[View/Download PDF](${signedUrl})` : "The PDF is ready to download."}`;
 
   // Persist the message
   await session.conversations.addMessage(conversation.id, "assistant", reply);

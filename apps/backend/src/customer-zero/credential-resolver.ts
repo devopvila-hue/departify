@@ -44,7 +44,8 @@ export type CredentialProvider =
   | "meta_ads"
   | "tiktok_ads"
   | "google_ads"
-  | "google_ads_api";
+  | "google_ads_api"
+  | "departify";
 
 export interface CredentialSource {
   /** Where the credential ultimately comes from. */
