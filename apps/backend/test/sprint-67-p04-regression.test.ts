@@ -183,8 +183,8 @@ describe("Sprint 67 P0.4 — Multi-turn continuity + execution truth", () => {
       const rendered = renderRuntimeBusinessContextForEngine(context, "[]");
 
       // Should contain the execution truth about image generation
-      expect(rendered).toContain("Image generation/creation: no tool exists");
-      expect(rendered).toContain("Never offer to create or generate images");
+      expect(rendered).toContain("Image generation/creation: NOT_INSTALLED");
+      expect(rendered).toContain("CAPABILITY RESOLUTION");
     });
   });
 
@@ -210,10 +210,10 @@ describe("Sprint 67 P0.4 — Multi-turn continuity + execution truth", () => {
 
       const rendered = renderRuntimeBusinessContextForNativeEngine(context);
 
-      // Should contain all execution truth limitations
+      // Should contain all execution truth capabilities and states
       expect(rendered).toContain("PDF generation: AVAILABLE");
-      expect(rendered).toContain("Image generation/creation: no tool exists");
-      expect(rendered).toContain("Video creation/editing: no tool exists");
+      expect(rendered).toContain("Image generation/creation: NOT_INSTALLED");
+      expect(rendered).toContain("Video creation/editing: NOT_INSTALLED");
       expect(rendered).toContain("Spreadsheets with formulas/pivot tables");
       expect(rendered).toContain("Automated social media posting without approval");
     });
@@ -241,10 +241,10 @@ describe("Sprint 67 P0.4 — Multi-turn continuity + execution truth", () => {
 
       const rendered = renderRuntimeBusinessContextForEngine(context, "[]");
 
-      // Should contain all execution truth limitations
+      // Should contain all execution truth capabilities and states
       expect(rendered).toContain("PDF generation: AVAILABLE");
-      expect(rendered).toContain("Image generation/creation: no tool exists");
-      expect(rendered).toContain("Video creation/editing: no tool exists");
+      expect(rendered).toContain("Image generation/creation: NOT_INSTALLED");
+      expect(rendered).toContain("Video creation/editing: NOT_INSTALLED");
       expect(rendered).toContain("Spreadsheets with formulas/pivot tables");
       expect(rendered).toContain("Automated social media posting without approval");
     });

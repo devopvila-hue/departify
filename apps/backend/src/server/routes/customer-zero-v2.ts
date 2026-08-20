@@ -142,6 +142,17 @@ import {
 } from "../../customer-zero/google-drive-adapter.js";
 import { auditWebsite, type SeoAuditReport } from "../../customer-zero/seo-audit.js";
 import {
+  checkFounderAuthorization,
+  isOperationAllowedInFounderMode,
+  resolveCapabilityState,
+  canAcquireCapability,
+  auditLog,
+  detectTransformationIntent,
+  isTransformationRequest,
+  type OperationalMode,
+  type CapabilityResolutionState,
+} from "../../customer-zero/founder-build-mode.js";
+import {
   getSeoRepositoryLinkStore,
   inspectGithubRepository,
   type SeoRepositoryInspection,
@@ -6051,9 +6062,11 @@ async function runCeoMessageTurn(
     );
   }
 
-  // Sprint 67 P0.5 — PDF generation is a deterministic capability.
-  // When the user asks for a PDF, resolve the content from the previous
-  // turn or existing result, generate the PDF, and return a reference.
+  // Sprint 67 P0.6 — Transformation intent detection.
+  // When the user says "sí en PDF", "guárdalo en Drive", "mándamelo por email",
+  // etc., this is a TRANSFORMATION of a previous result, NOT a new business task.
+  // Transformation intents must bypass all department routing (SEO, Marketing, etc.)
+  // and operate on the existing result/artifact directly.
   if (isPdfGenerationRequest(operationalMessage)) {
     const pdfResult = await runPdfGenerationTurn(
       session,
@@ -6062,7 +6075,25 @@ async function runCeoMessageTurn(
       operationalMessage,
       deps,
     );
+    // PDF generation must NEVER fall through to department routing.
+    // If it returns null (no content), we return a clarification instead
+    // of letting the message reach SEO/Marketing/Elvira.
     if (pdfResult) return pdfResult;
+
+    // If pdfResult is null, the function already returned a clarification
+    // message. This should not happen, but as a safety net, return a
+    // clear error instead of falling through.
+    const isEs = session.state.locale !== "en";
+    return completeDeterministicOperationTurn(
+      session,
+      conversation,
+      message,
+      isEs
+        ? "No he podido generar el PDF. Asegúrate de que hay un análisis o resultado previo disponible."
+        : "I couldn't generate the PDF. Make sure there's a previous analysis or result available.",
+      "pdf_generation",
+      "blocked",
+    );
   }
 
   // ENGINE 02.4 — pending side effects are a deterministic control-plane
@@ -8911,10 +8942,15 @@ function isDriveValidationRequest(message: string): boolean {
 }
 
 /**
- * Sprint 67 P0.5 — PDF generation turn.
+ * Sprint 67 P0.6 — PDF generation turn (enhanced).
  *
  * When the user asks for a PDF, resolve the content from the previous turn
  * or existing result, generate the PDF, and return a reference.
+ *
+ * Content resolution priority:
+ * 1. Most recent DepartmentResult related to the conversation
+ * 2. Most recent assistant message with any content
+ * 3. In-memory session transcript (last assistant message)
  */
 async function runPdfGenerationTurn(
   session: CustomerZeroSession,
@@ -8926,48 +8962,95 @@ async function runPdfGenerationTurn(
   const isEs = session.state.locale !== "en";
   const organizationId = session.organizationId;
 
+  console.info("[pdf-turn] Starting PDF generation turn", {
+    organizationId: organizationId.slice(0, 8),
+    conversationId: conversation.id,
+    message: operationalMessage.slice(0, 50),
+  });
+
   // Resolve content from previous turn or existing result
   let content = "";
   let title = "Documento";
   let departmentId: string | undefined;
   let resultId: string | undefined;
 
-  // Check if there's a recent result in the conversation
-  const recentMessages = await session.conversations.listMessages(
-    organizationId,
-    conversation.id,
-    10,
-  );
-
-  // Look for the most recent assistant message with substantial content
-  for (let i = recentMessages.length - 1; i >= 0; i--) {
-    const msg = recentMessages[i];
-    if (msg.role === "assistant" && msg.content.length > 100) {
-      content = msg.content;
-      // Extract title from the first line if it looks like a heading
-      const firstLine = content.split("\n")[0]?.trim();
-      if (firstLine && firstLine.length < 100) {
-        title = firstLine.replace(/^#+\s*/, "").replace(/\*\*/g, "");
-      }
-      break;
-    }
-  }
-
-  // If no content from conversation, check for recent results
-  if (!content) {
+  // Strategy 1: Check for recent DepartmentResults (most authoritative)
+  try {
     const workStore = workStoreForRoutes();
     const results = await workStore.listResultsForOrg(organizationId, 5);
     if (results.length > 0) {
       const latestResult = results[0];
-      content = latestResult.content;
-      title = latestResult.title;
-      departmentId = latestResult.departmentId;
-      resultId = latestResult.id;
+      if (latestResult.content && latestResult.content.length > 0) {
+        content = latestResult.content;
+        title = latestResult.title || title;
+        departmentId = latestResult.departmentId;
+        resultId = latestResult.id;
+        console.info("[pdf-turn] Content resolved from DepartmentResult", {
+          resultId: latestResult.id,
+          contentLength: content.length,
+          title: title.slice(0, 50),
+        });
+      }
+    }
+  } catch (error) {
+    console.warn("[pdf-turn] Failed to query work store:", error);
+  }
+
+  // Strategy 2: Check conversation for assistant messages (any length)
+  if (!content) {
+    try {
+      const recentMessages = await session.conversations.listMessages(
+        organizationId,
+        conversation.id,
+        20,
+      );
+
+      // Look for the most recent assistant message with ANY content
+      for (let i = recentMessages.length - 1; i >= 0; i--) {
+        const msg = recentMessages[i];
+        if (msg.role === "assistant" && msg.content.length > 10) {
+          content = msg.content;
+          // Extract title from the first line if it looks like a heading
+          const firstLine = content.split("\n")[0]?.trim();
+          if (firstLine && firstLine.length < 100) {
+            title = firstLine.replace(/^#+\s*/, "").replace(/\*\*/g, "");
+          }
+          console.info("[pdf-turn] Content resolved from conversation", {
+            messageIndex: i,
+            contentLength: content.length,
+            title: title.slice(0, 50),
+          });
+          break;
+        }
+      }
+    } catch (error) {
+      console.warn("[pdf-turn] Failed to query conversation:", error);
+    }
+  }
+
+  // Strategy 3: Check in-memory session transcript
+  if (!content && session.state.conversation) {
+    const transcript = session.state.conversation;
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      const msg = transcript[i];
+      if (msg.role === "assistant" && msg.content.length > 10) {
+        content = msg.content;
+        const firstLine = content.split("\n")[0]?.trim();
+        if (firstLine && firstLine.length < 100) {
+          title = firstLine.replace(/^#+\s*/, "").replace(/\*\*/g, "");
+        }
+        console.info("[pdf-turn] Content resolved from in-memory transcript", {
+          contentLength: content.length,
+          title: title.slice(0, 50),
+        });
+        break;
+      }
     }
   }
 
   // If still no content, ask for clarification
   if (!content) {
+    console.info("[pdf-turn] No content found — asking for clarification");
     return {
       organizationId,
       reply: isEs

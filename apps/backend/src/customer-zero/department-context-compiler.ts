@@ -961,10 +961,11 @@ export function renderRuntimeBusinessContextForEngine(
     "Tool results are returned in one or more <departify_tool_result> blocks; provider truth and approval state are authoritative. Read-only tools may run without approval. Side effects remain approval-gated, and do not prevent safe independent reads from being completed.",
     "EXECUTION TRUTH — CAPABILITIES:",
     "- PDF generation: AVAILABLE via departify.pdf.generate. When the CEO asks for a PDF, use this tool with the content/title from the previous analysis.",
-    "- Image generation/creation: no tool exists. Never offer to create or generate images.",
-    "- Video creation/editing: no tool exists.",
+    "- Image generation/creation: NOT_INSTALLED. In Build Mode, may be acquired if needed.",
+    "- Video creation/editing: NOT_INSTALLED. In Build Mode, may be acquired if needed.",
     "- Spreadsheets with formulas/pivot tables: drive.create_file creates plain files only.",
     "- Automated social media posting without approval: all publishing is approval-gated.",
+    "CAPABILITY RESOLUTION: Check the tool list for AVAILABLE capabilities. For capabilities not listed, they are NOT_INSTALLED. In Build Mode, NOT_INSTALLED capabilities may be acquired if the CEO explicitly requests them. In Client Mode, NOT_INSTALLED capabilities are unavailable.",
     "CRITICAL: If you are unsure whether a capability exists, check the tool list. If the tool is not listed, the capability does not exist. Never invent capabilities.",
   ].join("\n");
 }
@@ -982,10 +983,11 @@ export function renderRuntimeBusinessContextForNativeEngine(
     JSON.stringify(businessSafeRuntimeContext(context)),
     "EXECUTION TRUTH — CAPABILITIES:",
     "- PDF generation: AVAILABLE via departify.pdf.generate. When the CEO asks for a PDF, use this tool with the content/title from the previous analysis.",
-    "- Image generation/creation: no tool exists. Never offer to create or generate images.",
-    "- Video creation/editing: no tool exists.",
+    "- Image generation/creation: NOT_INSTALLED. In Build Mode, may be acquired if needed.",
+    "- Video creation/editing: NOT_INSTALLED. In Build Mode, may be acquired if needed.",
     "- Spreadsheets with formulas/pivot tables: drive.create_file creates plain files only.",
     "- Automated social media posting without approval: all publishing is approval-gated.",
+    "CAPABILITY RESOLUTION: Check the tool list for AVAILABLE capabilities. For capabilities not listed, they are NOT_INSTALLED. In Build Mode, NOT_INSTALLED capabilities may be acquired if the CEO explicitly requests them. In Client Mode, NOT_INSTALLED capabilities are unavailable.",
     "CRITICAL: If you are unsure whether a capability exists, check the tool list. If the tool is not listed, the capability does not exist. Never invent capabilities.",
   ].join("\n");
 }

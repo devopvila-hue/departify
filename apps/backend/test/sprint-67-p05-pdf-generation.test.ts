@@ -338,9 +338,9 @@ describe("Sprint 67 P0.5 — Real PDF capability + multi-turn execution", () => 
 
       const rendered = renderRuntimeBusinessContextForEngine(context, "[]");
 
-      // Should still contain limitations for non-existent capabilities
-      expect(rendered).toContain("Image generation/creation: no tool exists");
-      expect(rendered).toContain("Video creation/editing: no tool exists");
+      // Should still contain capability resolution states
+      expect(rendered).toContain("Image generation/creation: NOT_INSTALLED");
+      expect(rendered).toContain("Video creation/editing: NOT_INSTALLED");
     });
   });
 
