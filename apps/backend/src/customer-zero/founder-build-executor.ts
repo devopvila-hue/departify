@@ -21,6 +21,7 @@
  */
 
 import type { EngineAdapter, EngineMessageResult } from "@departify/engine-adapter";
+import { OpenClawEngineAdapter } from "@departify/engine-adapter";
 
 /** Workspace paths the founder is authorized to modify (URLs, not filesystem). */
 const AUTHORIZED_WORKSPACE_DOMAINS = [
@@ -46,6 +47,7 @@ export interface FounderBuildResult {
   readonly message: string;
   readonly details?: Record<string, unknown>;
   readonly skillInstalled?: string;
+  readonly operation?: string;
 }
 
 /** Founder build command types. */
@@ -174,6 +176,21 @@ export class FounderBuildExecutor {
   }
 
   /**
+   * Try to call OpenClaw gateway RPC directly (bypasses LLM).
+   * Returns null if the engine doesn't support raw RPC.
+   */
+  private async tryDirectRpc(method: string, params: Record<string, unknown> = {}): Promise<unknown | null> {
+    if (this.engine instanceof OpenClawEngineAdapter) {
+      try {
+        return await this.engine.requestRpc(method, params);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Execute a founder build command.
    */
   async execute(
@@ -274,26 +291,84 @@ export class FounderBuildExecutor {
 
   /**
    * List installed skills via OpenClaw.
+   *
+   * Prefers direct gateway RPC (skills.status, ~50ms) over LLM routing
+   * (~69s) for this deterministic operation.
    */
   private async listSkills(
     organizationId: string,
     userId: string,
   ): Promise<FounderBuildResult> {
-    const command = `List all installed skills. Use: openclaw skills list\n\nIf that command is not available, list all SKILL.md files in the workspace skills directory and parse their frontmatter (name, description). Return a formatted list.`;
+    // Try direct RPC first — deterministic, fast (~50ms)
+    const directResult = await this.tryDirectRpc("skills.status", {});
+    if (directResult && typeof directResult === "object") {
+      const skills = (directResult as { skills?: unknown[] }).skills ?? [];
+      if (Array.isArray(skills)) {
+        console.info("[founder-build] listSkills via direct RPC", { skillCount: skills.length });
+        const lines = skills.map((s: unknown, i: number) => {
+          const skill = s as { name?: string; description?: string; enabled?: boolean };
+          const name = skill.name ?? "unknown";
+          const desc = skill.description ?? "Sin descripción";
+          const status = skill.enabled === false ? " (deshabilitada)" : "";
+          return `${i +1}. **${name}**${status}: ${desc}`;
+        });
+        const message = skills.length ===0
+          ? "No hay skills instaladas actualmente."
+          : `**Skills instaladas (${skills.length}):**\n\n${lines.join("\n")}`;
+        return { success: true, message, operation: "list_skills" };
+      }
+    }
 
+    // Fallback: send through LLM (slower, but works if RPC unavailable)
+    console.info("[founder-build] listSkills falling back to LLM (direct RPC unavailable)");
+    const command = `List all installed skills. Use: openclaw skills list\n\nIf that command is not available, list all SKILL.md files in the workspace skills directory and parse their frontmatter (name, description). Return a formatted list.`;
     return this.sendToOpenClaw(command, organizationId, userId, "list_skills");
   }
 
   /**
    * Inspect a specific skill via OpenClaw.
+   *
+   * Prefers direct gateway RPC (skills.status with filter) over LLM routing.
    */
   private async inspectSkill(
     name: string,
     organizationId: string,
     userId: string,
   ): Promise<FounderBuildResult> {
-    const command = `Inspect the skill "${name}". Show its full SKILL.md content, including frontmatter metadata (name, description, version, author) and the complete instruction body.`;
+    // Try direct RPC first — deterministic, fast
+    const directResult = await this.tryDirectRpc("skills.status", {});
+    if (directResult && typeof directResult === "object") {
+      const skills = (directResult as { skills?: unknown[] }).skills ?? [];
+      if (Array.isArray(skills)) {
+        const skill = skills.find((s: unknown) => {
+          const sk = s as { name?: string };
+          return sk.name?.toLowerCase() === name.toLowerCase();
+        });
+        if (skill) {
+          console.info("[founder-build] inspectSkill via direct RPC", { name });
+          const sk = skill as { name?: string; description?: string; version?: string; author?: string; enabled?: boolean; source?: string };
+          const lines = [
+            `**${sk.name ?? name}**`,
+            sk.description ? `Descripción: ${sk.description}` : null,
+            sk.version ? `Versión: ${sk.version}` : null,
+            sk.author ? `Autor: ${sk.author}` : null,
+            sk.source ? `Fuente: ${sk.source}` : null,
+            sk.enabled === false ? "Estado: deshabilitada" : "Estado: habilitada",
+          ].filter(Boolean);
+          return { success: true, message: lines.join("\n"), operation: "inspect_skill" };
+        }
+        console.info("[founder-build] inspectSkill: skill not found via RPC", { name, available: skills.map((s: unknown) => (s as { name?: string }).name) });
+        return {
+          success: false,
+          message: `Skill "${name}" no encontrada. Skills disponibles: ${skills.map((s: unknown) => (s as { name?: string }).name ?? "unknown").join(", ")}`,
+          operation: "inspect_skill",
+        };
+      }
+    }
 
+    // Fallback: send through LLM
+    console.info("[founder-build] inspectSkill falling back to LLM", { name });
+    const command = `Inspect the skill "${name}". Show its full SKILL.md content, including frontmatter metadata (name, description, version, author) and the complete instruction body.`;
     return this.sendToOpenClaw(command, organizationId, userId, "inspect_skill");
   }
 
@@ -338,6 +413,7 @@ export class FounderBuildExecutor {
     userId: string,
     commandType: string,
   ): Promise<FounderBuildResult> {
+    console.info("[founder-build] sendToOpenClaw (LLM path)", { commandType, organizationId });
     try {
       const session = await this.ensureFounderSession(organizationId, userId);
       const result = await this.engine.sendMessage({
@@ -345,6 +421,12 @@ export class FounderBuildExecutor {
         message: `[FOUNDER BUILD MODE — ${commandType}]\n\n${message}`,
         runtimeContext: this.buildFounderContext(organizationId),
         nativeBusinessTools: false, // Business tools disabled in build mode
+      });
+
+      console.info("[founder-build] sendToOpenClaw completed", {
+        commandType,
+        status: result.status,
+        textLength: result.text?.length ?? 0,
       });
 
       return {
@@ -357,6 +439,11 @@ export class FounderBuildExecutor {
         },
       };
     } catch (error) {
+      console.error("[founder-build] sendToOpenClaw failed", {
+        commandType,
+        errorType: error instanceof Error ? error.constructor.name : "UnknownError",
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
       return {
         success: false,
         message: `Error ejecutando comando: ${error instanceof Error ? error.message : String(error)}`,

@@ -6126,14 +6126,41 @@ async function runCeoMessageTurn(
         userRole,
       );
 
+      if (!founderAuth) {
+        console.info("[founder-build] Authorization failed", {
+          userId,
+          organizationId,
+          userRole,
+          hasOrganizations: !!deps.organizations,
+        });
+      }
+
       if (founderAuth) {
         // Founder is authorized — execute through privileged plane
         const executor = new FounderBuildExecutor(deps.engine);
-        const result = await executor.execute(
-          founderBuildCommand,
-          organizationId,
-          userId,
-        );
+        let result;
+        try {
+          result = await executor.execute(
+            founderBuildCommand,
+            organizationId,
+            userId,
+          );
+        } catch (err) {
+          const errorType = err instanceof Error ? err.constructor.name : "UnknownError";
+          const errorMessage = err instanceof Error ? err.message : String(err);
+          console.error("[founder-build] Execution failed", {
+            errorType,
+            errorMessage,
+            commandType: founderBuildCommand.type,
+            userId,
+            organizationId,
+          });
+          result = {
+            success: false,
+            message: `Error ejecutando comando de build: ${errorMessage}`,
+            operation: founderBuildCommand.type,
+          };
+        }
 
         // Audit log
         const auditEntry: Omit<import("../../customer-zero/founder-build-mode.js").AuditTrailEntry, "timestamp"> = {

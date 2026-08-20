@@ -404,6 +404,18 @@ export class OpenClawEngineAdapter implements EngineAdapter {
     };
   }
 
+  /**
+   * Perform a raw RPC call to the OpenClaw gateway.
+   *
+   * Used by Founder Build for deterministic operations (skill listing,
+   * inspection) that must NOT route through the LLM. Exposed as a public
+   * escape-hatch so callers with a known provider can bypass the
+   * provider-neutral EngineAdapter contract when speed matters.
+   */
+  async requestRpc(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    return this.client.request(method, params);
+  }
+
   async health(): Promise<EngineHealth> {
     try {
       await this.client.connect();
