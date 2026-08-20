@@ -6113,10 +6113,17 @@ async function runCeoMessageTurn(
   {
     const founderBuildCommand = detectFounderBuildCommand(operationalMessage);
     if (founderBuildCommand && deps.engine && userId) {
-      // Check founder authorization
+      // Check founder authorization — resolve user's organization role first
+      let userRole: string | undefined;
+      if (deps.organizations) {
+        const memberships = await deps.organizations.listForUser(userId);
+        const membership = memberships.find((m) => m.organizationId === organizationId);
+        userRole = membership?.role;
+      }
       const founderAuth = checkFounderAuthorization(
         userId,
         organizationId,
+        userRole,
       );
 
       if (founderAuth) {
