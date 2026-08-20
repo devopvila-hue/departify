@@ -6102,6 +6102,32 @@ async function runCeoMessageTurn(
             nativeBusinessTools: false,
             ...(chunkSink ? { onChunk: chunkSink } : {}),
           });
+
+          // Sprint 67 P0.7 — The EngineAdapter swallows EngineErrors and
+          // returns { text: "", status: "failed" } instead of throwing.
+          // Detect failed results and handle context overflow directly.
+          if (result.status === "failed" && !result.text) {
+            const code = (result as { errorCode?: string }).errorCode ?? "UNKNOWN";
+            console.warn("[founder-direct] Engine returned failed result", {
+              errorCode: code,
+              sessionKey: founderSessionKey,
+            });
+            // Close the stuck session and create a fresh one, then retry.
+            // This handles context overflow and any other stuck-session state.
+            try {
+              await deps.engine.closeSession(founderSessionId);
+            } catch {
+              // Ignore close errors
+            }
+            await deps.engine.createSession({ sessionId: founderSessionKey, agentId: "main" });
+            founderSessionId = founderSessionKey;
+            result = await deps.engine.sendMessage({
+              sessionId: founderSessionId,
+              message: founderContext,
+              nativeBusinessTools: false,
+              ...(chunkSink ? { onChunk: chunkSink } : {}),
+            });
+          }
         } catch (sendError) {
           const errorMsg = sendError instanceof Error ? sendError.message : String(sendError);
 
@@ -6157,7 +6183,19 @@ async function runCeoMessageTurn(
           status: result.status,
           textLength: result.text?.length ?? 0,
           durationMs: result.durationMs,
+          hasToolCalls: Array.isArray((result as { toolCalls?: unknown }).toolCalls),
+          toolCallCount: ((result as { toolCalls?: Array<{ name: string }> }).toolCalls ?? []).length,
         });
+
+        // Sprint 67 P0.7 — If OpenClaw returned completed with no text,
+        // log the full result for diagnosis. This happens when the agent
+        // loop finishes but no final assistant message is captured.
+        if (result.status === "completed" && !result.text) {
+          console.warn("[founder-direct] Empty text on completed result — dumping result keys", {
+            resultKeys: Object.keys(result as object),
+            sessionId: founderSessionId,
+          });
+        }
 
         return completeDeterministicOperationTurn(
           session,
