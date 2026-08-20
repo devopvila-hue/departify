@@ -215,7 +215,9 @@ describe("Sprint 66 P0 — chat reliability + branding surface", () => {
   it("C1+C2+C3+C4: three consecutive turns — one engine invocation each, one result each, three persisted message pairs", async () => {
     const { org, conversationId } = await startOrg();
     engine.responses = [];
-    for (const message of ["hola", "qué puedes hacer", "continúa"]) {
+    // Sprint 67 P0.3 — use business messages to test the full engine pipeline.
+    // Greetings now take the lightweight fast path.
+    for (const message of ["qué tareas tengo", "qué puedes hacer", "continúa"]) {
       const result = await sendStream(org, conversationId, message);
       expect(result.status).toBe(200);
       const resultFrames = result.frames.filter((f) => f.eventName === "result");

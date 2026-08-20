@@ -193,7 +193,7 @@ describe("Sprint 65 P0 — Real Streaming Transport on every conversation turn",
     const response = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/conversations/${conversationId}/messages/stream`,
-      payload: { message: "hola" },
+      payload: { message: "qué tareas tengo" },
     });
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("text/event-stream");
@@ -223,7 +223,7 @@ describe("Sprint 65 P0 — Real Streaming Transport on every conversation turn",
     const response = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/conversations/${conversationId}/messages/stream`,
-      payload: { message: "hola" },
+      payload: { message: "qué tareas tengo" },
     });
     expect(response.statusCode).toBe(200);
     const raw = response.body as string;
@@ -243,7 +243,7 @@ describe("Sprint 65 P0 — Real Streaming Transport on every conversation turn",
       const response = await authedInject({
         method: "POST",
         url: `/api/customer-zero/${org}/conversations/${conversationId}/messages/stream`,
-        payload: { message: "hola" },
+        payload: { message: "qué tareas tengo" },
       });
       expect(response.statusCode).toBe(200);
       const frames = parseSse(response.body as string);
@@ -264,7 +264,7 @@ describe("Sprint 65 P0 — Real Streaming Transport on every conversation turn",
     const response = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/conversations/${conversationId}/messages/stream`,
-      payload: { message: "hola" },
+      payload: { message: "qué tareas tengo" },
     });
     // The happy path: at least confirm the result frame has a closure
     // (a terminal event) and the body never contains stack traces.
@@ -282,7 +282,7 @@ describe("Sprint 65 P0 — Real Streaming Transport on every conversation turn",
     const response = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/conversations/${conversationId}/messages/stream`,
-      payload: { message: "hola persistente" },
+      payload: { message: "tareas pendientes" },
     });
     expect(response.statusCode).toBe(200);
     // Reload the conversation via the canonical GET endpoint.
@@ -296,7 +296,7 @@ describe("Sprint 65 P0 — Real Streaming Transport on every conversation turn",
       content: string;
     }>;
     const ceoMessages = messages.filter(
-      (m) => m.role === "user" && m.content === "hola persistente",
+      (m) => m.role === "user" && m.content === "tareas pendientes",
     );
     const assistantReplies = messages.filter(
       (m) => m.role === "assistant" && m.content.length > 0,
@@ -355,7 +355,7 @@ describe("Sprint 65 P0 — Real Streaming Transport on every conversation turn",
     const response = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/conversations/does-not-exist/messages/stream`,
-      payload: { message: "hola" },
+      payload: { message: "qué tareas tengo" },
     });
     expect(response.statusCode).toBe(404);
     expect(response.headers["content-type"]).not.toContain("text/event-stream");

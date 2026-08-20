@@ -156,7 +156,9 @@ describe("Sprint 66 P0 — multi-turn measurement", () => {
 
   it("TT-1: 3-turn waterfall — measure per-turn engine call count, session lookup, policy set", async () => {
     const { org, conversationId } = await startOrg();
-    const messages = ["hola", "qué puedes hacer por mi empresa", "continúa"];
+    // Sprint 67 P0.3 — use business messages to test the full engine pipeline.
+    // Greetings now take the lightweight fast path.
+    const messages = ["qué tareas tengo", "qué puedes hacer por mi empresa", "continúa"];
     for (let i = 0; i < messages.length; i++) {
       const message = messages[i];
       const start = Date.now();

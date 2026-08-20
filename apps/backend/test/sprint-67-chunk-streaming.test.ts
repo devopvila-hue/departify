@@ -227,7 +227,7 @@ describe("Sprint 67 P0 — progressive assistant text (content_delta)", () => {
     const response = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/conversations/${conversationId}/messages/stream`,
-      payload: { message: "hola" },
+      payload: { message: "qué tareas tengo" },
     });
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("text/event-stream");
@@ -281,7 +281,7 @@ describe("Sprint 67 P0 — progressive assistant text (content_delta)", () => {
     await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/conversations/${conversationId}/messages/stream`,
-      payload: { message: "hola persistente" },
+      payload: { message: "tareas pendientes" },
     });
     const after = await authedInject({
       method: "GET",
@@ -293,7 +293,7 @@ describe("Sprint 67 P0 — progressive assistant text (content_delta)", () => {
     }>;
     expect(messages.length).toBe(beforeCount + 2);
     const ceoMsgs = messages.filter(
-      (m) => m.role === "user" && m.content === "hola persistente",
+      (m) => m.role === "user" && m.content === "tareas pendientes",
     );
     const asstMsgs = messages.filter(
       (m) => m.role === "assistant" && m.content.length > 0,
@@ -307,7 +307,7 @@ describe("Sprint 67 P0 — progressive assistant text (content_delta)", () => {
     const response = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/conversations/${conversationId}/messages/stream`,
-      payload: { message: "di hola" },
+      payload: { message: "muestra las tareas" },
     });
     const raw = response.body as string;
     for (const forbidden of [
@@ -328,7 +328,9 @@ describe("Sprint 67 P0 — progressive assistant text (content_delta)", () => {
 
   it("I: three consecutive turns in the same conversation — one stream per turn, full durability", async () => {
     const { org, conversationId } = await startOrg();
-    const prompts = ["hola", "qué haces", "continúa"];
+    // Sprint 67 P0.3 — use business messages to test the full engine pipeline.
+    // Greetings now take the lightweight fast path.
+    const prompts = ["qué tareas tengo", "qué haces", "continúa"];
     const callsBefore = engine.calls.length;
     for (const prompt of prompts) {
       const response = await authedInject({
@@ -358,7 +360,7 @@ describe("Sprint 67 P0 — progressive assistant text (content_delta)", () => {
     const response = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/conversations/${conversationId}/messages/stream`,
-      payload: { message: "di hola" },
+      payload: { message: "muestra las tareas" },
     });
     const raw = response.body as string;
     const chunks = parseSse(raw)

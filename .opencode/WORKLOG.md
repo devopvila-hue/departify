@@ -1,392 +1,98 @@
-# WORKLOG — Post-OAuth Gmail Operational Recovery + Central Chat Reality
+# Sprint 67 P0.1 — Worklog
 
-## Sesión 1 (2026-08-10) — Recuperación + auditoría
+## Recovered state (from the session that died)
 
-### RECOVERY CHECKPOINT (estado del working tree heredado de Claude Code)
+Claude had finished P0.1-A end-to-end (server-side name persistence +
+deterministic capture + runtime context + ask-once) and had started
+P0.1-B: the deterministic `resolveNextBestActions` resolver, the
+`CeoMessageResult.nextActions` field on the backend, the
+`CommandCenterNextAction` type and the `nextActions` state on the
+portal — but the portal had no UI yet (chips were not rendered, and
+`setNextActions(result.nextActions ?? [])` was never called).
 
-**completed (ya en working tree, sin commitear):**
-- `google-tokens.ts` (nuevo): token store durable (InMemory + Supabase), refresh rotation,
-  granted-scope parsing, `mergeTokenExchange` (preserva refresh token), probe operativo
-  Gmail (`gmail.users.getProfile`), `completeGoogleOAuthCallback` (state → exchange →
-  scopes → refresh → identity → probe → persist), `GMAIL_SCOPE_TO_CAPABILITY` mapping.
-- Migración `supabase/migrations/20260810150000_google_oauth_tokens.sql` (tabla durable,
-  RLS block-all, service_role).
-- `main.ts`: cablea `SupabaseGoogleTokenStore` en boot (producción durable).
-- `gmail-adapter.ts`: lee del store durable primero; refresh vía google-tokens; scopes granted.
-- `credential-resolver.ts`: `resolveGoogleCredentials` async, `hasOperationalGoogleIdentity(ForOrg)`,
-  `googleTokenSummaryFor`, guards provider mautic/resend.
-- `customer-zero-v2.ts`: callback usa `completeGoogleOAuthCallback` y solo marca
-  `connected` si probe OK + refresh token; dispatch email en `processCeoMessage`
-  (`isEmailQuestion` → `runGmailRead` → `GmailAdapter.searchMessages`); eventos por turno
-  = solo transcript + work states (sin `buildProactiveOpening` repetido);
-  `buildCatalogConnectionViews` async leyendo el store durable.
-- `chat-response-enrichment.ts`: `workStatesForTurn` → [] si no hay trabajo delegado
-  (greeting ya no produce "Mensaje recibido"/"Listo").
-- `department-work-executor.ts`/`mautic-tools.ts`/`email-delivery-adapter.ts`: guards
-  de provider + fix `apiKey` Resend.
-- Tests parcheados: mock del probe Gmail en oauth-routes + canonical-redirect; assert
-  provider en credential-resolver.
+## What I finished
 
-**partial:**
-- Tests A–Z del goal: NO escritos (solo 3 ficheros parcheados). Falta suite para
-  google-tokens + chat reality.
-- P0-9: la apertura `/command-center/opening` sigue emitiendo la tarjeta
-  "Elvira ya está lista…" sin objetivo ni trabajo (fake proactivity en carga inicial).
+- **Portal rendering** — `apps/portal/src/routes/ChatRoute.tsx`:
+  - Wired `setNextActions(result.nextActions ?? [])` after the response.
+  - Re-cap defensively at 3 before render (the backend already caps,
+    the portal defends against an older or non-canonical response).
+  - Render `.dfy-next-actions` row under the latest assistant reply
+    with one `.dfy-chip` per action, classification-aware border, and
+    `disabled={busy}` so a stale chip can never fire during a turn.
+  - Click handler calls `send(action.request)` — same `send()` path,
+    same transport, exactly one execution.
 
-**missing:**
-- Suite de tests nueva (granted scopes, refresh preservation, mapping capacidades,
-  aislamiento org, tokens fuera de APIs públicas, probe OK/fail → connected/no,
-  "hola" → reply conversacional, sin tarjeta Elvira repetida, Gmail question → respuesta
-  grounded, empty → honesto, unavailable → recovery).
-- Quality gates completos del monorepo.
-- Commit + push + verificación deploy.
+- **Portal styling** — `apps/portal/src/styles/tokens.css`:
+  - `.dfy-next-actions` flex row using the existing chip surface.
+  - NEEDS_CONNECTION gets a dashed border.
+  - NEEDS_APPROVAL gets a warning-tinted border.
+  - `disabled` is visually distinct.
 
-**suspicious:**
-- `isEmailQuestion` declarada async sin await (cosmético; lint OK).
-- `completeGmailOAuth` legacy sigue vivo solo para tests antiguos (coexiste con el nuevo pipeline).
-- `runGmailRead` elige la primera fila operacional del org (userId desconocido en el
-  prototipo) — aceptable según el comentario del autor.
+- **Test fixture fix** — `apps/backend/test/next-best-actions.test.ts`:
+  - The marketing fixture used `producedByCapability: "marketing.plan"`
+    which is not a valid `DepartmentWorkCapability`. Replaced with
+    `marketing.wordpress.connection.test` (valid, does not affect the
+    resolver's department-based branch).
 
-**next smallest action:** testear el estado actual es verde (backend 415/415, lint,
-typecheck OK) y escribir la suite A–Z + arreglar la tarjeta Elvira-ready en el opening.
+- **Portal test** — `apps/portal/src/routes/next-best-actions.test.tsx`
+  (new, 3 cases): N3 (max 3 chips), N7 (greeting yields none),
+  N8 (click triggers exactly one new turn with the chip request as
+  the user message).
 
-## Sesión 2 (2026-08-10) — EVIDENCIA REAL DE PRODUCCIÓN (nuevo brief del founder)
+## Verified locally
 
-### Hallazgos de runtime (Railway + Supabase)
-- Producción corre el commit **52ca47c** desde GitHub (deploy automático al push). El
-  trabajo interrumpido (google-tokens, durable store, probe) NO está desplegado.
-- **P0 A — OAuth state store en memoria**: `gmailOAuthStateStore` es un `Map` del
-  proceso. En Railway (multi-instancia o reinicio entre connect y callback) el lookup
-  del nonce falla → `invalid_state` 401 → portal muestra error → Gmail NO conectado →
-  bucle. Coincide EXACTAMENTE con el síntoma del founder.
-- **P0 B — la versión desplegada (52ca47c) guarda tokens SOLO en memoria**
-  (`gmailTokenStore` Map), sin probe operativo, sin scopes granted, sin preservación
-  de refresh token. El working tree lo arregla pero no está desplegado.
-- **P0 C — migración NO aplicada**: `google_oauth_tokens` no existía en Supabase de
-  producción (404). El pipeline nuevo habría petado en `put()` → 500 → bucle.
-  **RESUELTO**: `supabase db push` aplicó 3 migraciones pendientes (inbox, compaction,
-  google_oauth_tokens) → tablas verificadas (200).
-- **Observado — 100% de peticiones HTTP recientes en 4xx**: spam de `work-feed` 401
-  (~1.5s) → el tab del founder tiene un JWT de Supabase inválido/caducado. Un 401 en el
-  POST del callback produce exactamente "vuelve → No conectado" sin explicación.
-- `SUPABASE_JWKS_UR` en Railway está mal escrito (falta L) pero el código NO lo usa
-  (auth vía `supabase.auth.getUser(token)`), así que es inerte.
+- Backend typecheck: clean.
+- Backend tests: 844 passed (next-best-actions + personal-identity
+  both green).
+- Engine-adapter typecheck + tests: clean (29 passed).
+- Portal typecheck: clean.
+- Portal tests: 144 passed (was 141 — added 3 in the new file).
+- Portal dev build: succeeds.
+- Workspace typecheck: clean across all packages.
 
-### Decisiones de arreglo
-1. **State store durable**: nueva tabla `oauth_state` + adaptador Supabase (mismo
-   patrón que google-tokens), cableado en main.ts, fallback in-memory para tests.
-2. Desplegar el pipeline interrumpido (durable tokens + probe + scopes + chat fixes).
-3. Diagnósticos seguros por checkpoint en el callback.
-4. Portal: mensaje de error claro si el callback falla (incl. hint de re-login en 401).
-5. Tests A–Z + tests del state store durable (incl. simulación cross-instancia).
+## Verified in production (this turn)
 
-### Implementado en esta sesión
-- `oauth-state.ts` (nuevo): state store durable (InMemory + Supabase), async
-  interface, DI boundary (`setGoogleOAuthStateStore`/`getGoogleOAuthStateStore`),
-  `gmailOAuthStateStore` exportado como fallback compartido (tests lo seedean).
-- `20260810160000_oauth_state_durable.sql` (nuevo): tabla `oauth_state`, RLS block-all.
-- `gmail-adapter.ts`: `startGmailOAuth` async → store durable; `completeGmailOAuth`
-  lee/consume el store durable.
-- `google-tokens.ts`: `validateOAuthState` async; `mergeTokenExchange` NO sobrescribe
-  refresh token con "" (trata vacío como ausente); read-back write→reload con code
-  `credential_persisted_but_not_readable`; checkpoints seguros
-  (`onCheckpoint`) en todo el pipeline (state_valid, token_exchange_success/failed,
-  granted_scopes, refresh_token_present, existing_refresh_token_present,
-  credential_persisted, credential_reload_success, gmail_probe_success/failed,
-  connection_marked_operational/not_operational).
-- `customer-zero-v2.ts`: connect await startGmailOAuth; callback usa
-  `getGoogleOAuthStateStore()` + `onCheckpoint` → request.log;
-  `google_oauth_callback_complete` log al final; export test-reset del cache
-  `googleOperationalCache`.
-- `main.ts`: cablea `SupabaseOAuthStateStore` en boot.
-- Portal `GoogleOAuthCallbackRoute.tsx`: mensajes por código de error del backend
-  (invalid_state/replay/org/user → "expiró"; auth → "sesión caducada, vuelve a entrar";
-  GOOGLE_OAUTH_NOT_CONFIGURED; credential_persisted_but_not_readable; default claro).
-  NUNCA "no conectado" sin explicación.
-- Tests: `customer-zero-05-post-oauth.test.ts` (27 tests A–Z): granted scopes,
-  capability mapping, refresh preservation, org isolation, summaries sin tokens,
-  state store durable contract (incl. Z2: instancia fresca → invalid_state honesto),
-  N/O/P/Q/R/S/T/U/V/W/X/M.
-- Fix flakiness: timeouts B1/B2 en context-readiness (import dinámico lento).
+- **Backend (Railway `departify-api`)**:
+  - Latest deployment: `1dca3366` — SUCCESS
+  - Commit: `6e73319386378686c3fa511079ba05fcb62aef9a` (matches my push)
+  - `https://api.departify.app/health` → `{"status":"ok"}`
+  - `https://api.departify.app/version` → `{"name":"@departify/backend","version":"0.0.0","environment":"production"}`
+  - Deploy logs: clean boot, engine adapter initialised, server
+    listening on 8080, receiving requests.
 
-### Estado
-- Backend: 442/442 tests verdes, lint OK, typecheck OK.
-- Migraciones aplicadas a producción Supabase: inbox, compaction, google_oauth_tokens,
-  oauth_state (verificadas con 200).
-- PENDIENTE: gates del monorepo, commit, push, verificación de deploy, informe final.
+- **Portal (Netlify `app.departify.app`)**:
+  - HTTP 200, Vite SPA served from `/assets/index-DRzLqWJM.js`
+  - JS bundle contains the new markers:
+    - `dfy-next-actions` (CSS class for the chip row)
+    - `chat-next-actions` (data-testid for the row)
+    - `chat-next-action` (data-testid for each chip)
+  - This confirms the portal build includes the Next Best Actions UI.
 
-## Sesión 4 (2026-08-10) — Gmail atascado en "CONECTANDO…" (validación live del founder)
+## Out of scope (untouched)
 
-### Diagnóstico con evidencia de PRODUCCIÓN (sin especulación)
+P0.1-A files, OpenClaw gateway, agent.wait, models/providers, SSE,
+streaming, content_delta, WritingIndicator, STOP, BYOK, connections,
+visual identity, routing, Elvira/Marketing, SEO identity. No
+spurious SEO "responsable" was invented.
 
-**LAST SUCCESSFUL PRODUCTION CHECKPOINT:**
-`POST /api/customer-zero/{org}/connections/gmail/connect 200` (20:09:45 UTC) — el nonce
-se creó y persistió durablemente (2 nonces en oauth_state: 20:07:48 y 20:09:44).
+## Note on GOAL.md
 
-**FIRST FAILED/MISSING PRODUCTION CHECKPOINT:**
-`google_oauth_callback_received` — el POST `/connections/gmail/callback` **NUNCA llegó**
-al backend. Evidencia: 0 requests de callback en los HTTP logs de Railway (solo 2
-connect 200 en 4h); nonces sin consumir; `google_oauth_tokens` vacío; tool state gmail
-"selected".
+The `.opencode/GOAL.md` file is stale — it describes the Post-OAuth
+Gmail Operational Recovery goal that was completed in commit
+`686ebdb fix(customer-zero): complete Gmail operational path and real
+chat responses` with the final report in `62d2084`. The actual
+current sprint is Sprint 67 P0.1 (personal identity + Next Best
+Actions), which is what I completed and deployed.
 
-**ROOT CAUSE:**
-1. **Portal**: `GoogleOAuthCallbackRoute` estaba DENTRO de `ShellGate`. ShellGate puede
-   redirigir la página del callback a "/" (gate de auth/org/overview) ANTES de montar la
-   ruta → code+state se descartan silenciosamente → el exchange nunca se dispara.
-2. **Backend**: no existía ningún camino que sacara una conexión de status "connecting"
-   cuando el callback no llega (conexión de sesión quedaba "connecting" para siempre;
-   durable quedaba "selected").
+## Known gap
 
-### Fixes aplicados (commit 6ae7bb0)
-- **Portal**: callback movido a ruta TOP-LEVEL (fuera de ShellGate) → el exchange SIEMPRE
-  se dispara; fallback de org vía `readStoredOrganizationId()` si el contexto no sincronizó.
-- **Backend state machine** (invariante: connecting → terminal siempre):
-  - Todos los fallos del callback transicionan la conexión a blocked/needs_connection
-    con motivo accionable y persisten (antes: 401/500 sin tocar el estado).
-  - Reaper de handshakes huérfanos en `requireSession`: cualquier conexión Google en
-    "connecting" cuyo nonce no exista/esté caducado/consumido → terminal + persist.
-  - Timeouts acotados (15s) en TODAS las llamadas externas a Google (exchange, userinfo,
-    probe, refresh) — un cuelgue externo ya no puede dejar la conexión en "connecting";
-    timeouts del probe clasificados como `gmail_probe_timeout`.
-  - Códigos de validación OAuth (invalid_state/org/user/replay) → 401; otros códigos
-    (credential_persisted_but_not_readable) → 500.
-- **Tests nuevos**: C (probe 403), D (probe timeout), E (readback falla), F (excepción en
-  callback nunca deja connecting), Z2 actualizado al invariante.
+The portal production build requires Netlify env vars
+(`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`). These are set in
+Netlify (the live deploy proves it — the SPA loads and the API
+redirect works). The local production build fails only because those
+vars are not in my local shell.
 
-### Validaciones
-- Backend 446/446, portal 80/80, lint/typecheck/build/check verdes (36 paquetes).
-- Deploy Railway SUCCESS (6ae7bb0); stores durables cableados; health 200; bundle portal
-  actualizado (ruta top-level).
-- Estado durable del founder verificado en Supabase prod: gmail "selected" (terminal
-  honesto), nonces caducados → el reaper limpiará la sesión en la próxima request.
-
-## Sesión 3 (2026-08-10) — CIERRE
-
-- Gates completos del monorepo VERDES (36 paquetes): `pnpm -r lint`, `pnpm -r typecheck`,
-  `pnpm test` (backend 442/442), `pnpm -r build`, `pnpm check`.
-- Commit `686ebdb` "fix(customer-zero): complete Gmail operational path and real chat responses"
-  (26 archivos, +3093/−441). Push a origin/main OK.
-- Deploy Railway departify-api SUCCESS (commit 686ebdb); logs de boot confirman:
-  `[google-oauth] durable Supabase token store wired` y
-  `[google-oauth] durable Supabase oauth-state store wired`.
-- Netlify portal: bundle contiene el nuevo copy ("sesión ha caducado") → deploy vivo.
-- Smoke test contra Supabase de PRODUCCIÓN: `oauth_state` write→read-back OK + consume OK;
-  `google_oauth_tokens` write→read-back OK + scopes roundtrip OK.
-- `api.departify.app/health` 200; `/api/.../connections` sin auth → 401 (correcto).
-
-### INFORME FINAL (33 puntos)
-
-1. **RECOVERY CHECKPOINT (lo que dejó Claude)**: working tree con pipeline post-OAuth
-   casi completo sin commitear (google-tokens.ts durable, probe, scopes granted,
-   dispatch email en chat, fix hola/pills, fix Elvira) + migración google_oauth_tokens.
-   Backend 415/415 verde. Faltaban: tests A–Z, state store durable, migraciones aplicadas,
-   deploy, chat reality verificado.
-2. **Root cause "Gmail EN PREPARACIÓN"**: (a) la tarjeta era el evento connection_need
-   del opening/proactividad que se re-emitía tras cada mensaje; (b) el estado real de
-   conexión vivía en memoria y la UI no compartía una única fuente de verdad.
-3. **Punto exacto de fallo post-OAuth (producción)**: el OAuth state store era un `Map`
-   en memoria del proceso; en Railway (replicas/restarts) el callback no resolvía el nonce
-   → `invalid_state` 401 → el portal mostraba error → Gmail "no conectado" → bucle.
-   Además la versión desplegada (52ca47c) persistía tokens SOLO en memoria y la tabla
-   `google_oauth_tokens` no existía en Supabase de producción.
-4. **Granted scopes**: se parsean del token response real (mergeTokenExchange) y
-   mapean a capacidades existentes (GMAIL_SCOPE_TO_CAPABILITY / gmailCapabilitiesFromScopes).
-5. **Credential storage before**: memoria del proceso (gmailTokenStore Map) en 52ca47c.
-6. **Credential storage after**: Supabase `google_oauth_tokens` (org+user+provider),
-   service-role, RLS block-all; fallback in-memory solo para tests/dev.
-7. **Refresh token reconnect**: mergeTokenExchange preserva el token existente si Google
-   omite el nuevo (incl. "" tratado como ausente); nunca sobrescribe con null/undefined/vacío.
-8. **Org/user isolation**: claves (org,user) + listForOrg scoped + tests K/Y + RLS.
-9. **Operational probe**: `gmail.users.getProfile` tras el exchange; operational solo si
-   probe OK + refresh token persistido; write→read-back obligatorio con código
-   credential_persisted_but_not_readable.
-10. **Connection state source of truth**: store durable de tokens (google_oauth_tokens)
-    + tool state durable (SupabaseToolStateStore); /conexiones y chat derivan de ahí.
-11. **/conexiones behavior**: tras callback OK → Gmail Conectado; sobrevive reload/restart;
-    si el probe falla → estado bloqueado con motivo accionable.
-12. **Central Chat connection-state**: pregunta de email sin conexión → "Gmail todavía no
-    está conectado. Ve a Conexiones…" (accionable); con conexión → lee Gmail real.
-13. **Gmail capability mapping**: gmail.readonly → email.identity/context/search/thread.read;
-    gmail.compose → email.draft; gmail.send → email.send.personal.
-14. **Real Gmail read path**: processCeoMessage → isEmailQuestion → hasOperationalGoogleIdentityForOrg
-    → runGmailRead → GmailAdapter.searchMessages → resumen grounded en español.
-15. **"hola" root cause**: routing greeting existía, pero los pills "Mensaje recibido"/"Listo"
-    se emitían siempre (workStatesForTurn) y la proactividad Elvira se re-emitía por turno.
-16. **"hola" fix**: workStatesForTurn → [] si no hay trabajo delegado; respuesta
-    conversacional real del routing; transcript event siempre presente.
-17. **workflow-event fix**: eventos por turno = solo transcript + work states reales;
-    el opening proactivo se sirve SOLO en /command-center/opening.
-18. **Elvira fake-proactivity fix**: buildProactiveOpening solo emite la tarjeta con
-    objetivo/trabajo grounded; nunca "Elvira ya está lista…" tras hablar el CEO.
-19. **Conversation/session regression**: Sessions V1 intactas (tests de 5 activas,
-    archivo, compactación, aislamiento org siguen verdes — customer-zero-04).
-20. **Files changed**: 26 (ver commit 686ebdb). Clave: google-tokens.ts, oauth-state.ts,
-    gmail-adapter.ts, credential-resolver.ts, customer-zero-v2.ts, command-center.ts,
-    chat-response-enrichment.ts, main.ts, portal GoogleOAuthCallbackRoute.tsx + api.ts.
-21. **Migrations**: 20260810150000_google_oauth_tokens.sql + 20260810160000_oauth_state_durable.sql
-    (nuevas); aplicadas a producción junto con inbox+compaction pendientes.
-22. **Tests added/modified**: customer-zero-05-post-oauth.test.ts (27 nuevos); modificados
-    oauth-routes, canonical-redirect, customer-zero-01/02/03, context-readiness (timeouts).
-23. **Test totals**: backend 442/442 (35 ficheros); monorepo completo verde.
-24. **lint**: `pnpm -r lint` VERDE.
-25. **typecheck**: `pnpm -r typecheck` VERDE.
-26. **build**: `pnpm -r build` VERDE.
-27. **pnpm check**: VERDE (36/36 paquetes).
-28. **commit**: 686ebdb en main.
-29. **push/deployment**: push origin/main OK; Railway departify-api SUCCESS (686ebdb);
-    Netlify portal bundle con el nuevo copy; health 200.
-30. **VALIDATED**: autenticación/arranque en producción (stores durables cableados),
-    health, deploy, smoke Supabase (write→read-back de ambas tablas), tests A–Z,
-    bundle portal. NO validado Gmail real (requiere cuenta/browser del founder).
-31. **NOT VALIDATED**: flujo real de consentimiento de Google de extremo a extremo
-    (requiere el browser/Google del founder), lectura real de su bandeja, continuidad
-    conversacional real.
-32. **BLOCKED**: nada bloqueante. Nota: el tab del founder mostraba 401 en work-feed
-    (token Supabase caducado) — el portal ahora sugiere re-login en el callback.
-33. **EXACT FOUNDER MANUAL TEST**: (abajo)
-
-### FINAL STATUS: READY FOR FOUNDER HUMAN VALIDATION
-(Nunca PASS: la validación real de Gmail requiere la cuenta/browser del founder.)
-
-#### EXACT FOUNDER MANUAL TEST
-1. Abre https://app.departify.app y entra (si ves 401 repetidos, cierra sesión y vuelve a entrar).
-2. Ve a /conexiones.
-3. Gmail → Configurar.
-4. Completa el consentimiento de Google.
-5. Al volver: Gmail debe mostrar **Conectado** (si falla, verás un mensaje con la fase exacta).
-6. Recarga el navegador: Gmail sigue **Conectado**.
-7. Abre /chat y escribe: **¿Tengo algún correo importante?**
-8. Departify debe responder con correos reales de la bandeja (remitente/asunto).
-9. Escribe: **¿Cuáles debería contestar primero?** → continuidad conversacional.
-10. Escribe: **hola** → respuesta conversacional (no solo tarjetas "Mensaje recibido"/"Listo").
-11. Reinicio del backend (deploy) → Gmail sigue conectado.
-
-
-
-
-
-## Sesión 5 (2026-08-11) — Finalización del sprint heredado "Central Chat UX P0"
-
-Claude se detuvo por 429 (token-plan) con backend 466/466 y "portal tests + lint
-+ typecheck" pendientes. Working tree heredado: presenter Gmail
-(run-gmail-presentation), filtrado de connection_need del opening, auto-scroll con
-respeto a la posición manual.
-
-Trabajo de OpenCode:
-- Fixes mínimos de lint del código heredado (5 errores: projectConnectionSuggestion
-  muerto, params sin usar en el presenter).
-- Portal: tarjeta contextual de conexión sintetizada desde `connectionSuggestion`
-  del mensaje (el filtro no rompe las tarjetas genuinas); test 8 de sprint-59
-  actualizado al nuevo contrato (opening filtrado + tarjeta contextual del mensaje).
-- 4 tests nuevos de UX del chat (chat-ux.test.tsx): filtrado de opening,
-  send vuelve al último mensaje, affordance jump-to-latest, no-yank pasivo.
-- Gates: lint/typecheck/test/build/check verdes; backend 466/466, portal 98/98.
-- Commit 78f13cf "fix(chat): polish Gmail presentation and conversational UX",
-  push a main, deploy Railway SUCCESS + Netlify (bundle con jump-latest), health 200.
-- Scope: sin cambios en OAuth redirect/tokens/scopes, Calendar, Drive, OpenClaw,
-  departamentos, ni gate de onboarding (salvo commits heredados de Claude).
-
-## Sesión 6 (2026-08-11) — Customer Zero Email P0 closure
-
-### Diagnóstico del error rojo (evidencia de producción)
-- El error "Departify no ha podido responderte ahora mismo" = `result === null` en
-  ChatRoute (postJson null = fetch falló/cuerpo no-JSON).
-- Logs Railway: el último POST de mensaje de conversación devolvió **499 tras 28s**
-  (cliente cerró la petición) — el turno del engine/Elvira tardó demasiado.
-- Causa raíz: los turnos de EMAIL caían en `delegate_marketing` → engine (OpenClaw,
-  timeout 120s) → lento/cuelgue → 499 → error rojo; sin estado de trabajo pendiente
-  el follow-up no continuaba el objetivo.
-
-### Implementado (commits 0594e05 + 78e7f10)
-- Pipeline de email multi-turno determinista (SIN engine): intent `email_action`,
-  `pendingEmailWork` en sesión, extracción destinatario/objetivo, borrador +
-  aprobación conversacional, envío vía boundary de capacidad, resultado durable.
-  Follow-ups ("Son A, B y C", "a juan@…") continúan el MISMO trabajo.
-- Boundary `email-capability`: email.read/search/compose/send; providers
-  corporate (IMAP/SMTP) primero, Google como identidad por defecto.
-- Provider corporativo: tabla `email_accounts` (mismo patrón seguro), adaptadores
-  imapflow + nodemailer acotados a 15s, probes reales (IMAP connect+INBOX, SMTP
-  session — nunca envía como probe), configure/verify endpoints.
-- Portal: sección "Correo" con providers (Google/Gmail, Microsoft honesto
-  "Próximamente", Otro correo de empresa con formulario IMAP/SMTP).
-- Tests: 10 CZ06 (multi-turno, aprobación, envío, fallo, aislamiento, injection)
-  + 6 CZ07 (corporate probe ok/invalid, sin fuga de credenciales, send corporativo,
-  read corporativo, aislamiento).
-- Gates: backend 482/482, portal 98/98, lint/typecheck/build/check verdes (36 paq).
-- Migración `20260811090000_email_accounts` aplicada a producción (verificada).
-- Deploy Railway SUCCESS (78e7f10) con store corporativo cableado; Netlify bundle
-  con sección Correo; health 200; smoke Supabase prod write→read-back OK.
-
-## Sesión 7 (2026-08-11) — Onboarding/readiness production recovery
-
-### Root cause canónico (los 3 fallos comparten uno)
-El schema de respuesta de GET /:org NO incluía contextReady/contextMissing/
-stage → Fastify los eliminaba al serializar → el portal SIEMPRE veía
-contextReady=undefined → ningún org "ready" → caída al step de conversación
-legacy → next-question con question=null → handoff "Ya tengo suficiente"
-(botón muerto; understanding sin DNA → "No hemos podido preparar el resumen").
-El "fetch failed" del usuario nuevo era el error crudo de Node fetch
-(web-analysis) propagado sin mapear.
-
-### Fixes (commit 03b4090)
-- Schema 200 de /:org con contextReady/contextMissing/stage (llegan al portal).
-- durableOnboardingStage (intake→research→discovery→understanding→ready)
-  derivado SOLO del DNA durable; el portal rutea por stage.
-- next-question ya NO emite handoff (sin bypass legacy).
-- Org existente sin DNA → 200 stage intake en el MISMO org (nunca 404/borrado).
-- POST /:org/research para reintentar research en el mismo org.
-- web-analysis: errores de fetch en lenguaje de negocio (nunca "fetch failed");
-  el portal se queda en research con Reintentar (no resetea intake).
-- question===null → pantalla de revisión/confirmación (nunca el terminal legacy).
-
-### Validación
-Backend 506/506 (9 tests CZ08), portal 101/101, lint/typecheck/build verdes.
-Deploy Railway SUCCESS + Netlify bundle + health 200.
-FINAL STATUS: READY FOR FOUNDER VALIDATION (browser autenticado real NO validado).
-
----
-## Sprint 64b — Real-time SSE activity streaming (commit 2a5d415)
-
-### Qué se hizo
-Cerré el gap principal que dejó Sprint 64 en PARTIAL: el SSE real progresivo.
-La base `activitySink` ya existía; la cableé a un endpoint streaming y al portal.
-
-### Backend
-- Nueva ruta `POST /api/customer-zero/:org/command-center/message/stream`:
-  `reply.hijack()` + `text/event-stream`. Emite frames progresivos
-  `event: activity` (received → retrieving_context → delegated → streaming)
-  y termina con `event: result` (o `event: error`).
-- Mismo pipeline que el endpoint JSON; `processCeoMessage` SIN cambios.
-- Product Identity Boundary intacta: el timeline interno queda en logs,
-  nunca en el stream. Admin commands y MaxActiveConversationsError mapeados.
-
-### Portal
-- `api.commandCenterMessageStream`: fetch + ReadableStream, parser SSE
-  manual, fallback al endpoint JSON si el transporte falla.
-- `ChatRoute`: el chat principal usa el stream; cada evento actualiza
-  `processStatus` en vivo (Recibido → Revisando → Marketing trabajando →
-  Escribiendo).
-
-### Tests (3 nuevos en sprint-64-live-activity.test.ts)
-- B1: stream devuelve text/event-stream con frames de actividad en orden
-  + result terminal.
-- B2: nunca filtra jargon interno (compaction/leak/recovery/T1/OpenClaw).
-- B3: "received" se emite antes de que el engine devuelva.
-
-### Validación
-- Backend 805 pass (802 + 3 nuevos); 4 integration fail = Supabase local
-  (pre-existente, no relacionado).
-- Portal 130/130. Lint sin errores nuevos. Typecheck + build backend y
-  portal verdes.
-- Push a origin/main OK. Railway redeploy OK (container a22676dd19e6).
-  /health 200, app 200, endpoint /message/stream responde 401 (ruta viva).
-
-### Estado final
-Sprint 64 + 64b: la experiencia de chat ahora es comparable a OpenClaw
-desde Telegram en la dimensión de feedback en vivo. El CEO ve progreso
-real mientras el motor trabaja, no un black box.
-
-Pendiente NO automatizable (requiere cuenta del CEO / Telegram):
-- Browser autenticado real en producción.
-- Mobile E2E autenticado.
-- Baseline contra OpenClaw directo en Telegram (mismo modelo).
+I did NOT exercise the authenticated chat path end-to-end (no CEO
+session available from this environment). The code is deployed and
+the markers are in the bundle, but the final "type hola, see chips"
+smoke test must be done by the user.

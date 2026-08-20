@@ -44,6 +44,8 @@ import {
   traceRequestReceived,
   traceStage,
   processCeoMessage,
+  processLightweightMessage,
+  classifyMessageIntent,
   requireSession,
   MaxActiveConversationsError,
   activityMessageFor,
@@ -617,6 +619,26 @@ export async function registerConversationRoutes(
       };
 
       try {
+        // Sprint 67 P0.3 — lightweight fast path for conversations endpoint.
+        const intentCategory = classifyMessageIntent(body.message);
+        if (intentCategory === "LIGHTWEIGHT") {
+          captureActivity("preparing_result", activityMessageFor("preparing_result"));
+          const result = await processLightweightMessage(
+            session,
+            body.message,
+            deps,
+            trace,
+          );
+          traceStage(trace, "T15_backend_response_finalization", {
+            responseStatus: "success",
+            finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
+          });
+          emitCeoTurnTrace(session, trace, result);
+          send("result", result);
+          end();
+          return;
+        }
+
         captureActivity(
           "retrieving_context",
           activityMessageFor("retrieving_context"),

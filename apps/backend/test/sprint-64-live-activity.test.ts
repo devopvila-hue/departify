@@ -154,10 +154,12 @@ describe("Sprint 64 — Live Activity / Native OpenClaw experience", () => {
 
   it("A1: emits work_state events in chronological order (received → retrieving_context → delegated → streaming)", async () => {
     const org = await startOrg();
+    // Sprint 67 P0.3 — use a business message to test the full engine
+    // pipeline. Greetings now take the lightweight fast path.
     const response = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/command-center/message`,
-      payload: { message: "hola" },
+      payload: { message: "qué tareas tengo" },
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();
@@ -184,10 +186,11 @@ describe("Sprint 64 — Live Activity / Native OpenClaw experience", () => {
 
   it("A2: timeline is recorded in backend logs only — NEVER surfaced in the chat response (Product Identity Boundary)", async () => {
     const org = await startOrg();
+    // Sprint 67 P0.3 — use a business message to test the full engine pipeline.
     const response = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/command-center/message`,
-      payload: { message: "hola" },
+      payload: { message: "qué tareas tengo" },
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();
@@ -209,7 +212,7 @@ describe("Sprint 64 — Live Activity / Native OpenClaw experience", () => {
     const response = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/command-center/message`,
-      payload: { message: "hola" },
+      payload: { message: "qué tareas tengo" },
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();
@@ -236,7 +239,7 @@ describe("Sprint 64 — Live Activity / Native OpenClaw experience", () => {
       const response = await authedInject({
         method: "POST",
         url: `/api/customer-zero/${org}/command-center/message`,
-        payload: { message: "hola" },
+        payload: { message: "qué tareas tengo" },
       });
       expect(response.statusCode).toBe(200);
       const body = response.json();
@@ -274,7 +277,7 @@ describe("Sprint 64 — Live Activity / Native OpenClaw experience", () => {
       const response = await authedInject({
         method: "POST",
         url: `/api/customer-zero/${org}/command-center/message`,
-        payload: { message: "hola" },
+        payload: { message: "qué tareas tengo" },
       });
       expect(response.statusCode).toBe(200);
       const body = response.json();
@@ -299,7 +302,7 @@ describe("Sprint 64 — Live Activity / Native OpenClaw experience", () => {
     const response = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/command-center/message`,
-      payload: { message: "hola" },
+      payload: { message: "qué tareas tengo" },
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();
@@ -321,7 +324,7 @@ describe("Sprint 64 — Live Activity / Native OpenClaw experience", () => {
     const response = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/command-center/message/stream`,
-      payload: { message: "hola" },
+      payload: { message: "qué tareas tengo" },
     });
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-type"]).toContain("text/event-stream");
@@ -366,7 +369,7 @@ describe("Sprint 64 — Live Activity / Native OpenClaw experience", () => {
     const response = await authedInject({
       method: "POST",
       url: `/api/customer-zero/${org}/command-center/message/stream`,
-      payload: { message: "hola" },
+      payload: { message: "qué tareas tengo" },
     });
     expect(response.statusCode).toBe(200);
     const raw = response.body as string;
@@ -387,7 +390,7 @@ describe("Sprint 64 — Live Activity / Native OpenClaw experience", () => {
       const response = await authedInject({
         method: "POST",
         url: `/api/customer-zero/${org}/command-center/message/stream`,
-        payload: { message: "hola" },
+        payload: { message: "qué tareas tengo" },
       });
       expect(response.statusCode).toBe(200);
       const raw = response.body as string;

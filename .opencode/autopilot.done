@@ -1,45 +1,79 @@
-# AUTOPILOT DONE — SPRINT 64 + 64b: CHAT PERFORMANCE + NATIVE OPENCLAW EXPERIENCE
+# Sprint 67 P0.1 — DONE (verified deployed)
 
-## Resumen de lo logrado
-El objetivo era que el Chat de Departify tuviera una experiencia de
-velocidad, streaming y proactividad comparable a OpenClaw usado
-directamente desde Telegram. Se completó en dos commits:
+## Goal
 
-1. **Sprint 64 (7896498)** — Live Activity / feedback honesto:
-   - Label optimista instantáneo "Departify · Recibido" (TTF ~0ms).
-   - Eventos reales de actividad del backend (received → retrieving_context
-     → delegated → streaming) mostrados en el portal.
-   - Eliminada lectura duplicada de Google tokens por turno.
-   - ConversationList memoizada (React.memo).
-   - Product Identity Boundary protegida por tests (nunca se filtra
-     OpenClaw/gateway/timeline interno).
+Sprint 67 P0.1 — personal identity (server-side persistence, ask-once)
++ Next Best Actions (deterministic resolver, portal chip UI, single
+execution path). This is the actual current sprint; the stale
+`.opencode/GOAL.md` describes the earlier Gmail OAuth recovery goal
+that was completed in commit `686ebdb`.
 
-2. **Sprint 64b (2a5d415)** — SSE real progresivo:
-   - Endpoint `POST /command-center/message/stream` (text/event-stream)
-     que emite cada work_state en tiempo real y termina con `result`.
-   - `api.commandCenterMessageStream` en el portal (fetch + ReadableStream,
-     con fallback al JSON endpoint).
-   - ChatRoute actualiza processStatus en vivo por cada evento.
+## What shipped
 
-## Archivos clave
-- apps/backend/src/server/routes/customer-zero-v2.ts (endpoint SSE ~L3695,
-  activitySink en processCeoMessage ~L5419, buildRuntimeBridge ~L4716)
-- apps/backend/src/customer-zero/command-center.ts (tipos work_state)
-- apps/backend/test/sprint-64-live-activity.test.ts (9 tests: A1-A6 + B1-B3)
-- apps/portal/src/app/api.ts (commandCenterMessageStream)
-- apps/portal/src/routes/ChatRoute.tsx (streaming + label optimista)
+- **P0.1-A — personal identity**: Company DNA carries
+  `entrepreneurPreferredName` + `entrepreneurNameRequestedAt`
+  (additive migration). `personal-identity.ts` captures names from
+  explicit introductions and bare answers to the canonical question,
+  persists server-side without touching business facts. Runtime
+  context exposes `userPreferredName` + `userNameRequestedAt` so the
+  engine uses the name sparingly and asks once.
 
-## Cómo verificarlo
-- Backend: `cd apps/backend && npx vitest run` → 805 pass
-  (4 integration fail = requieren Supabase local, pre-existente).
-- Portal: `cd apps/portal && npx vitest run` → 130 pass.
-- Typecheck + build backend y portal verdes.
-- Producción: https://api.departify.app/health → 200;
-  https://app.departify.app → 200; endpoint /message/stream → 401 (ruta viva).
-- Railway redeploy OK (container a22676dd19e6).
+- **P0.1-B — Next Best Actions**: Deterministic resolver caps at 3
+  actions, classified AVAILABLE_NOW / NEEDS_CONNECTION /
+  NEEDS_APPROVAL. NOT_AVAILABLE never surfaces. Derives from real
+  state (latest durable result, pending approvals, connected tools,
+  turn-level connection suggestion). Click replays the action through
+  the existing `send()` chat path — no parallel pipeline, no new
+  endpoint, no new agent. Portal renders chips under the latest
+  assistant reply with the existing chip surface; defensive cap at 3
+  before render.
 
-## Pendiente NO automatizable (requiere acceso humano)
-- Browser autenticado real en producción (cuenta del CEO).
-- Mobile E2E autenticado.
-- Baseline contra OpenClaw directo en Telegram con el mismo modelo
-  (script tools/chat-latency-ab.mjs disponible en el repo).
+## Tests
+
+- Backend: 844 passed (N1–N10 resolver + I1–I6 identity green).
+- Portal: 144 passed (was 141 — +3 in new `next-best-actions.test.tsx`:
+  N3 max 3 chips, N7 greeting yields none, N8 click = 1 turn via
+  existing chat path).
+- Engine-adapter: 29 passed.
+- Workspace typecheck: clean across all packages.
+- Portal dev build: succeeds.
+
+## Commit + push
+
+- `6e73319 feat(chat): Sprint 67 P0.1 — personal identity + Next Best Actions`
+- 18 files, +1629 / −9.
+- Pushed to `origin/main`.
+
+## Production verification (this turn)
+
+- **Backend (Railway `departify-api`)**:
+  - Deployment `1dca3366` — SUCCESS — commit `6e73319` (matches my push).
+  - `https://api.departify.app/health` → `{"status":"ok"}`.
+  - `https://api.departify.app/version` → production.
+  - Deploy logs: clean boot, engine adapter initialised, server
+    listening, receiving requests.
+
+- **Portal (Netlify `app.departify.app`)**:
+  - HTTP 200, Vite SPA served.
+  - JS bundle `/assets/index-DRzLqWJM.js` contains the new markers:
+    `dfy-next-actions`, `chat-next-actions`, `chat-next-action`.
+  - Confirms the portal build includes the Next Best Actions UI.
+
+## Out of scope (untouched)
+
+P0.1-A, OpenClaw gateway, agent.wait, models/providers, SSE,
+streaming, content_delta, WritingIndicator, STOP, BYOK, connections,
+visual identity, routing, Elvira/Marketing, SEO identity. No SEO
+"responsable" invented. No stale TODOs reopened.
+
+## FINAL STATUS
+
+**READY FOR FOUNDER HUMAN VALIDATION**
+
+Code is shipped, tests are green, backend + portal are deployed with
+the new commit. The only remaining check is a real CEO session smoke
+test: sign in at `app.departify.app`, send "hola" (expect 0 chips),
+then trigger a department result (expect ≤3 chips, click a chip =
+one new turn). I cannot run this from an unauthenticated environment.
+
+STOP.

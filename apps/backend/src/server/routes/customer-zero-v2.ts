@@ -3618,6 +3618,39 @@ export async function registerCustomerZeroV2Routes(
           // left without a response. The admin error is logged for ops.
         }
       }
+
+      // Sprint 67 P0.3 — lightweight fast path for the JSON endpoint too.
+      const intentCategory = classifyMessageIntent(body.message);
+      if (intentCategory === "LIGHTWEIGHT") {
+        try {
+          captureActivity("preparing_result", activityMessageFor("preparing_result"));
+          const result = await processLightweightMessage(
+            session,
+            body.message,
+            deps,
+            trace,
+          );
+          traceStage(trace, "T15_backend_response_finalization", {
+            responseStatus: "success",
+            finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
+          });
+          emitCeoTurnTrace(session, trace, result);
+          return reply
+            .header("x-departify-correlation-id", correlationId)
+            .code(200)
+            .send({
+              ...result,
+              events: mergeLiveActivity(result.events ?? [], activity),
+            });
+        } catch (lightweightError) {
+          request.log.error(
+            { err: lightweightError, organizationId, message: body.message },
+            "Lightweight fast path failed, falling through to heavy pipeline",
+          );
+          // Fall through to the heavy pipeline.
+        }
+      }
+
       try {
         captureActivity(
           "retrieving_context",
@@ -3864,6 +3897,28 @@ export async function registerCustomerZeroV2Routes(
       }
 
       try {
+        // Sprint 67 P0.3 — lightweight fast path. Greetings, thanks, and
+        // trivial conversation skip the heavy runtime build (~10 Supabase
+        // round trips) and the OpenClaw engine entirely. Target: < 500 ms.
+        const intentCategory = classifyMessageIntent(body.message);
+        if (intentCategory === "LIGHTWEIGHT") {
+          captureActivity("preparing_result", activityMessageFor("preparing_result"));
+          const result = await processLightweightMessage(
+            session,
+            body.message,
+            deps,
+            trace,
+          );
+          traceStage(trace, "T15_backend_response_finalization", {
+            responseStatus: "success",
+            finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
+          });
+          emitCeoTurnTrace(session, trace, result);
+          send("result", result);
+          end();
+          return;
+        }
+
         captureActivity(
           "retrieving_context",
           activityMessageFor("retrieving_context"),
@@ -4669,7 +4724,7 @@ interface CeoTurnTraceState {
   legacyRoute: string | null;
   marketingServiceCalled: boolean;
   productTruthCalled: boolean;
-  finalResponseSource: "openclaw" | "legacy_router" | "marketing" | "product_truth" | "durable_work" | "error_fallback" | null;
+  finalResponseSource: "openclaw" | "legacy_router" | "marketing" | "product_truth" | "durable_work" | "error_fallback" | "lightweight_fast_path" | null;
   assistantTextBytes: number | null;
 }
 
@@ -5249,6 +5304,55 @@ function runtimeIntentForTools(
  * the native response. */
 function shouldUseNativeAgentPath(message: string): boolean {
   return message.trim().length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Sprint 67 P0.3 — Lightweight intent classification. Runs BEFORE the heavy
+// runtime build so greetings / thanks / trivial conversation skip ~10 Supabase
+// round trips and the OpenClaw engine entirely.
+// ---------------------------------------------------------------------------
+
+type MessageIntentCategory = "LIGHTWEIGHT" | "HEAVY";
+
+const GREETING_PATTERN_P03 =
+  /^\s*(hola|buenos\s*días|buenas(?:\s*tardes|\s*noches)?|gracias|muchas\s+gracias|hello|hi|hey|thanks|thank\s+you|ok|vale|de\s+acuerdo|perfecto|perfecta|genial|bien)\s*[.!?¡¿]*\s*$/i;
+
+const NAME_ANSWER_PATTERN =
+  /^\s*(?:me\s+llamo|mi\s+nombre\s+es|soy|call\s+me|my\s+name\s+is|i\s*am|i'm)\s+\S+/i;
+
+/**
+ * Classify a CEO message as LIGHTWEIGHT (no engine, no context load) or
+ * HEAVY (full pipeline). LIGHTWEIGHT covers:
+ *  - greetings / saludos
+ *  - thanks
+ *  - simple confirmations
+ *  - name introductions (the one-time ask)
+ *  - trivial conversation that doesn't need business state
+ *
+ * Everything else is HEAVY.
+ */
+export function classifyMessageIntent(message: string): MessageIntentCategory {
+  const trimmed = message.trim();
+  if (!trimmed) return "LIGHTWEIGHT";
+  // Pure greeting / thanks / confirmation
+  if (GREETING_PATTERN_P03.test(trimmed)) return "LIGHTWEIGHT";
+  // Name answer — the entrepreneur responding to "¿cómo quieres que te llame?"
+  if (NAME_ANSWER_PATTERN.test(trimmed)) return "LIGHTWEIGHT";
+  // Approval / cancellation responses are always HEAVY — they trigger
+  // email/calendar mutations and must go through the full pipeline.
+  if (isEmailApprovalResponse(trimmed) || isEmailCancellation(trimmed)) return "HEAVY";
+  if (isCalendarApproval(trimmed) || isCalendarCancellation(trimmed)) return "HEAVY";
+  // Pending operation decisions are always HEAVY.
+  if (classifyPendingOperationDecision(trimmed)) return "HEAVY";
+  // Very short messages (< 15 chars) that don't contain business keywords
+  // are likely trivial conversation.
+  if (trimmed.length < 15) {
+    const lower = trimmed.toLocaleLowerCase("es-ES");
+    const hasBusinessKeyword =
+      /\b(tarea|marketing|seo|empresa|negocio|calendario|email|correo|drive|resultado|plan|campaign|campaña|auditoría|audit)\b/i.test(lower);
+    if (!hasBusinessKeyword) return "LIGHTWEIGHT";
+  }
+  return "HEAVY";
 }
 
 function nativeMutationRequiresDeterministicGate(message: string): boolean {
@@ -6030,18 +6134,13 @@ async function runCeoMessageTurn(
     );
   }
 
-  // Sprint 67 P0.2 — greeting fast path. A simple salutation does not
-  // need the full engine pipeline. Respond in < 1 s with a product
-  // greeting that also captures the entrepreneur's preferred name if
-  // still unknown. This prevents the ~20 s latency Customer Zero
-  // observed on "hola".
-  //
-  // Only activates when the native engine is NOT available: when it is,
-  // the engine handles greetings with full context (and tests that mock
-  // the engine expect it to be called).
+  // Sprint 67 P0.2 — greeting fast path (safety net). The primary fast
+  // path is in the SSE handler (classifyMessageIntent + processLightweightMessage)
+  // which runs BEFORE buildCeoRuntimeForRequest. This catch-all remains
+  // for any greeting that somehow reaches the engine path.
   const GREETING_PATTERN =
     /^\s*(hola|buenos[ ]?días|buenas|gracias|muchas gracias|hello|hi|thanks|thank you)\s*[.!?]?\s*$/i;
-  if (GREETING_PATTERN.test(operationalMessage) && !runtime?.nativeBusinessTools) {
+  if (GREETING_PATTERN.test(operationalMessage)) {
     const isEs = session.state.locale !== "en";
     const name = session.state.entrepreneurPreferredName;
     let greetingReply: string;
@@ -7125,6 +7224,66 @@ async function runCeoMessageTurn(
       emailConnectionSuggestion ?? routed.connectionSuggestion ?? null,
     pendingToolId: routed.pendingToolId ?? null,
     conversationId: conversation.id,
+  };
+}
+
+/**
+ * Sprint 67 P0.3 — lightweight turn for greetings / thanks / trivial
+ * conversation. Skips the heavy runtime build (~10 Supabase round trips)
+ * and the OpenClaw engine entirely. Target: < 500 ms backend processing.
+ */
+export async function processLightweightMessage(
+  session: CustomerZeroSession,
+  message: string,
+  deps: ServerDeps = {},
+  trace?: CeoTurnTraceState,
+): Promise<CeoMessageResult> {
+  const conversation = await ensureConversation(session, message);
+  if (trace) traceStage(trace, "T3_conversation_session_resolution_complete");
+  await session.conversations.addMessage(conversation.id, "user", message);
+  // Best-effort identity capture — never breaks the turn.
+  await captureEntrepreneurIdentityForTurn(session, conversation, message, deps);
+
+  const isEs = session.state.locale !== "en";
+  const name = session.state.entrepreneurPreferredName;
+  let reply: string;
+  if (name) {
+    reply = isEs
+      ? `¡Hola, ${name}! Estoy aquí. Dime qué necesitas y lo ponemos en marcha.`
+      : `Hi, ${name}! I'm here. Tell me what you need and we'll get started.`;
+  } else {
+    await markEntrepreneurNameAskedOnce(session, deps);
+    reply = isEs
+      ? "¡Hola! Antes de seguir, ¿cómo quieres que te llame?"
+      : "Hi! Before we continue, what should I call you?";
+  }
+
+  // Persist and build result — same contract as completeRuntimeCeoTurn.
+  if (trace) traceStage(trace, "T13_persistence_started");
+  await session.conversations.addMessage(conversation.id, "assistant", reply);
+  if (trace) traceStage(trace, "T14_persistence_completed");
+  session.state.conversation = [
+    ...session.state.conversation,
+    { role: "user", content: message },
+    { role: "assistant", content: reply },
+  ];
+  if (trace) {
+    trace.finalResponseSource = "lightweight_fast_path";
+    trace.nativeResponseTerminal = true;
+    trace.assistantTextBytes = Buffer.byteLength(reply, "utf8");
+  }
+  return {
+    organizationId: session.organizationId,
+    reply,
+    events: [
+      { kind: "transcript", role: "assistant", content: reply, speaker: "departify" },
+      { kind: "work_state", state: "completed", message: reply },
+    ],
+    routing: { intent: "greeting", departments: [], rationale: "Lightweight fast path" },
+    connectionSuggestion: null,
+    pendingToolId: null,
+    conversationId: conversation.id,
+    nextActions: [],
   };
 }
 
