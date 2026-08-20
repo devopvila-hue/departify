@@ -142,7 +142,7 @@ export class FounderRunExecutor {
   stopCleanup(): void {
     if (this.staleCheckTimer) {
       clearInterval(this.staleCheckTimer);
-      this.staleCheckTimer = undefined;
+      delete this.staleCheckTimer;
     }
   }
 
@@ -284,7 +284,8 @@ export class FounderRunExecutor {
       }
 
       // Check if cancelled during execution
-      if (run.status === "cancelled") {
+      const currentRun = this.store.get(run.id);
+      if (currentRun?.status === "cancelled") {
         return;
       }
 

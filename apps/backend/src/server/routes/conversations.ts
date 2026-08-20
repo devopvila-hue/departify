@@ -656,8 +656,9 @@ export async function registerConversationRoutes(
             userId: request.authUser.id,
             message: body.message,
             onChunk: chunkSink,
-            onPersist: (run) =>
-              session.conversations.addMessage(conversationId, "assistant", run.finalText ?? ""),
+            onPersist: (run) => {
+              void session.conversations.addMessage(conversationId, "assistant", run.finalText ?? "");
+            },
           });
 
           // Emit the runId so the portal can reconnect if SSE drops

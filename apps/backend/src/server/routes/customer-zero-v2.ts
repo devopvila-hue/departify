@@ -3964,8 +3964,9 @@ export async function registerCustomerZeroV2Routes(
             userId: request.authUser.id,
             message: body.message,
             onChunk: chunkSink,
-            onPersist: (run) =>
-              session.conversations.addMessage(conversation.id, "assistant", run.finalText ?? ""),
+            onPersist: (run) => {
+              void session.conversations.addMessage(conversation.id, "assistant", run.finalText ?? "");
+            },
           });
 
           // Emit the runId so the portal can reconnect if SSE drops
@@ -6159,12 +6160,13 @@ async function runCeoMessageTurn(
         organizationId,
         userId,
         message,
-        onChunk: chunkSink,
+        ...(chunkSink ? { onChunk: chunkSink } : {}),
         // Persist the final assistant text durably even if this connection
         // dies before waitForTerminal resolves. The executor calls this
         // regardless of request lifecycle.
-        onPersist: (run) =>
-          session.conversations.addMessage(conversation.id, "assistant", run.finalText ?? ""),
+        onPersist: (run) => {
+          void session.conversations.addMessage(conversation.id, "assistant", run.finalText ?? "");
+        },
       });
 
       if (trace) {
