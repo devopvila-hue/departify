@@ -136,6 +136,7 @@ export const RUNTIME_CAPABILITY_RULES: readonly CapabilityRule[] = [
     sourceCapabilities: ["crm.contacts.list", "crm.contacts.read", "crm.contacts.summary"],
   },
   { id: "company.context", sourceCapabilities: [], alwaysAvailable: true },
+  { id: "document.pdf.generate", sourceCapabilities: [], alwaysAvailable: true },
 ];
 
 function sourceCapabilities(

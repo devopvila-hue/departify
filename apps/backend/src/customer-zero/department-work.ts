@@ -77,7 +77,8 @@ export type DepartmentWorkCapability =
   | "seo.repository.read"
   | "drive.workspace.create"
   | "marketing.video.prepare"
-  | "drive.write";
+  | "drive.write"
+  | "document.pdf.generate";
 
 /** Departments of work the model is NOT allowed to promise today. */
 export const UNSUPPORTED_PROMISE_PATTERNS: readonly RegExp[] = [

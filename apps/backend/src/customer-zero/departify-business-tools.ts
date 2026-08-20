@@ -27,7 +27,8 @@ export type DepartifyToolName =
   | "departify.tasks.list"
   | "departify.tasks.create"
   | "departify.approvals.list"
-  | "departify.results.list";
+  | "departify.results.list"
+  | "departify.pdf.generate";
 
 export type DepartifyToolResultStatus =
   | "success"
@@ -281,6 +282,22 @@ export const DEPARTIFY_TOOL_DEFINITIONS: readonly DepartifyToolDefinition[] = [
     requiredCapability: "results.list",
     sideEffect: false,
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "departify.pdf.generate",
+    description: "Generate a PDF document from structured content. Produces a real PDF file. Use when the CEO asks for a PDF, export, or downloadable document.",
+    requiredCapability: "document.pdf.generate",
+    sideEffect: false,
+    inputSchema: {
+      type: "object",
+      required: ["title", "content"],
+      properties: {
+        title: stringProperty("Document title"),
+        content: stringProperty("Document content in markdown-like format (headings, paragraphs, lists)"),
+        filename: stringProperty("Optional filename without extension"),
+      },
+      additionalProperties: false,
+    },
   },
 ];
 

@@ -64,6 +64,7 @@ export type BusinessCapability =
   | "drive.create_folder"
   | "drive.create_file"
   | "drive.write"
+  | "document.pdf.generate"
   | "inbox.read"
   | "inbox.classify"
   | "inbox.work.create"
@@ -357,6 +358,14 @@ export const CAPABILITY_REGISTRY: Readonly<Record<string, CapabilityDescriptor>>
     description: "Actualiza contenido de un documento creado o usado por Departify.",
     provider: "google",
     toolIds: ["google.drive.write"],
+  },
+  "document.pdf.generate": {
+    id: "document.pdf.generate",
+    name: "Generate PDF document",
+    nameEs: "Generar documento PDF",
+    description: "Genera un documento PDF real a partir de contenido estructurado. Producción determinista, sin LLM.",
+    provider: "departify",
+    toolIds: ["departify.pdf.generate"],
   },
   "inbox.read": {
     id: "inbox.read",

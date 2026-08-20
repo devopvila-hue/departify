@@ -5389,6 +5389,28 @@ function isFacebookPagesPublishRequest(message: string): boolean {
   return /(?:facebook|fb|p[aá]gina(?:\s+de)?\s+facebook).*?(?:publica|publicar|post|mensaje)|(?:publica|publicar|post).*?(?:facebook|fb|p[aá]gina)/i.test(message);
 }
 
+/**
+ * Detect PDF generation requests. Examples:
+ *  - "sí, en PDF"
+ *  - "hazme esto en PDF"
+ *  - "genera un PDF de este informe"
+ *  - "pon este análisis en PDF"
+ *  - "descárgame esto como PDF"
+ *  - "guárdame el resultado en PDF"
+ */
+function isPdfGenerationRequest(message: string): boolean {
+  const lower = message.toLocaleLowerCase("es-ES");
+  // Direct PDF request patterns
+  const directPatterns = /\b(haz.*pdf|genera.*pdf|crear.*pdf|pon.*pdf|descarga.*pdf|guarda.*pdf|exporta.*pdf|convierte.*pdf|pdf.*de\s+(?:este|este|el|la)\s+(?:análisis|informe|resultado|reporte))\b/i;
+  if (directPatterns.test(lower)) return true;
+  // Follow-up PDF patterns (confirmation + PDF)
+  const followUpPatterns = /^(?:sí|si|ok|dale|vale|de\s+acuerdo|perfecto|genial|bien)\s*[,;]?\s*(?:en\s+pdf|como\s+pdf|a\s+pdf)\b/i;
+  if (followUpPatterns.test(message)) return true;
+  // Simple "en PDF" pattern
+  if (/\ben\s+pdf\b/i.test(lower)) return true;
+  return false;
+}
+
 function runtimeToolsMatchRequest(
   message: string,
   toolNames: readonly string[],
@@ -6029,6 +6051,20 @@ async function runCeoMessageTurn(
     );
   }
 
+  // Sprint 67 P0.5 — PDF generation is a deterministic capability.
+  // When the user asks for a PDF, resolve the content from the previous
+  // turn or existing result, generate the PDF, and return a reference.
+  if (isPdfGenerationRequest(operationalMessage)) {
+    const pdfResult = await runPdfGenerationTurn(
+      session,
+      conversation,
+      message,
+      operationalMessage,
+      deps,
+    );
+    if (pdfResult) return pdfResult;
+  }
+
   // ENGINE 02.4 — pending side effects are a deterministic control-plane
   // transition. They must be resolved before OpenClaw or Marketing sees the
   // message; the model is never the authority for approval, cancellation, or
@@ -6525,16 +6561,10 @@ async function runCeoMessageTurn(
   if (nativeEngineFailure) {
     // Check if the message references a capability that doesn't exist
     const lower = message.toLocaleLowerCase("es-ES");
-    const referencesPdf = /\b(pdf|genera.*pdf|crear.*pdf|exporta.*pdf|render.*pdf)\b/i.test(lower);
     const referencesImage = /\b(imagen|imagen.*genera|crear.*imagen|genera.*imagen)\b/i.test(lower);
 
     let reply: string;
-    if (referencesPdf) {
-      // Specific error for PDF — the capability doesn't exist
-      reply = session.state.locale === "en"
-        ? "I can't generate PDF files — that capability isn't available yet. I can help you with:\n• Creating a document in Google Drive\n• Sending a summary by email\n• Showing the information here in the chat\n\nWhat would you prefer?"
-        : "No puedo generar archivos PDF — esa capacidad aún no está disponible. Puedo ayudarte con:\n• Crear un documento en Google Drive\n• Enviar un resumen por email\n• Mostrar la información aquí en el chat\n\n¿Qué prefieres?";
-    } else if (referencesImage) {
+    if (referencesImage) {
       // Specific error for image generation — the capability doesn't exist
       reply = session.state.locale === "en"
         ? "I can't generate images — that capability isn't available yet. I can help you with other tasks. What do you need?"
@@ -8878,6 +8908,187 @@ async function runDriveWriteTurn(
 function isDriveValidationRequest(message: string): boolean {
   return /01[_\s-]?marketing/i.test(message) &&
     /prueba|validar|test/i.test(message);
+}
+
+/**
+ * Sprint 67 P0.5 — PDF generation turn.
+ *
+ * When the user asks for a PDF, resolve the content from the previous turn
+ * or existing result, generate the PDF, and return a reference.
+ */
+async function runPdfGenerationTurn(
+  session: CustomerZeroSession,
+  conversation: ConversationRecord,
+  message: string,
+  operationalMessage: string,
+  deps: ServerDeps,
+): Promise<CeoMessageResult | null> {
+  const isEs = session.state.locale !== "en";
+  const organizationId = session.organizationId;
+
+  // Resolve content from previous turn or existing result
+  let content = "";
+  let title = "Documento";
+  let departmentId: string | undefined;
+  let resultId: string | undefined;
+
+  // Check if there's a recent result in the conversation
+  const recentMessages = await session.conversations.listMessages(
+    organizationId,
+    conversation.id,
+    10,
+  );
+
+  // Look for the most recent assistant message with substantial content
+  for (let i = recentMessages.length - 1; i >= 0; i--) {
+    const msg = recentMessages[i];
+    if (msg.role === "assistant" && msg.content.length > 100) {
+      content = msg.content;
+      // Extract title from the first line if it looks like a heading
+      const firstLine = content.split("\n")[0]?.trim();
+      if (firstLine && firstLine.length < 100) {
+        title = firstLine.replace(/^#+\s*/, "").replace(/\*\*/g, "");
+      }
+      break;
+    }
+  }
+
+  // If no content from conversation, check for recent results
+  if (!content) {
+    const workStore = workStoreForRoutes();
+    const results = await workStore.listResultsForOrg(organizationId, 5);
+    if (results.length > 0) {
+      const latestResult = results[0];
+      content = latestResult.content;
+      title = latestResult.title;
+      departmentId = latestResult.departmentId;
+      resultId = latestResult.id;
+    }
+  }
+
+  // If still no content, ask for clarification
+  if (!content) {
+    return {
+      organizationId,
+      reply: isEs
+        ? "¿Qué contenido quieres que ponga en el PDF? Puedo generar un PDF a partir de un análisis o resultado que ya tengamos."
+        : "What content do you want me to put in the PDF? I can generate a PDF from an analysis or result we already have.",
+      events: [
+        { kind: "transcript", role: "assistant", content: isEs ? "¿Qué contenido quieres que ponga en el PDF?" : "What content do you want me to put in the PDF?", speaker: "departify" },
+        { kind: "work_state", state: "completed", message: isEs ? "¿Qué contenido quieres que ponga en el PDF?" : "What content do you want me to put in the PDF?" },
+      ],
+      routing: { intent: "pdf_generation", departments: [], rationale: "PDF request — need content" },
+      connectionSuggestion: null,
+      pendingToolId: null,
+      conversationId: conversation.id,
+      nextActions: [],
+    };
+  }
+
+  // Generate the PDF
+  const { generatePdf } = await import("../../customer-zero/pdf-generator.js");
+  const pdfResult = await generatePdf({
+    title,
+    content,
+    metadata: {
+      author: "Departify",
+      subject: title,
+    },
+  });
+
+  if (!pdfResult.success || !pdfResult.bytes) {
+    return {
+      organizationId,
+      reply: isEs
+        ? "No he podido generar el PDF. El análisis sigue disponible y puedes reintentarlo."
+        : "I couldn't generate the PDF. The analysis is still available and you can retry.",
+      events: [
+        { kind: "transcript", role: "assistant", content: isEs ? "No he podido generar el PDF." : "I couldn't generate the PDF.", speaker: "departify" },
+        { kind: "work_state", state: "error", message: isEs ? "No he podido generar el PDF." : "I couldn't generate the PDF." },
+      ],
+      routing: { intent: "pdf_generation", departments: [], rationale: "PDF generation failed" },
+      connectionSuggestion: null,
+      pendingToolId: null,
+      conversationId: conversation.id,
+      nextActions: [],
+    };
+  }
+
+  // Store the PDF artifact
+  const pdfStore = deps.pdfArtifactStore;
+  if (!pdfStore) {
+    return {
+      organizationId,
+      reply: isEs
+        ? "El sistema de almacenamiento de PDF no está disponible. Puedes intentarlo de nuevo más tarde."
+        : "The PDF storage system is not available. You can try again later.",
+      events: [
+        { kind: "transcript", role: "assistant", content: isEs ? "El sistema de almacenamiento de PDF no está disponible." : "The PDF storage system is not available.", speaker: "departify" },
+        { kind: "work_state", state: "error", message: isEs ? "El sistema de almacenamiento de PDF no está disponible." : "The PDF storage system is not available." },
+      ],
+      routing: { intent: "pdf_generation", departments: [], rationale: "PDF storage not configured" },
+      connectionSuggestion: null,
+      pendingToolId: null,
+      conversationId: conversation.id,
+      nextActions: [],
+    };
+  }
+
+  let artifact;
+  try {
+    artifact = await pdfStore.create({
+      organizationId,
+      conversationId: conversation.id,
+      departmentId,
+      resultId,
+      origin: "chat_pdf_request",
+      filename: pdfResult.filename,
+      bytes: pdfResult.bytes,
+    });
+  } catch (error) {
+    console.error("[pdf-artifact] Failed to store PDF:", error);
+    return {
+      organizationId,
+      reply: isEs
+        ? "El PDF se ha generado pero no he podido guardarlo. Puedes intentarlo de nuevo."
+        : "The PDF was generated but I couldn't save it. You can try again.",
+      events: [
+        { kind: "transcript", role: "assistant", content: isEs ? "El PDF se ha generado pero no he podido guardarlo." : "The PDF was generated but I couldn't save it.", speaker: "departify" },
+        { kind: "work_state", state: "error", message: isEs ? "El PDF se ha generado pero no he podido guardarlo." : "The PDF was generated but I couldn't save it." },
+      ],
+      routing: { intent: "pdf_generation", departments: [], rationale: "PDF storage failed" },
+      connectionSuggestion: null,
+      pendingToolId: null,
+      conversationId: conversation.id,
+      nextActions: [],
+    };
+  }
+
+  // Get a signed URL for the artifact
+  const view = await pdfStore.getView(artifact.id, organizationId);
+  const signedUrl = view?.signedUrl;
+
+  // Build the response
+  const reply = isEs
+    ? `PDF preparado.\n\n**${title}**\n${(pdfResult.size / 1024).toFixed(1)} KB\n\n${signedUrl ? `[Ver/Descargar PDF](${signedUrl})` : "El PDF está listo para descargar."}`
+    : `PDF ready.\n\n**${title}**\n${(pdfResult.size / 1024).toFixed(1)} KB\n\n${signedUrl ? `[View/Download PDF](${signedUrl})` : "The PDF is ready to download."}`;
+
+  // Persist the message
+  await session.conversations.addMessage(conversation.id, "assistant", reply);
+
+  return {
+    organizationId,
+    reply,
+    events: [
+      { kind: "transcript", role: "assistant", content: reply, speaker: "departify" },
+      { kind: "work_state", state: "completed", message: reply },
+    ],
+    routing: { intent: "pdf_generation", departments: [], rationale: "PDF generated successfully" },
+    connectionSuggestion: null,
+    pendingToolId: null,
+    conversationId: conversation.id,
+    nextActions: [],
+  };
 }
 
 export function isMarketingDrivePlanRequest(message: string): boolean {

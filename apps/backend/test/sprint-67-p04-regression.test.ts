@@ -110,10 +110,10 @@ describe("Sprint 67 P0.4 — Multi-turn continuity + execution truth", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // K2: execution truth — PDF capability doesn't exist
+  // K2: execution truth — PDF capability now exists (P0.5)
   // ---------------------------------------------------------------------------
-  describe("K2: execution truth — PDF capability doesn't exist", () => {
-    it("should include PDF limitation in legacy engine context", () => {
+  describe("K2: execution truth — PDF capability now exists", () => {
+    it("should include PDF as available capability in legacy engine context", () => {
       const context = {
         locale: "es" as const,
         companyName: "Test Company",
@@ -131,12 +131,12 @@ describe("Sprint 67 P0.4 — Multi-turn continuity + execution truth", () => {
 
       const rendered = renderRuntimeBusinessContextForEngine(context, "[]");
 
-      // Should contain the execution truth about PDF
-      expect(rendered).toContain("PDF generation/rendering/export: no tool exists");
-      expect(rendered).toContain("Never offer to create, generate, render, or export a PDF");
+      // Should contain the execution truth about PDF being available
+      expect(rendered).toContain("PDF generation: AVAILABLE");
+      expect(rendered).toContain("departify.pdf.generate");
     });
 
-    it("should include PDF limitation in native engine context", () => {
+    it("should include PDF as available capability in native engine context", () => {
       const context = {
         locale: "es" as const,
         companyName: "Test Company",
@@ -154,9 +154,9 @@ describe("Sprint 67 P0.4 — Multi-turn continuity + execution truth", () => {
 
       const rendered = renderRuntimeBusinessContextForNativeEngine(context);
 
-      // Should contain the execution truth about PDF
-      expect(rendered).toContain("PDF generation/rendering/export: no tool exists");
-      expect(rendered).toContain("Never offer to create, generate, render, or export a PDF");
+      // Should contain the execution truth about PDF being available
+      expect(rendered).toContain("PDF generation: AVAILABLE");
+      expect(rendered).toContain("departify.pdf.generate");
     });
   });
 
@@ -211,7 +211,7 @@ describe("Sprint 67 P0.4 — Multi-turn continuity + execution truth", () => {
       const rendered = renderRuntimeBusinessContextForNativeEngine(context);
 
       // Should contain all execution truth limitations
-      expect(rendered).toContain("PDF generation/rendering/export: no tool exists");
+      expect(rendered).toContain("PDF generation: AVAILABLE");
       expect(rendered).toContain("Image generation/creation: no tool exists");
       expect(rendered).toContain("Video creation/editing: no tool exists");
       expect(rendered).toContain("Spreadsheets with formulas/pivot tables");
@@ -242,7 +242,7 @@ describe("Sprint 67 P0.4 — Multi-turn continuity + execution truth", () => {
       const rendered = renderRuntimeBusinessContextForEngine(context, "[]");
 
       // Should contain all execution truth limitations
-      expect(rendered).toContain("PDF generation/rendering/export: no tool exists");
+      expect(rendered).toContain("PDF generation: AVAILABLE");
       expect(rendered).toContain("Image generation/creation: no tool exists");
       expect(rendered).toContain("Video creation/editing: no tool exists");
       expect(rendered).toContain("Spreadsheets with formulas/pivot tables");

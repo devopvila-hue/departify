@@ -16,6 +16,7 @@ import type { SeoRepositoryLinkStore } from "../customer-zero/seo-repository.js"
 import type { LlmCredentialStore } from "../customer-zero/llm-credentials.js";
 import type { OrganizationBrandingStore } from "../customer-zero/organization-branding.js";
 import type { WeeklyPlanStore } from "../customer-zero/weekly-plans.js";
+import type { PdfArtifactStore } from "../customer-zero/pdf-artifact-store.js";
 
 /**
  * Server dependencies — Phase P0-A / P-B.
@@ -72,4 +73,6 @@ export interface ServerDeps {
   branding?: OrganizationBrandingStore;
   /** Durable organization-owned weekly operating plan (Operating Loop). */
   weeklyPlans?: WeeklyPlanStore;
+  /** Durable PDF artifact storage. */
+  pdfArtifactStore?: PdfArtifactStore;
 }
