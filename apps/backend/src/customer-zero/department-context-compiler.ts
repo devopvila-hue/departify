@@ -681,6 +681,7 @@ export interface RuntimeOperationContext {
   readonly state: string;
   readonly missingFields?: readonly string[];
   readonly approvalState?: string;
+  readonly lastError?: string;
   readonly reference?: Readonly<Record<string, string | number | boolean | null>>;
 }
 
@@ -783,9 +784,11 @@ function operationFromSession(
       state: email.status,
       missingFields: email.missingFields,
       ...(email.status === "awaiting_approval" ? { approvalState: "pending" } : {}),
+      ...(email.status === "failed" && email.sendError ? { lastError: email.sendError } : {}),
       reference: {
         recipient: email.recipient,
         subject: email.draft?.subject ?? null,
+        body: email.draft?.body ?? null,
         providerMessageId: email.replyToProviderMessageId,
       },
     };

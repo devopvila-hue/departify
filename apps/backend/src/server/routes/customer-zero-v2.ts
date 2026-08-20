@@ -302,6 +302,11 @@ import {
   type PendingEmailWork,
 } from "../../customer-zero/pending-email.js";
 import {
+  isInternalRuntimeLeak,
+  isEngineErrorText,
+  sanitizeCEOResponse as sanitizeResponseText,
+} from "../../customer-zero/response-sanitizer.js";
+import {
   isEmailCapabilityOperational,
   sendEmail,
   verifyAcceptedEmailSend,
@@ -4861,7 +4866,7 @@ interface CeoTurnTraceState {
   assistantTextBytes: number | null;
 }
 
-type PendingOperationDecision = "APPROVE" | "CANCEL" | "OTHER";
+type PendingOperationDecision = "APPROVE" | "CANCEL" | "EDIT" | "FAILURE_QUESTION" | "OTHER";
 
 function safeTraceHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 12);
@@ -4925,10 +4930,10 @@ function normalizePendingOperationMessage(message: string): string {
 
 function classifyPendingOperationDecision(message: string): PendingOperationDecision {
   const normalized = normalizePendingOperationMessage(message);
-  if (/^(?:no|cancela|cancelar|descarta(?:lo|la)?|olvida(?:lo|la)?|no\s+lo\s+hagas?|no\s+la\s+crees?)$/.test(normalized)) {
+  if (/^(?:no|cancela|cancelar|descarta(?:lo|la)?|olvida(?:lo|la)?|no\s+lo\s+hagas?|no\s+la\s+crees?|mejor\s+no|dejalo|dejalo\s+estar|skip|cancel)$/i.test(normalized)) {
     return "CANCEL";
   }
-  if (/^(?:si|crea(?:lo|la)?|hazlo|adelante|confirma|confirmo|yes|approve|go ahead|ok)(?:\s+(?:envialo|mandalo|crea(?:lo|la)?|hazlo|ya|adelante|confirma|confirmo|yes|approve|go ahead|ok))?$/.test(normalized)) {
+  if (/^(?:si|crea(?:lo|la)?|hazlo|adelante|confirma|confirmo|yes|approve|go ahead|ok|vale|perfecto|dale|envialo|mandalo|envia(?:lo)?|manda(?:lo)?|proceed|do\s+it|send\s+it|go\s+ahead\s+and\s+(?:send|create|publish))(?:\s+(?:envialo|mandalo|crea(?:lo|la)?|hazlo|ya|adelante|confirma|confirmo|yes|approve|go ahead|ok|vale|perfecto|dale))?$/.test(normalized)) {
     return "APPROVE";
   }
   return "OTHER";
@@ -4941,10 +4946,21 @@ function pendingDecisionForSession(
   if (session.state.pendingCalendarWork?.status === "awaiting_approval") {
     return classifyPendingOperationDecision(message);
   }
-  if (session.state.pendingEmailWork?.status === "awaiting_approval") {
-    if (isEmailCancellation(message)) return "CANCEL";
-    if (isEmailApprovalResponse(message)) return "APPROVE";
-    return "OTHER";
+  if (session.state.pendingEmailWork) {
+    const work = session.state.pendingEmailWork;
+    // Edit requests are valid in both awaiting_approval and failed states
+    if (isEmailEditRequest(message) && (work.status === "awaiting_approval" || work.status === "editing")) {
+      return "EDIT";
+    }
+    // Failure questions are valid when the email send failed
+    if (isEmailFailureQuestion(message) && work.status === "failed") {
+      return "FAILURE_QUESTION";
+    }
+    if (work.status === "awaiting_approval") {
+      if (isEmailCancellation(message)) return "CANCEL";
+      if (isEmailApprovalResponse(message)) return "APPROVE";
+      return "OTHER";
+    }
   }
   if (session.state.pendingFacebookPagesWork?.status === "awaiting_approval") {
     return classifyPendingOperationDecision(message);
@@ -4958,7 +4974,7 @@ function shouldBypassRuntimeForPendingOperation(
   nativeBusinessTools = false,
 ): boolean {
   const decision = pendingDecisionForSession(session, message);
-  if (decision === "APPROVE" || decision === "CANCEL") return true;
+  if (decision === "APPROVE" || decision === "CANCEL" || decision === "EDIT" || decision === "FAILURE_QUESTION") return true;
   if (!nativeBusinessTools && session.state.pendingCalendarWork && isCalendarReadRequest(message)) return true;
   return Boolean(
     !session.state.pendingCalendarWork &&
@@ -6528,6 +6544,40 @@ async function runCeoMessageTurn(
     }
   }
 
+  // ENGINE 02.4b — edit and failure-question are deterministic operations
+  // on the pending email draft. They must bypass the engine entirely.
+  if (pendingDecision === "EDIT" && session.state.pendingEmailWork) {
+    const work = session.state.pendingEmailWork;
+    const isEs = session.state.locale !== "en";
+    work.status = "editing";
+    applyEmailEdit(work, operationalMessage);
+    work.status = "awaiting_approval";
+    const result = draftApprovalReply(work, isEs);
+    return completeDeterministicOperationTurn(
+      session,
+      conversation,
+      message,
+      result.reply,
+      "email_action",
+      "edited",
+      result.connectionSuggestion,
+    );
+  }
+
+  if (pendingDecision === "FAILURE_QUESTION" && session.state.pendingEmailWork) {
+    const work = session.state.pendingEmailWork;
+    const isEs = session.state.locale !== "en";
+    const reply = explainEmailSendFailure(work.sendError, isEs);
+    return completeDeterministicOperationTurn(
+      session,
+      conversation,
+      message,
+      reply,
+      "email_action",
+      "explained",
+    );
+  }
+
   if (repeatedApprovedOperation) {
     if (trace) {
       trace.providerMutationAttempted = false;
@@ -7853,13 +7903,42 @@ async function completeRuntimeCeoTurn(
   const safeReply = sanitizedReply
     .replace(/<departify_tool_call>[\s\S]*?<\/departify_tool_call>/gi, "")
     .trim();
-  const finalReply = detectUnbackedWorkClaim(safeReply)
-    ? session.state.locale === "en"
+
+  // Sprint 68 — Context-aware error responses. When the engine fails but
+  // there's pending work (draft, calendar event), acknowledge it so the
+  // CEO knows their work is preserved.
+  let finalReply: string;
+  if (detectUnbackedWorkClaim(safeReply)) {
+    finalReply = session.state.locale === "en"
       ? "I cannot claim that work is running: no durable task or result proves it. I have not invented progress or a deliverable."
-      : "No puedo afirmar que ese trabajo esté ejecutándose: ninguna tarea o resultado durable lo demuestra. No he inventado progreso ni una entrega."
-    : safeReply || (session.state.locale === "en"
-      ? "The engine completed without returning an assistant response. Please try again."
-      : "El motor terminó sin devolver una respuesta del asistente. Vuelve a intentarlo.");
+      : "No puedo afirmar que ese trabajo esté ejecutándose: ninguna tarea o resultado durable lo demuestra. No he inventado progreso ni una entrega.";
+  } else if (safeReply) {
+    finalReply = safeReply;
+  } else {
+    // Engine returned empty — provide context-aware fallback
+    const hasPendingEmail = session.state.pendingEmailWork?.status === "awaiting_approval";
+    const hasPendingCalendar = session.state.pendingCalendarWork?.status === "awaiting_approval";
+    const hasPendingFacebook = session.state.pendingFacebookPagesWork?.status === "awaiting_approval";
+    const isEs = session.state.locale !== "en";
+
+    if (hasPendingEmail) {
+      finalReply = isEs
+        ? "No he podido procesar esa petición, pero el borrador del correo sigue preparado. Puedes revisarlo, editar o enviarlo cuando quieras."
+        : "I couldn't process that request, but the email draft is still ready. You can review, edit, or send it whenever you want.";
+    } else if (hasPendingCalendar) {
+      finalReply = isEs
+        ? "No he podido procesar esa petición, pero el evento del calendario sigue pendiente. Puedes confirmarlo o cancelarlo."
+        : "I couldn't process that request, but the calendar event is still pending. You can confirm or cancel it.";
+    } else if (hasPendingFacebook) {
+      finalReply = isEs
+        ? "No he podido procesar esa petición, pero la publicación de Facebook sigue pendiente. Puedes confirmarla o cancelarla."
+        : "I couldn't process that request, but the Facebook post is still pending. You can confirm or cancel it.";
+    } else {
+      finalReply = isEs
+        ? "No he podido completar esa petición. Inténtalo de nuevo o reformula tu mensaje."
+        : "I couldn't complete that request. Please try again or rephrase your message.";
+    }
+  }
   const primaryStatus = toolStatuses[0] ?? "success";
   const generationFailed = primaryStatus === "generation_failed" || primaryStatus === "empty_assistant_response";
   if (trace) trace.assistantTextBytes = generationFailed ? null : Buffer.byteLength(finalReply, "utf8");
@@ -8033,7 +8112,7 @@ async function completeDeterministicOperationTurn(
   message: string,
   reply: string,
   intent: RoutingDecision["intent"],
-  status: "success" | "blocked" | "cancelled" | "already_verified",
+  status: "success" | "blocked" | "cancelled" | "already_verified" | "edited" | "explained",
   connectionSuggestion: ConnectionSuggestion | null = null,
   workResult: DepartmentResult | null = null,
   skipAssistantPersist: boolean = false,
@@ -11286,66 +11365,11 @@ export function createWorkExecutor(
   });
 }
 
-export function isInternalRuntimeLeak(text: string): boolean {
-  if (!text) return false;
-  const forbidden = [
-    "openclaw",
-    "gateway",
-    "compaction",
-    "/compact",
-    "/new",
-    "reservetokensfloor",
-    "agents.defaults",
-    "context window",
-    "token limit"
-  ];
-  const lower = text.toLowerCase();
-  // Sprint 66 P0 — chat reliability: a single substring match rotated
-  // the engine session downstream and broke the next turn. Live-product
-  // answers legitimately use words like "reservar" (contains "reservetokensfloor"),
-  // "renueva" (contains "/new"), "compactar" (contains "compaction"). The
-  // previous heuristic was a false-positive magnet. Require two distinct
-  // forbidden terms OR an explicit structural pattern (slash command or
-  // dotted config key) before rotating the session.
-  const hits = forbidden.filter((term) => lower.includes(term));
-  if (hits.length >= 2) return true;
-  if (/\/compact\b/.test(lower)) return true;
-  if (/\/new\b/.test(lower)) return true;
-  if (/agents\.defaults/.test(lower)) return true;
-  if (/reservetokensfloor/i.test(lower)) return true;
-  return false;
-}
-
 /**
- * Detects known engine error strings that OpenClaw may persist as assistant
- * messages when the agent run fails. These are NOT conversational content —
- * they must never be shown to the customer as Departify's reply.
+ * Sprint 68 — Re-export centralized sanitization for backward compatibility.
+ * The actual functions are imported at the top of the file.
  */
-export function isEngineErrorText(text: string): boolean {
-  if (!text) return false;
-  const lower = text.toLowerCase().trim();
-  const patterns = [
-    "the agent run failed before producing a reply",
-    "agent run failed",
-    "run failed before producing",
-    "the agent failed to respond",
-    "no he podido completar esa respuesta porque el motor",
-    "el motor terminó sin devolver",
-    "engine completed without returning",
-    "i couldn't complete that response because the business engine failed",
-  ];
-  return patterns.some((p) => lower.includes(p));
-}
-
-export function sanitizeResponseText(text: string, locale = "es"): string {
-  if (!text) return text;
-  if (isInternalRuntimeLeak(text) || isEngineErrorText(text)) {
-    return locale === "en"
-      ? "I could not complete this request. Your conversation is saved; you can try again."
-      : "No he podido completar esta petición. Tu conversación está guardada; puedes volver a intentarlo.";
-  }
-  return text;
-}
+export { isInternalRuntimeLeak, isEngineErrorText, sanitizeCEOResponse as sanitizeResponseText } from "../../customer-zero/response-sanitizer.js";
 
 /** Exposed for tests. */
 export function __resetWorkStoreForTests(): void {

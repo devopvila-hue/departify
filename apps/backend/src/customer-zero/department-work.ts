@@ -102,16 +102,11 @@ export const UNBACKED_WORK_CLAIM_PATTERNS: readonly RegExp[] = [
   /\by[aá]\s+estoy\s+trabajando\s+en\s+ello\b/i,
 ];
 
-/** True when a CEO reply contains a "promise without capability"
- *  pattern. The orchestrator must replace the engine's reply with
- *  an honest business-language fallback in that case. */
-export function detectUnsupportedPromise(reply: string): boolean {
-  return UNSUPPORTED_PROMISE_PATTERNS.some((pattern) => pattern.test(reply));
-}
-
-export function detectUnbackedWorkClaim(reply: string): boolean {
-  return UNBACKED_WORK_CLAIM_PATTERNS.some((pattern) => pattern.test(reply));
-}
+/**
+ * Sprint 68 — Delegated to centralized response-sanitizer.ts.
+ * These wrappers preserve backward compatibility for existing call sites.
+ */
+export { detectUnsupportedPromise, detectUnbackedWorkClaim } from "./response-sanitizer.js";
 
 export const MAX_ACTIVE_DASHBOARDS = 5;
 export const DASHBOARD_RESULT_CAPABILITIES: readonly DepartmentWorkCapability[] = [

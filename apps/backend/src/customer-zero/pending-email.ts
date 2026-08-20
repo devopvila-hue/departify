@@ -180,6 +180,26 @@ export function isEmailApprovalResponse(message: string): boolean {
     "go ahead",
     "send it",
     "approved",
+    "vale",
+    "perfecto",
+    "dale",
+    "envia",
+    "manda",
+    "proceed",
+    "do it",
+    "confirmo",
+    "confirmado",
+    "ok",
+    "ok envialo",
+    "ok mandalo",
+    "si por favor",
+    "si dale",
+    "si adelante",
+    "si hazlo",
+    "envialo por favor",
+    "mandalo por favor",
+    "hazlo ya",
+    "adelante envialo",
   ]).has(normalized);
 }
 
@@ -198,6 +218,18 @@ export function isEmailCancellation(message: string): boolean {
     "no lo envies",
     "dejalo",
     "dejalo estar",
+    "mejor no",
+    "mejor no lo mandes",
+    "no lo mandes",
+    "olvIdalo",
+    "cancel",
+    "skip",
+    "no enviar",
+    "no mandar",
+    "descartar",
+    "no gracias",
+    "nop",
+    "nel",
   ]).has(normalized);
 }
 
@@ -221,12 +253,21 @@ export function isEmailFailureQuestion(message: string): boolean {
     "por que no",
     "por que no se ha enviado",
     "por que no se envio",
+    "que paso",
+    "que ocurrio",
+    "cual fue el error",
+    "por que fallo",
+    "por que no funciono",
+    "why",
+    "what happened",
+    "why did it fail",
+    "what went wrong",
   ]).has(normalizeEmailConversationText(message));
 }
 
 /** Only explicit edit instructions may mutate an existing draft. */
 export function isEmailEditRequest(message: string): boolean {
-  return /\b(cambia(?:r)?\s+(?:el\s+)?asunto|pon\s+.+\s+al\s+principio|hazlo\s+m[aá]s\s+corto|a[nñ]ade(?:\s+que)?|quita\s+el\s+[uú]ltimo\s+p[aá]rrafo|hazlo\s+m[aá]s\s+informal)\b/i.test(
+  return /\b(cambia(?:r)?\s+(?:el\s+)?asunto|pon\s+.+\s+al\s+principio|hazlo\s+m[aá]s\s+corto|hazlo\s+m[aá]s\s+largo|hazlo\s+m[aá]s\s+formal|a[nñ]ade(?:\s+que)?|quita\s+el\s+[uú]ltimo\s+p[aá]rrafo|hazlo\s+m[aá]s\s+informal|cambia\s+el\s+destinatario|cambia\s+el\s+cuerpo|modifica(?:r)?\s+(?:el\s+)?(?:asunto|cuerpo|destinatario)|ponle\s+m[aá]s\s+(?:detalle|contexto|informaci[oó]n)|resume(?:r)?\s+(?:el\s+)?(?:cuerpo|mensaje)|acorta(?:r)?\s+(?:el\s+)?(?:cuerpo|mensaje)|agrega(?:r)?\s+(?:un\s+)?(?:p[aá]rrafo|frase|saludo|despedida)|make\s+it\s+shorter|make\s+it\s+longer|change\s+the\s+subject|add\s+more\s+detail|shorten\s+it|lengthen\s+it)\b/i.test(
     message,
   );
 }
