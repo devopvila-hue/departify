@@ -31,6 +31,7 @@ function createMockEngine(overrides?: {
       return {
         text: "Mock OpenClaw response with tool results.",
         status: "completed",
+        sessionId: "mock-session",
       } satisfies EngineMessageResult;
     });
 
@@ -513,7 +514,7 @@ describe("Sprint 67 P0.8 — Workspace Truth", () => {
     return new Promise<void>((resolve) => {
       setTimeout(() => {
         if (sendMessage.mock.calls.length > 0) {
-          const sentMessage = sendMessage.mock.calls[0][0].message as string;
+          const sentMessage = sendMessage.mock.calls[0]![0].message as string;
           expect(sentMessage).toContain("WORKSPACE TRUTH");
           expect(sentMessage).toContain("Agent Workspace");
           expect(sentMessage).toContain("/home/node/.Departify/workspace/agents/main");

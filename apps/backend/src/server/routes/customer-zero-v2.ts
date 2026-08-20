@@ -15,7 +15,7 @@
  * composed runtime. Nothing is simulated.
  */
 import type { FastifyInstance } from "fastify";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import {
   fetchAndExtractWebsite,
@@ -34,6 +34,11 @@ import {
   produceTeamForSession,
   type CustomerZeroSession,
 } from "../../customer-zero/customer-zero-session.js";
+import {
+  hydratePendingWorkForConversation,
+  persistPendingWorkAtTurnCompletion,
+  persistPendingWorkForConversation,
+} from "../../customer-zero/pending-work-state.js";
 import {
   BYOK_DEFAULT_MODEL,
   BYOK_PROVIDER,
@@ -581,6 +586,7 @@ export async function registerCustomerZeroV2Routes(
         locale,
         ...(deps.toolState ? { toolState: deps.toolState } : {}),
         ...(deps.conversations ? { conversations: deps.conversations } : {}),
+        ...(deps.pendingWork ? { pendingWork: deps.pendingWork } : {}),
         ...(deps.departmentMemory ? { departmentMemory: deps.departmentMemory } : {}),
         ...(deps.llmCredentials ? { llmCredentials: deps.llmCredentials } : {}),
       });
@@ -1919,6 +1925,8 @@ export async function registerCustomerZeroV2Routes(
       work.missingFields = [];
       work.status = "awaiting_approval";
       session.state.pendingEmailWork = work;
+      const conversation = await ensureConversation(session, "Correo desde Inbox");
+      await persistPendingWorkForConversation(session, conversation.id);
       return { organizationId, draftId: work.id, provider, draft: work.draft, status: work.status };
     },
   );
@@ -1945,6 +1953,8 @@ export async function registerCustomerZeroV2Routes(
       work.missingFields = [];
       work.status = "awaiting_approval";
       session.state.pendingEmailWork = work;
+      const conversation = await ensureConversation(session, "Correo desde Inbox");
+      await persistPendingWorkForConversation(session, conversation.id);
       return { organizationId, draftId: work.id, provider, draft: work.draft, status: work.status };
     },
   );
@@ -1957,9 +1967,18 @@ export async function registerCustomerZeroV2Routes(
     async (request, reply) => {
       const { organizationId } = request.params;
       const session = await requireSession(organizationId, deps);
+      const conversation = await ensureConversation(session, "Correo desde Inbox");
+      await hydratePendingWorkForConversation(session, conversation.id);
       const work = session.state.pendingEmailWork;
       if (!work || work.id !== request.body?.draftId) return reply.code(409).send({ error: "email_draft_not_pending" });
       const outcome = await sendPendingEmail(session, work, session.state.locale !== "en");
+      await persistPendingWorkAtTurnCompletion(
+        session,
+        conversation.id,
+        undefined,
+        "email",
+        session.state.lastExecutionReceipt?.status === "succeeded" ? "succeeded" : undefined,
+      );
       return {
         organizationId,
         draftId: work.id,
@@ -4685,6 +4704,7 @@ export async function requireSession(
   const session = getOrCreateCustomerZeroSession(organizationId, {
     ...(deps.toolState ? { toolState: deps.toolState } : {}),
     ...(deps.conversations ? { conversations: deps.conversations } : {}),
+    ...(deps.pendingWork ? { pendingWork: deps.pendingWork } : {}),
     ...(deps.departmentMemory ? { departmentMemory: deps.departmentMemory } : {}),
     ...(deps.llmCredentials ? { llmCredentials: deps.llmCredentials } : {}),
   });
@@ -5829,6 +5849,7 @@ async function executeRuntimeTool(
       }
       const duration = Number(args.durationMinutes ?? 30);
       session.state.pendingCalendarWork = {
+        id: createCalendarPendingOperationId(),
         summary: title,
         hour: startDate.getHours(),
         minute: startDate.getMinutes(),
@@ -6132,16 +6153,28 @@ async function runCeoMessageTurn(
     }
     throw cause;
   }
+  // Restore safe pending work before the Sprint 68 pre-LLM resolver runs.
+  await hydratePendingWorkForConversation(session, conversation.id);
   if (trace) traceStage(trace, "T3_conversation_session_resolution_complete");
   const organizationId = session.organizationId;
   const activeUserId = userId;
+  if (userId) session.state.currentUserId = userId;
+  else delete session.state.currentUserId;
   const turnStartedAt = Date.now();
 
   // Sprint 67 P0.7 — FOUNDER DEVELOPMENT MODE
   // For authenticated founders, bypass ALL Departify routing and send
   // directly to OpenClaw with full tools. This is the architectural
   // change: Founder Chat → OpenClaw directly, not through Departify.
-  if (deps.engine && userId) {
+  // A recovered approval-gated operation is always resolved by the existing
+  // deterministic state machine, even for a founder. Sending it to OpenClaw
+  // would bypass the Sprint 68 pre-LLM resolver and risk losing continuity.
+  const hasRecoveredPendingWork = Boolean(
+    session.state.pendingEmailWork ||
+    session.state.pendingCalendarWork ||
+    session.state.pendingFacebookPagesWork,
+  );
+  if (deps.engine && userId && !hasRecoveredPendingWork) {
     let userRole: string | undefined;
     if (deps.organizations) {
       const memberships = await deps.organizations.listForUser(userId);
@@ -7840,6 +7873,20 @@ export async function processCeoMessage(
     activitySink,
     chunkSink,
   );
+  const pendingType = result.routing.intent === "email_action"
+    ? "email"
+    : result.routing.intent === "calendar_create"
+      ? "calendar"
+      : result.routing.intent === "request_approval"
+        ? "facebook_pages"
+        : undefined;
+  await persistPendingWorkAtTurnCompletion(
+    session,
+    result.conversationId,
+    userId,
+    pendingType,
+    session.state.lastExecutionReceipt?.status === "succeeded" ? "succeeded" : undefined,
+  );
   // Sprint 67 P0.7 — Founder Direct Mode does not need business suggestion chips.
   // The founder is using OpenClaw directly, not Departify's business capabilities.
   const nextActions = result.routing?.intent === "founder_build"
@@ -8117,6 +8164,24 @@ async function completeDeterministicOperationTurn(
   workResult: DepartmentResult | null = null,
   skipAssistantPersist: boolean = false,
 ): Promise<CeoMessageResult> {
+  const pendingType = intent === "email_action"
+    ? "email"
+    : intent === "calendar_create"
+      ? "calendar"
+      : intent === "request_approval"
+        ? "facebook_pages"
+        : undefined;
+  await persistPendingWorkAtTurnCompletion(
+    session,
+    conversation.id,
+    undefined,
+    pendingType,
+    status === "success" || status === "already_verified"
+      ? "succeeded"
+      : status === "cancelled"
+        ? "cancelled"
+        : undefined,
+  );
   // Sprint 67 P0.8 — Durable founder runs already persisted the assistant
   // message via the executor's onPersist callback (connection-independent).
   // When that happened, skip the redundant transcript insert here to avoid
@@ -8891,6 +8956,7 @@ async function runCalendarCreateTurn(
     ? "Calendar no tiene activada la creación de eventos. Puedes dar acceso a Calendar desde Conexiones."
     : "Calendar event creation is not activated. You can give Calendar access from Connections." };
   const work = {
+    id: createCalendarPendingOperationId(),
     ...parsed,
     status: (parsed.dateProvided ? "awaiting_approval" : "awaiting_date") as "awaiting_approval" | "awaiting_date",
     createdAt: new Date().toISOString(),
@@ -8904,6 +8970,10 @@ async function runCalendarCreateTurn(
   return { reply: isEs
     ? `He preparado este evento:\n\n**${work.summary}**\n${formatCalendarTime(work.startIso!, work.timezone)} — ${formatCalendarTime(work.endIso!, work.timezone)}\n${work.attendees.length ? `Con: ${work.attendees.join(", ")}\n` : ""}\n¿Quieres que lo cree? Responde «sí, créala» para confirmarlo.`
     : `I prepared this event:\n\n**${work.summary}**\n${formatCalendarTime(work.startIso!, work.timezone)} — ${formatCalendarTime(work.endIso!, work.timezone)}\n${work.attendees.length ? `With: ${work.attendees.join(", ")}\n` : ""}\nShould I create it? Reply “yes, create it” to confirm.` };
+}
+
+function createCalendarPendingOperationId(): string {
+  return `calendar_${randomUUID()}`;
 }
 
 async function runPendingCalendarTurn(
@@ -8965,6 +9035,10 @@ async function runPendingCalendarTurn(
     sideEffect: true,
   });
   session.state.lastExecutionReceipt = receipt;
+  // The durable `creating` state is an idempotency barrier across restarts.
+  if (session.state.currentConversationId) {
+    await persistPendingWorkForConversation(session, session.state.currentConversationId);
+  }
   const result = await new GoogleCalendarAdapter({ organizationId: session.organizationId, userId: identity.userId }).createEvent({
     summary: work.summary,
     startIso: work.startIso!,
@@ -9804,6 +9878,23 @@ async function runEmailTurn(
     return { reply: "", connectionSuggestion: null };
   }
 
+  // An execution lease recovered after a restart is deliberately not an
+  // approval state. It may be checked or resolved from provider evidence,
+  // but it must never become a fresh send.
+  if (work.status === "sending") {
+    return {
+      reply: isEs
+        ? "El envío ya estaba en curso cuando se reinició el servicio; no lo reenviaré ni crearé un duplicado."
+        : "The send was already in progress when the service restarted; I will not resend or create a duplicate.",
+      connectionSuggestion: null,
+    };
+  }
+  // An accepted-but-unverified provider result is never permission to send
+  // again. Recovery may only query provider evidence for the same operation.
+  if (work.status === "accepted_unverified") {
+    return sendPendingEmail(session, work, isEs);
+  }
+
   // Awaiting approval → accept approve / cancel / new-info.
   if (
     work.status === "awaiting_approval" ||
@@ -10010,6 +10101,11 @@ async function sendPendingEmail(
     sideEffect: true,
   });
   session.state.lastExecutionReceipt = receipt;
+  // Persist the execution lease before the external provider is invoked.
+  // A restarted worker will recover `sending`, never issue a blind resend.
+  if (session.state.currentConversationId) {
+    await persistPendingWorkForConversation(session, session.state.currentConversationId);
+  }
   const operational = await isEmailCapabilityOperational(organizationId, "email.send");
   if (!operational) {
     work.status = "awaiting_approval";
@@ -10179,7 +10275,7 @@ function applyEmailEdit(work: PendingEmailWork, message: string): void {
     work.draft = { ...draft, body: `${opening}\n\n${draft.body}` };
     return;
   }
-  if (/hazlo\s+m[aá]s\s+corto/i.test(message)) {
+  if (/(?:hazlo\s+)?m[aá]s\s+corto/i.test(message)) {
     const paragraphs = draft.body.split(/\n\s*\n/);
     work.draft = { ...draft, body: paragraphs.slice(0, 2).join("\n\n") };
     return;

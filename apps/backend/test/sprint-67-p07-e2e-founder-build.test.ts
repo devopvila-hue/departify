@@ -44,6 +44,7 @@ describe("Sprint 67 P0.7 — E2E Founder Build Mode", () => {
       const sendMessage = vi.fn().mockResolvedValue({
         text: 'Skill "pdf-generation" instalada correctamente.\n\nNombre: pdf-generation\nDescripción: Professional PDF generation from markdown using Pandoc.',
         status: "completed",
+        sessionId: "founder-session-1",
       } satisfies EngineMessageResult);
       const createSession = vi.fn().mockResolvedValue({ id: "founder-session-1" });
 
@@ -116,10 +117,12 @@ describe("Sprint 67 P0.7 — E2E Founder Build Mode", () => {
         .mockResolvedValueOnce({
           text: 'Skill "pdf-generation" instalada.',
           status: "completed",
+          sessionId: "founder-session-1",
         } satisfies EngineMessageResult)
         .mockResolvedValueOnce({
           text: "Skills instaladas (1):\n- pdf-generation",
           status: "completed",
+          sessionId: "founder-session-1",
         } satisfies EngineMessageResult);
 
       const createSession = vi.fn().mockResolvedValue({ id: "founder-session-1" });
@@ -216,6 +219,7 @@ describe("Sprint 67 P0.7 — E2E Founder Build Mode", () => {
       const sendMessage = vi.fn().mockResolvedValue({
         text: "Skills instaladas (0)",
         status: "completed",
+        sessionId: "session-1",
       } satisfies EngineMessageResult);
       const createSession = vi.fn().mockResolvedValue({ id: "session-1" });
 
@@ -245,6 +249,7 @@ describe("Sprint 67 P0.7 — E2E Founder Build Mode", () => {
       const sendMessage = vi.fn().mockResolvedValue({
         text: 'Skill "pdf-generation" eliminada.',
         status: "completed",
+        sessionId: "session-1",
       } satisfies EngineMessageResult);
       const createSession = vi.fn().mockResolvedValue({ id: "session-1" });
 

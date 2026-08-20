@@ -7,6 +7,7 @@ import {
 import type { MarketingService } from "./marketing-service.js";
 import type { CustomerZeroSession } from "./customer-zero-session.js";
 import { hydrateSessionToolState } from "./customer-zero-session.js";
+import { persistPendingWorkForConversation } from "./pending-work-state.js";
 
 export const FACEBOOK_PAGES_PUBLISH_CAPABILITY = "marketing.social.publish";
 
@@ -192,6 +193,11 @@ export async function resolvePendingFacebookPagesPublication(input: {
   }
 
   session.state.pendingFacebookPagesWork = { ...work, status: "publishing" };
+  // Commit the execution lease before calling an external publisher. Recovery
+  // can report this ambiguous state but must never publish twice.
+  if (session.state.currentConversationId) {
+    await persistPendingWorkForConversation(session, session.state.currentConversationId, deps.userId);
+  }
   const execution = await runtime.execute({
     requestId: `social_${Date.now().toString(36)}`,
     organizationId: session.organizationId,

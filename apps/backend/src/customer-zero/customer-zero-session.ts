@@ -94,6 +94,10 @@ import {
   InMemoryConversationStore,
   type ConversationStore,
 } from "./conversation-store.js";
+import {
+  InMemoryPendingWorkStore,
+  type PendingWorkStore,
+} from "./pending-work-store.js";
 import type { DepartmentMemoryStore } from "./department-memory.js";
 import {
   getGoogleTokenStore,
@@ -135,6 +139,7 @@ export interface CustomerZeroSessionState {
   };
   /** Pending Calendar mutation; retained until the CEO approves or cancels. */
   pendingCalendarWork?: {
+    id?: string;
     summary: string;
     hour?: number;
     minute?: number;
@@ -188,6 +193,8 @@ export interface CustomerZeroSessionState {
   dnaHydrated?: boolean;
   /** The organization's current/selected conversation (Phase P-B part 15). */
   currentConversationId?: string;
+  /** Authenticated actor for the current turn; stored separately on durable work. */
+  currentUserId?: string;
   /** Marketing Director's diagnosis of the business. */
   marketingDiagnosis?: MarketingDiagnosis;
   /** The team Elvira formed for the current goal. */
@@ -266,6 +273,8 @@ export interface CustomerZeroSession {
   readonly toolState: ToolStateStore;
   /** Durable organization-scoped conversations (Phase P-B part 15). */
   readonly conversations: ConversationStore;
+  /** Durable, conversation-scoped approval-gated work (Sprint 68.1). */
+  readonly pendingWork: PendingWorkStore;
   state: CustomerZeroSessionState;
   reports: readonly CompanyDiscoveryReport[];
 }
@@ -279,6 +288,8 @@ export interface CustomerZeroSessionOptions {
   readonly toolState?: ToolStateStore;
   /** Durable conversation store (Supabase in production). */
   readonly conversations?: ConversationStore;
+  /** Durable pending conversational work store (Supabase in production). */
+  readonly pendingWork?: PendingWorkStore;
   readonly departmentMemory?: DepartmentMemoryStore;
   /** Durable organization-owned BYOK store. */
   readonly llmCredentials?: LlmCredentialStore;
@@ -473,6 +484,7 @@ export function getOrCreateCustomerZeroSession(
     capabilities,
     toolState: options.toolState ?? new InMemoryToolStateStore(),
     conversations: options.conversations ?? new InMemoryConversationStore(),
+    pendingWork: options.pendingWork ?? new InMemoryPendingWorkStore(),
     state: {
       organizationId,
       rawData: {},

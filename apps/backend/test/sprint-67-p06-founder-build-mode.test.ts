@@ -265,8 +265,8 @@ describe("Sprint 67 P0.6 — Founder Build Mode", () => {
 
       const trail = getAuditTrail("org-456");
       expect(trail.length).toBeGreaterThan(0);
-      expect(trail[0].operation).toBe("install_package");
-      expect(trail[0].result).toBe("success");
+      expect(trail[0]!.operation).toBe("install_package");
+      expect(trail[0]!.result).toBe("success");
     });
 
     it("should record failure in audit trail", () => {
@@ -279,7 +279,7 @@ describe("Sprint 67 P0.6 — Founder Build Mode", () => {
 
       const trail = getAuditTrail("org-012");
       expect(trail.length).toBeGreaterThan(0);
-      expect(trail[0].result).toBe("failure");
+      expect(trail[0]!.result).toBe("failure");
     });
   });
 

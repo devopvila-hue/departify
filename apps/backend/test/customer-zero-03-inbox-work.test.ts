@@ -7,6 +7,7 @@ import { makeFakeTenant } from "./helpers/fake-tenant.js";
 import { InMemoryInboxStore } from "../src/customer-zero/inbox-domain.js";
 import { resetCustomerZeroSessionsForTest } from "../src/customer-zero/customer-zero-session.js";
 import { HostingerEmailAdapter, HostingerEmailError } from "../src/customer-zero/hostinger-email-adapter.js";
+import { InMemoryPendingWorkStore } from "../src/customer-zero/pending-work-store.js";
 
 /**
  * CZ03 — Inbox → work bridge.
@@ -22,14 +23,17 @@ const AUTH = { authorization: "Bearer token-a" };
 describe("CZ03 — Inbox → work bridge", () => {
   let server: FastifyInstance;
   let inboxStore: InMemoryInboxStore;
+  let pendingWork: InMemoryPendingWorkStore;
 
   beforeAll(async () => {
     const tenant = makeFakeTenant();
     inboxStore = new InMemoryInboxStore();
+    pendingWork = new InMemoryPendingWorkStore();
     server = await buildServer(loadBackendConfig(), {
       auth: tenant,
       organizations: tenant,
       inbox: inboxStore,
+      pendingWork,
     });
   });
 
@@ -190,6 +194,32 @@ describe("CZ03 — Inbox → work bridge", () => {
     expect(approved.json()).toMatchObject({ status: "succeeded", receipt: { providerResourceId: "host-reply-1" } });
     expect(reply).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledWith(expect.objectContaining({ messageId: "host-incoming-1", messageUid: "42", sourceFolder: "INBOX", to: "cliente@empresa.com" }));
+    expect(verify).toHaveBeenCalled();
+  });
+
+  it("recovers an Inbox draft after restart and sends the original draft once", async () => {
+    const org = await startOrg();
+    const verify = vi.spyOn(HostingerEmailAdapter.prototype, "verifyCapability").mockResolvedValue(true);
+    const send = vi.spyOn(HostingerEmailAdapter.prototype, "sendMessage").mockResolvedValue({
+      providerMessageId: "host-restarted-1",
+      sentAt: new Date().toISOString(),
+    });
+    const draft = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/inbox/email/draft`,
+      payload: { provider: "hostinger", to: "alex@example.com", subject: "Resumen", body: "El borrador original" },
+    });
+    const draftId = draft.json().draftId as string;
+    resetCustomerZeroSessionsForTest();
+
+    const approved = await authedInject({
+      method: "POST",
+      url: `/api/customer-zero/${org}/inbox/email/approve`,
+      payload: { draftId },
+    });
+    expect(approved.json()).toMatchObject({ status: "succeeded", receipt: { providerResourceId: "host-restarted-1" } });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ to: ["alex@example.com"], subject: "Resumen", bodyText: "El borrador original" }));
     expect(verify).toHaveBeenCalled();
   });
 

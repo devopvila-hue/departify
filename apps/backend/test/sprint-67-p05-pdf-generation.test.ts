@@ -62,7 +62,7 @@ describe("Sprint 67 P0.5 — Real PDF capability + multi-turn execution", () => 
         currentOperation: null,
       };
 
-      const rendered = renderRuntimeBusinessContextForEngine(context, "[]");
+      const rendered = renderRuntimeBusinessContextForEngine(context as never, "[]");
       expect(rendered).toContain("document.pdf.generate");
     });
   });
@@ -281,7 +281,7 @@ describe("Sprint 67 P0.5 — Real PDF capability + multi-turn execution", () => 
         currentOperation: null,
       };
 
-      const rendered = renderRuntimeBusinessContextForEngine(context, "[]");
+      const rendered = renderRuntimeBusinessContextForEngine(context as never, "[]");
 
       // Should contain the execution truth about PDF being available
       expect(rendered).toContain("PDF generation: AVAILABLE");
@@ -309,7 +309,7 @@ describe("Sprint 67 P0.5 — Real PDF capability + multi-turn execution", () => 
         currentOperation: null,
       };
 
-      const rendered = renderRuntimeBusinessContextForEngine(context, "[]");
+      const rendered = renderRuntimeBusinessContextForEngine(context as never, "[]");
 
       // Should NOT contain the old limitation
       expect(rendered).not.toContain("PDF generation/rendering/export: no tool exists");
@@ -336,7 +336,7 @@ describe("Sprint 67 P0.5 — Real PDF capability + multi-turn execution", () => 
         currentOperation: null,
       };
 
-      const rendered = renderRuntimeBusinessContextForEngine(context, "[]");
+      const rendered = renderRuntimeBusinessContextForEngine(context as never, "[]");
 
       // Should still contain capability resolution states
       expect(rendered).toContain("Image generation/creation: NOT_INSTALLED");

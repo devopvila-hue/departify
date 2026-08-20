@@ -129,7 +129,7 @@ describe("Sprint 67 P0.4 — Multi-turn continuity + execution truth", () => {
         currentOperation: null,
       };
 
-      const rendered = renderRuntimeBusinessContextForEngine(context, "[]");
+      const rendered = renderRuntimeBusinessContextForEngine(context as never, "[]");
 
       // Should contain the execution truth about PDF being available
       expect(rendered).toContain("PDF generation: AVAILABLE");
@@ -152,7 +152,7 @@ describe("Sprint 67 P0.4 — Multi-turn continuity + execution truth", () => {
         currentOperation: null,
       };
 
-      const rendered = renderRuntimeBusinessContextForNativeEngine(context);
+      const rendered = renderRuntimeBusinessContextForNativeEngine(context as never);
 
       // Should contain the execution truth about PDF being available
       expect(rendered).toContain("PDF generation: AVAILABLE");
@@ -180,7 +180,7 @@ describe("Sprint 67 P0.4 — Multi-turn continuity + execution truth", () => {
         currentOperation: null,
       };
 
-      const rendered = renderRuntimeBusinessContextForEngine(context, "[]");
+      const rendered = renderRuntimeBusinessContextForEngine(context as never, "[]");
 
       // Should contain the execution truth about image generation
       expect(rendered).toContain("Image generation/creation: NOT_INSTALLED");
@@ -208,7 +208,7 @@ describe("Sprint 67 P0.4 — Multi-turn continuity + execution truth", () => {
         currentOperation: null,
       };
 
-      const rendered = renderRuntimeBusinessContextForNativeEngine(context);
+      const rendered = renderRuntimeBusinessContextForNativeEngine(context as never);
 
       // Should contain all execution truth capabilities and states
       expect(rendered).toContain("PDF generation: AVAILABLE");
@@ -239,7 +239,7 @@ describe("Sprint 67 P0.4 — Multi-turn continuity + execution truth", () => {
         currentOperation: null,
       };
 
-      const rendered = renderRuntimeBusinessContextForEngine(context, "[]");
+      const rendered = renderRuntimeBusinessContextForEngine(context as never, "[]");
 
       // Should contain all execution truth capabilities and states
       expect(rendered).toContain("PDF generation: AVAILABLE");

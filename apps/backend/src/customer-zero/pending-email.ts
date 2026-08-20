@@ -100,7 +100,7 @@ export function extractRecipient(message: string): string | null {
   const address = message.match(EMAIL_RE);
   if (address) return address[0];
   const afterTo = message.match(
-    /\b(?:a|para|al|con)\s+([^.,;]+?)(?:\s+(?:diciendo|dici[ée]ndole|que|para\s+decir(?:le)?|con\s+el\s+(?:mensaje|texto)|sobre)\b|$)/i,
+    /\b(?:a|para|al|con)\s+([^.,;]+?)(?:\s+(?:diciendo|dici[ée]ndole|que|para\s+decir(?:le)?|con(?:\s+el\s+(?:mensaje|texto))?|sobre)\b|$)/i,
   );
   return afterTo ? afterTo[1]!.trim().replace(/^[¿¡!?\s]+|[.!?\s]+$/g, "") || null : null;
 }
@@ -124,6 +124,13 @@ export function extractObjective(message: string): string | null {
     /\bpara\s+(?:enviar(?:le)?|escribir(?:le)?|mandar(?:le)?|comunicar(?:le)?|avisar(?:le)?|decir(?:le)?)\s+(.+)$/i,
   );
   if (afterPara?.[1]?.trim()) return afterPara[1].trim();
+  // Natural CEO phrasing: "Prepara un correo para María con las cifras".
+  // The recipient is parsed independently; this captures the requested body
+  // without requiring artificial wording such as "diciendo".
+  const withContent = message.match(
+    /\b(?:correo|email|e-?mail|mensaje|mail)\b[\s\S]*?\b(?:a|para)\s+[^.,;]+?\s+\bcon\s+(.+)$/i,
+  );
+  if (withContent?.[1]?.trim()) return withContent[1].trim();
   const replyBody = message.match(
     /^\s*(?:responde|responder|contesta|contestar)\b[\s\S]*?\bcon\s+(.+)$/i,
   );
@@ -267,7 +274,7 @@ export function isEmailFailureQuestion(message: string): boolean {
 
 /** Only explicit edit instructions may mutate an existing draft. */
 export function isEmailEditRequest(message: string): boolean {
-  return /\b(cambia(?:r)?\s+(?:el\s+)?asunto|pon\s+.+\s+al\s+principio|hazlo\s+m[aá]s\s+corto|hazlo\s+m[aá]s\s+largo|hazlo\s+m[aá]s\s+formal|a[nñ]ade(?:\s+que)?|quita\s+el\s+[uú]ltimo\s+p[aá]rrafo|hazlo\s+m[aá]s\s+informal|cambia\s+el\s+destinatario|cambia\s+el\s+cuerpo|modifica(?:r)?\s+(?:el\s+)?(?:asunto|cuerpo|destinatario)|ponle\s+m[aá]s\s+(?:detalle|contexto|informaci[oó]n)|resume(?:r)?\s+(?:el\s+)?(?:cuerpo|mensaje)|acorta(?:r)?\s+(?:el\s+)?(?:cuerpo|mensaje)|agrega(?:r)?\s+(?:un\s+)?(?:p[aá]rrafo|frase|saludo|despedida)|make\s+it\s+shorter|make\s+it\s+longer|change\s+the\s+subject|add\s+more\s+detail|shorten\s+it|lengthen\s+it)\b/i.test(
+  return /\b(cambia(?:r)?\s+(?:el\s+)?asunto|pon\s+.+\s+al\s+principio|(?:hazlo\s+)?m[aá]s\s+corto|(?:hazlo\s+)?m[aá]s\s+largo|(?:hazlo\s+)?m[aá]s\s+formal|a[nñ]ade(?:\s+que)?|quita\s+el\s+[uú]ltimo\s+p[aá]rrafo|(?:hazlo\s+)?m[aá]s\s+informal|cambia\s+el\s+destinatario|cambia\s+el\s+cuerpo|modifica(?:r)?\s+(?:el\s+)?(?:asunto|cuerpo|destinatario)|ponle\s+m[aá]s\s+(?:detalle|contexto|informaci[oó]n)|resume(?:r)?\s+(?:el\s+)?(?:cuerpo|mensaje)|acorta(?:r)?\s+(?:el\s+)?(?:cuerpo|mensaje)|agrega(?:r)?\s+(?:un\s+)?(?:p[aá]rrafo|frase|saludo|despedida)|make\s+it\s+shorter|make\s+it\s+longer|change\s+the\s+subject|add\s+more\s+detail|shorten\s+it|lengthen\s+it)\b/i.test(
     message,
   );
 }

@@ -12,6 +12,7 @@ import { registerGracefulShutdown } from "./server/shutdown.js";
 import { SupabaseTenantService } from "./auth/supabase-tenant-service.js";
 import { SupabaseToolStateStore } from "./customer-zero/supabase-tool-state-store.js";
 import { SupabaseConversationStore } from "./customer-zero/supabase-conversation-store.js";
+import { SupabasePendingWorkStore } from "./customer-zero/pending-work-store.js";
 import { SupabaseInboxStore } from "./customer-zero/supabase-inbox-store.js";
 import { SupabaseDepartmentWorkStore } from "./customer-zero/supabase-department-work-store.js";
 import { SupabaseDepartmentDashboardStore } from "./customer-zero/department-dashboards.js";
@@ -99,6 +100,7 @@ try {
   deps.organizations = tenant;
   deps.toolState = new SupabaseToolStateStore(supabaseAuthConfig);
   deps.conversations = new SupabaseConversationStore(supabaseAuthConfig);
+  deps.pendingWork = new SupabasePendingWorkStore(supabaseAuthConfig);
   deps.inbox = new SupabaseInboxStore(supabaseAuthConfig);
   deps.workStore = new SupabaseDepartmentWorkStore(supabaseAuthConfig);
   deps.dashboardStore = new SupabaseDepartmentDashboardStore(supabaseAuthConfig);

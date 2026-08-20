@@ -17,6 +17,7 @@ import type { LlmCredentialStore } from "../customer-zero/llm-credentials.js";
 import type { OrganizationBrandingStore } from "../customer-zero/organization-branding.js";
 import type { WeeklyPlanStore } from "../customer-zero/weekly-plans.js";
 import type { PdfArtifactStore } from "../customer-zero/pdf-artifact-store.js";
+import type { PendingWorkStore } from "../customer-zero/pending-work-store.js";
 
 /**
  * Server dependencies — Phase P0-A / P-B.
@@ -33,6 +34,8 @@ export interface ServerDeps {
   toolState?: ToolStateStore;
   /** Durable organization-scoped conversations (Phase P-B part 15). */
   conversations?: ConversationStore;
+  /** Durable organization + conversation scoped pending actions (Sprint 68.1). */
+  pendingWork?: PendingWorkStore;
   /**
    * Durable canonical Company DNA (Customer Zero P0). The readiness gate
    * is evaluated against this store and nothing else — in-memory session
