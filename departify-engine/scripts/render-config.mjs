@@ -125,7 +125,7 @@ const maxTokens = int("OPENCLAW_MAX_TOKENS", 2048);
 const contextTokens = int("OPENCLAW_CONTEXT_TOKENS", 131072);
 const compactionKeepRecentTokens = int(
   "OPENCLAW_COMPACTION_KEEP_RECENT_TOKENS",
-  50000,
+  20000,
 );
 const compactionRecentTurns = int("OPENCLAW_COMPACTION_RECENT_TURNS", 3);
 const compactionTimeoutSeconds = int(
