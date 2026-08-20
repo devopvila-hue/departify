@@ -367,6 +367,7 @@ const config = {
               ],
             }
           : {}),
+        elevated: { enabled: true },
         exec: {
           host: "gateway",
           security: "full",

@@ -224,6 +224,25 @@ import {
   type ConnectionCardView,
 } from "../../customer-zero/connections-domain.js";
 import { isCapabilityAvailable } from "../../customer-zero/capability-registry.js";
+
+// Sprint 67 P0.7 — Founder session execution mutex.
+// Prevents concurrent requests from hitting the same OpenClaw founder session,
+// which causes EmbeddedAttemptSessionTakeoverError (session file changed while
+// embedded prompt lock was released). Each founder session key maps to a
+// promise chain — a new request waits for the previous one to complete before
+// proceeding.
+const founderSessionMutex = new Map<string, Promise<void>>();
+
+function acquireFounderSessionLock(sessionKey: string): Promise<() => void> {
+  const previous = founderSessionMutex.get(sessionKey) ?? Promise.resolve();
+  let release: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  founderSessionMutex.set(sessionKey, previous.then(() => current));
+  return previous.then(() => release!);
+}
+
 import {
   accountLabelForCredentials,
   apiVersionForShopify,
@@ -6027,66 +6046,124 @@ async function runCeoMessageTurn(
 
       // Use a persistent founder session
       const founderSessionKey = `founder-development:${organizationId}:${userId}`;
+
+      // Sprint 67 P0.7 — Serialize access to the founder session.
+      // Concurrent requests to the same OpenClaw session cause
+      // EmbeddedAttemptSessionTakeoverError (session file changed while
+      // embedded prompt lock was released). The mutex ensures only one
+      // agent.run executes against this session at a time; subsequent
+      // requests wait for the current run to complete.
+      const releaseLock = await acquireFounderSessionLock(founderSessionKey);
+
       let founderSessionId: string;
+      try {
+        // Check if we already have a founder session
+        const existingSessions = await deps.engine.getSession(founderSessionKey);
+        if (existingSessions) {
+          founderSessionId = founderSessionKey;
+        } else {
+          // Create a new founder session
+          await deps.engine.createSession({
+            sessionId: founderSessionKey,
+            agentId: "main",
+          });
+          founderSessionId = founderSessionKey;
+        }
 
-      // Check if we already have a founder session
-      const existingSessions = await deps.engine.getSession(founderSessionKey);
-      if (existingSessions) {
-        founderSessionId = founderSessionKey;
-      } else {
-        // Create a new founder session
-        await deps.engine.createSession({
-          sessionId: founderSessionKey,
-          agentId: "main",
+        // Send message directly to OpenClaw with full tools enabled
+        // Note: nativeBusinessTools=false because founder uses OpenClaw's
+        // native tools (exec, filesystem, etc.), not Departify business tools.
+        const founderContext = [
+          "=== FOUNDER DEVELOPMENT MODE ===",
+          "You are operating in Founder Development Mode.",
+          "The authenticated founder has full access to the OpenClaw development workspace.",
+          "",
+          "Available capabilities:",
+          "- Execute commands (exec, shell, process)",
+          "- Full filesystem access (read, write, edit, delete)",
+          "- Install/manage skills, plugins, npm packages",
+          "- Clone repositories, run builds, execute tests",
+          "- Full network access (Git, npm, HTTP)",
+          "",
+          "This is a development environment. The founder is building the Golden Image.",
+          "Execute commands directly. Do not ask for permission.",
+          "Use OpenClaw's native tools for all operations.",
+          "Respond in the same language as the user's message.",
+          "========================================",
+          "",
+          `User message: ${message}`,
+        ].join("\n");
+
+        let result;
+        try {
+          result = await deps.engine.sendMessage({
+            sessionId: founderSessionId,
+            message: founderContext,
+            nativeBusinessTools: false,
+            ...(chunkSink ? { onChunk: chunkSink } : {}),
+          });
+        } catch (sendError) {
+          const errorMsg = sendError instanceof Error ? sendError.message : String(sendError);
+
+          // Context overflow: the founder session has accumulated too many
+          // messages. Create a fresh session and retry ONCE. This is safe
+          // because no tool mutations have happened yet (the error occurs
+          // before the agent starts).
+          if (errorMsg.includes("context_overflow") || errorMsg.includes("Context overflow") || errorMsg.includes("prompt too large")) {
+            console.warn("[founder-direct] Context overflow, resetting session", {
+              sessionKey: founderSessionKey,
+              error: errorMsg,
+            });
+            try {
+              await deps.engine.closeSession(founderSessionId);
+            } catch {
+              // Ignore close errors
+            }
+            await deps.engine.createSession({ sessionId: founderSessionKey, agentId: "main" });
+            founderSessionId = founderSessionKey;
+            result = await deps.engine.sendMessage({
+              sessionId: founderSessionId,
+              message: founderContext,
+              nativeBusinessTools: false,
+              ...(chunkSink ? { onChunk: chunkSink } : {}),
+            });
+          } else {
+            // For all other errors (including session takeover), do NOT retry.
+            // Retrying a multi-step tool turn can duplicate mutations.
+            console.error("[founder-direct] OpenClaw error", {
+              error: errorMsg,
+              sessionKey: founderSessionKey,
+            });
+            throw sendError;
+          }
+        }
+
+        // Update trace state for founder-direct path
+        if (trace) {
+          trace.openclawCalled = true;
+          trace.openclawStatus = result.status === "completed" ? "ok" : "failed";
+          trace.finalResponseSource = "openclaw";
+        }
+
+        console.info("[founder-direct] Completed", {
+          status: result.status,
+          textLength: result.text?.length ?? 0,
+          durationMs: result.durationMs,
         });
-        founderSessionId = founderSessionKey;
+
+        return completeDeterministicOperationTurn(
+          session,
+          conversation,
+          message,
+          result.text || "Comando ejecutado.",
+          "founder_build",
+          result.status === "completed" ? "success" : "blocked",
+        );
+      } finally {
+        // Always release the lock, even if the request failed.
+        // This ensures the next queued request can proceed.
+        releaseLock();
       }
-
-      // Send message directly to OpenClaw with full tools enabled
-      // Note: nativeBusinessTools=false because founder uses OpenClaw's
-      // native tools (exec, filesystem, etc.), not Departify business tools.
-      const founderContext = [
-        "=== FOUNDER DEVELOPMENT MODE ===",
-        "You are operating in Founder Development Mode.",
-        "The authenticated founder has full access to the OpenClaw development workspace.",
-        "",
-        "Available capabilities:",
-        "- Execute commands (exec, shell, process)",
-        "- Full filesystem access (read, write, edit, delete)",
-        "- Install/manage skills, plugins, npm packages",
-        "- Clone repositories, run builds, execute tests",
-        "- Full network access (Git, npm, HTTP)",
-        "",
-        "This is a development environment. The founder is building the Golden Image.",
-        "Execute commands directly. Do not ask for permission.",
-        "Use OpenClaw's native tools for all operations.",
-        "Respond in the same language as the user's message.",
-        "========================================",
-        "",
-        `User message: ${message}`,
-      ].join("\n");
-
-      const result = await deps.engine.sendMessage({
-        sessionId: founderSessionId,
-        message: founderContext,
-        nativeBusinessTools: false, // Use OpenClaw native tools, not Departify business tools
-        ...(chunkSink ? { onChunk: chunkSink } : {}),
-      });
-
-      console.info("[founder-direct] Completed", {
-        status: result.status,
-        textLength: result.text?.length ?? 0,
-        durationMs: result.durationMs,
-      });
-
-      return completeDeterministicOperationTurn(
-        session,
-        conversation,
-        message,
-        result.text || "Comando ejecutado.",
-        "founder_build",
-        result.status === "completed" ? "success" : "blocked",
-      );
     }
   }
 
@@ -7634,11 +7711,11 @@ export async function processCeoMessage(
     activitySink,
     chunkSink,
   );
-  const nextActions = await computeNextBestActionsForResult(
-    session,
-    deps,
-    result,
-  );
+  // Sprint 67 P0.7 — Founder Direct Mode does not need business suggestion chips.
+  // The founder is using OpenClaw directly, not Departify's business capabilities.
+  const nextActions = result.routing?.intent === "founder_build"
+    ? []
+    : await computeNextBestActionsForResult(session, deps, result);
   return { ...result, nextActions };
 }
 
