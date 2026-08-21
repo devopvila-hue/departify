@@ -33,6 +33,7 @@ import {
   shouldCompact,
   splitForCompaction,
   summarizeOldMessages,
+  canonicalSummary,
   type ConversationMessage,
 } from "../../customer-zero/conversation-store.js";
 import {
@@ -413,16 +414,21 @@ export async function registerConversationRoutes(
           );
           if (newOlder.length > 0) {
             const lastFolded = newOlder[newOlder.length - 1] as ConversationMessage;
-            const delta = summarizeOldMessages(
+            // Incident 05 — Canonical compaction: REPLACE summary, not append.
+            const { summary } = canonicalSummary(
+              persisted?.summary,
               newOlder.map((m) => ({ role: m.role, content: m.content })),
             );
-            const summary = [persisted?.summary, delta].filter(Boolean).join("\n\n");
+            // Count total messages folded (watermark-based, not accumulated)
+            const totalFolded = priorIndex >= 0
+              ? allMessages.findIndex((candidate) => candidate.id === lastFolded.id) + 1
+              : newOlder.length;
             await session.conversations.saveCompaction(
               organizationId,
               persistedConversationId,
               summary,
               lastFolded.id,
-              (persisted?.compactionMessageCount ?? 0) + newOlder.length,
+              totalFolded,
             );
           }
         }
@@ -756,18 +762,21 @@ export async function registerConversationRoutes(
             );
             if (newOlder.length > 0) {
               const lastFolded = newOlder[newOlder.length - 1] as ConversationMessage;
-              const delta = summarizeOldMessages(
+              // Incident 05 — Canonical compaction: REPLACE summary, not append.
+              const { summary } = canonicalSummary(
+                persisted?.summary,
                 newOlder.map((m) => ({ role: m.role, content: m.content })),
               );
-              const summary = [persisted?.summary, delta]
-                .filter(Boolean)
-                .join("\n\n");
+              // Count total messages folded (watermark-based, not accumulated)
+              const totalFolded = priorIndex >= 0
+                ? allMessages.findIndex((candidate) => candidate.id === lastFolded.id) + 1
+                : newOlder.length;
               await session.conversations.saveCompaction(
                 organizationId,
                 persistedConversationId,
                 summary,
                 lastFolded.id,
-                (persisted?.compactionMessageCount ?? 0) + newOlder.length,
+                totalFolded,
               );
             }
           }

@@ -153,6 +153,11 @@ export const COMPACTION_THRESHOLD_CHARS = 8_000;
  *  context. Older ones live in `conversation_messages` only. */
 export const COMPACTION_RECENT_VERBATIM = BOUNDED_HISTORY_LIMIT;
 
+/** Maximum character budget for the canonical compaction summary.
+ *  If the summary exceeds this, it must be re-summarized semantically.
+ *  This prevents context bloat from unbounded summary growth. */
+export const COMPACTION_SUMMARY_BUDGET = 4_000;
+
 const HISTORY_SEARCH_STOP_WORDS = new Set([
   "para", "porque", "como", "esta", "este", "estos", "estas", "sobre",
   "desde", "hace", "tres", "cuatro", "quiero", "puedes", "podemos",
@@ -223,6 +228,79 @@ export function summarizeOldMessages(
 
 /** Split the message log into the older half (to summarize) and the recent
  *  half (kept verbatim). */
+
+/** Create a canonical summary that REPLACES the old summary (not appends).
+ *
+ *  Input: old summary (if exists) + new messages to fold.
+ *  Output: ONE bounded summary within COMPACTION_SUMMARY_BUDGET.
+ *
+ *  If the combined summary exceeds the budget, the old summary is
+ *  compressed to fit while preserving the new delta. */
+export function canonicalSummary(
+  oldSummary: string | null | undefined,
+  newMessages: readonly { role: ConversationRole; content: string }[],
+  budget: number = COMPACTION_SUMMARY_BUDGET,
+): { summary: string; totalMessages: number } {
+  if (newMessages.length === 0) {
+    return { summary: oldSummary ?? "", totalMessages: 0 };
+  }
+
+  const delta = summarizeOldMessages(newMessages);
+  if (!oldSummary) {
+    return { summary: delta, totalMessages: newMessages.length };
+  }
+
+  // Combine old summary + new delta
+  const combined = `${oldSummary}\n\n${delta}`;
+
+  // If within budget, use as-is
+  if (combined.length <= budget) {
+    return { summary: combined, totalMessages: newMessages.length };
+  }
+
+  // Exceeds budget — re-summarize semantically
+  // Strategy: extract key facts from old summary, append new delta,
+  // then truncate to budget preserving structure
+  const compressed = compressSummaryToBudget(oldSummary, delta, budget);
+  return { summary: compressed, totalMessages: newMessages.length };
+}
+
+/** Compress a summary to fit within budget by extracting key facts. */
+function compressSummaryToBudget(
+  oldSummary: string,
+  newDelta: string,
+  budget: number,
+): string {
+  // Extract key facts from old summary (lines starting with "- " or containing decisions)
+  const oldLines = oldSummary.split("\n");
+  const keyFacts: string[] = [];
+  let totalTurns = "";
+
+  for (const line of oldLines) {
+    if (line.startsWith("Turnos anteriores:")) {
+      totalTurns = line;
+    } else if (line.startsWith("- ") || /\b(decisión|preferencia|tarea|compromiso|resultado)\b/i.test(line)) {
+      keyFacts.push(line.slice(0, 160));
+    }
+  }
+
+  // Build compressed summary
+  const parts: string[] = [];
+  parts.push("Resumen de la conversación (compactado).");
+  if (totalTurns) parts.push(totalTurns);
+  if (keyFacts.length > 0) {
+    parts.push("Hechos clave:");
+    for (const fact of keyFacts.slice(0, 10)) parts.push(fact);
+  }
+
+  // Append new delta (truncated if needed)
+  const remaining = budget - parts.join("\n").length - 2; // 2 for "\n\n"
+  if (remaining > 100) {
+    parts.push(newDelta.slice(0, remaining));
+  }
+
+  return parts.join("\n").slice(0, budget);
+}
 export function splitForCompaction(
   messages: readonly ConversationMessage[],
   keepRecent: number = COMPACTION_RECENT_VERBATIM,

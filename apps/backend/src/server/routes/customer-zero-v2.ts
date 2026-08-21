@@ -196,6 +196,7 @@ import {
   deriveConversationTitle,
   splitForCompaction,
   summarizeOldMessages,
+  canonicalSummary,
   type ConversationRecord,
   type ConversationMessage,
 } from "../../customer-zero/conversation-store.js";
@@ -6839,16 +6840,22 @@ async function runCeoMessageTurn(
             : (older.length > 0 ? older : (allMessages.length > 0 ? allMessages : []));
           if (messagesToFold.length > 0) {
             const lastFolded = messagesToFold[messagesToFold.length - 1] as ConversationMessage;
-            const delta = summarizeOldMessages(
+            // Incident 05 — Canonical compaction: REPLACE summary, not append.
+            // Use canonicalSummary to create ONE bounded summary.
+            const { summary } = canonicalSummary(
+              persisted?.summary,
               messagesToFold.map((m) => ({ role: m.role, content: m.content })),
             );
-            const summary = [persisted?.summary, delta].filter(Boolean).join("\n\n");
+            // Count total messages folded (watermark-based, not accumulated)
+            const totalFolded = priorIndex >= 0
+              ? allMessages.findIndex((candidate) => candidate.id === lastFolded.id) + 1
+              : messagesToFold.length;
             await session.conversations.saveCompaction(
               organizationId,
               persistedConversationId,
               summary,
               lastFolded.id,
-              (persisted?.compactionMessageCount ?? 0) + messagesToFold.length,
+              totalFolded,
             );
           }
         } catch (compactionErr: unknown) {
