@@ -137,6 +137,8 @@ export const RUNTIME_CAPABILITY_RULES: readonly CapabilityRule[] = [
   },
   { id: "company.context", sourceCapabilities: [], alwaysAvailable: true },
   { id: "document.pdf.generate", sourceCapabilities: [], alwaysAvailable: true },
+  { id: "repository.read", sourceCapabilities: ["repository.read"] },
+  { id: "repository.write", sourceCapabilities: ["repository.write"] },
 ];
 
 function sourceCapabilities(

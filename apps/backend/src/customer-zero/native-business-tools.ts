@@ -22,6 +22,8 @@ export const NATIVE_READ_TOOL_NAMES = [
   "departify.work.deliverable",
   "departify.marketing.delegate",
   "departify.pdf.generate",
+  "departify.github.repos.list",
+  "departify.github.repos.inspect",
 ] as const;
 
 export const NATIVE_DRIVE_READ_INPUT = {
@@ -51,6 +53,8 @@ const REQUIRED_CAPABILITY: Partial<Record<NativeReadToolName, string>> = {
   "departify.results.list": "results.list",
   "departify.work.deliverable": "work.deliverable",
   "departify.facebook.pages.publish": "marketing.social.publish",
+  "departify.github.repos.list": "repository.read",
+  "departify.github.repos.inspect": "repository.read",
 };
 
 export function isNativeReadToolName(value: string): value is NativeReadToolName {

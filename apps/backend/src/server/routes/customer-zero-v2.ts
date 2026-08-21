@@ -7163,6 +7163,8 @@ async function runCeoMessageTurn(
     // Check if the message references a capability that doesn't exist
     const lower = message.toLocaleLowerCase("es-ES");
     const referencesImage = /\b(imagen|imagen.*genera|crear.*imagen|genera.*imagen)\b/i.test(lower);
+    const referencesGitHub = /\b(github|repositorio|repo|pat|token.*github|github.*token|github.*pat)\b/i.test(lower);
+    const referencesCredential = /\b(pat|token|env.*file|credential|credencial|clave|api.*key)\b/i.test(lower);
 
     let reply: string;
     if (referencesImage) {
@@ -7170,6 +7172,20 @@ async function runCeoMessageTurn(
       reply = session.state.locale === "en"
         ? "I can't generate images — that capability isn't available yet. I can help you with other tasks. What do you need?"
         : "No puedo generar imágenes — esa capacidad aún no está disponible. Puedo ayudarte con otras tareas. ¿Qué necesitas?";
+    } else if (referencesGitHub || referencesCredential) {
+      // Capability query — check if GitHub is connected and provide deterministic response
+      const hasGitHubConnection = [...session.state.connections.values()].some(
+        (conn) => conn.toolId === "github_repository" && conn.status === "connected"
+      );
+      if (hasGitHubConnection) {
+        reply = session.state.locale === "en"
+          ? "GitHub is connected. You can list your repositories or inspect them for SEO issues. What would you like to do?"
+          : "GitHub está conectado. Puedes listar tus repositorios o inspeccionarlos para problemas de SEO. ¿Qué quieres hacer?";
+      } else {
+        reply = session.state.locale === "en"
+          ? "GitHub is not connected yet. You can connect it from the Connections section to access your repositories."
+          : "GitHub aún no está conectado. Puedes conectarlo desde la sección de Conexiones para acceder a tus repositorios.";
+      }
     } else {
       // Generic error with context preservation
       reply = session.state.locale === "en"

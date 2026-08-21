@@ -34,6 +34,10 @@ import {
   type GoogleCapability,
   type GoogleTokenSummary,
 } from "./google-tokens.js";
+import {
+  getExternalOAuthTokenStore,
+  type ExternalOAuthProvider,
+} from "./external-oauth-tokens.js";
 
 export type CredentialProvider =
   | "mautic"
@@ -41,6 +45,7 @@ export type CredentialProvider =
   | "resend"
   | "google"
   | "hostinger"
+  | "github"
   | "meta_ads"
   | "tiktok_ads"
   | "google_ads"
@@ -102,6 +107,14 @@ export type ResolvedCredential =
       readonly provider: "hostinger";
       readonly url: string;
       readonly token: string;
+    }
+  | {
+      readonly provider: "github";
+      readonly accessToken: string;
+      readonly refreshToken: string | null;
+      readonly expiresAt: string | null;
+      readonly scopes: readonly string[];
+      readonly accountLabel: string | null;
     };
 
 function handleId(
@@ -181,6 +194,65 @@ export async function resolveGoogleCredentials(
       resolvedAt: new Date().toISOString(),
     },
   };
+}
+
+/**
+ * Resolve GitHub credentials from the external OAuth token store.
+ * Returns an opaque handle; never exposes the raw token.
+ */
+export async function resolveGitHubCredentials(
+  input: CredentialResolutionInput,
+): Promise<CredentialResolution> {
+  const userId = input.userId ?? "system";
+  const tokenStore = getExternalOAuthTokenStore();
+  const record = await tokenStore.get(input.organizationId, userId, "github");
+  if (!record) {
+    return {
+      available: false,
+      source: "none",
+      label: "github:oauth_required",
+    };
+  }
+  if (!record.accessToken) {
+    return {
+      available: false,
+      source: "secure_store",
+      label: "github:reauthorization_required",
+    };
+  }
+  const id = handleId("github", "secure_store");
+  handleRegistry.set(id, {
+    provider: "github",
+    accessToken: record.accessToken,
+    refreshToken: record.refreshToken,
+    expiresAt: record.expiresAt,
+    scopes: record.scopes,
+    accountLabel: record.accountLabel,
+  });
+  return {
+    available: true,
+    source: "secure_store",
+    label: "secure_store:github",
+    handle: {
+      id,
+      provider: "github",
+      source: "secure_store",
+      resolvedAt: new Date().toISOString(),
+    },
+  };
+}
+
+/**
+ * Check if GitHub credentials exist for an organization.
+ * Async because it queries the external OAuth token store.
+ */
+export async function hasGitHubCredentials(
+  organizationId: string,
+  userId?: string,
+): Promise<boolean> {
+  const tokenStore = getExternalOAuthTokenStore();
+  const record = await tokenStore.get(organizationId, userId ?? "system", "github");
+  return Boolean(record?.accessToken);
 }
 
 function resolveMauticFromEnv(): CredentialResolution {
@@ -411,7 +483,7 @@ export async function googleTokenSummaryFor(
 export function hasConfiguredCredentials(provider: CredentialProvider): boolean {
   // Best-effort, sync-only fallback used by hot paths that haven't
   // been updated yet. Returns the env-side answer for mautic/resend
-  // and `false` for gmail (the durable store must be awaited for
+  // and `false` for gmail/github (the durable store must be awaited for
   // an honest answer).
   if (provider === "mautic") {
     return Boolean(
@@ -425,6 +497,12 @@ export function hasConfiguredCredentials(provider: CredentialProvider): boolean 
   }
   if (provider === "hostinger") {
     return Boolean((process.env["HOSTINGER_EMAIL_MCP_TOKEN"] ?? "").trim());
+  }
+  // GitHub credentials are in the external OAuth token store (async).
+  // This sync helper cannot check them; callers should use
+  // `hasGitHubCredentials()` for an honest answer.
+  if (provider === "github") {
+    return false;
   }
   return false;
 }

@@ -161,6 +161,39 @@ export function safeUnbackedClaimFallback(locale: string): string {
 }
 
 /**
+ * Sanitize tool errors to prevent internal leakage.
+ * Removes internal paths, stack traces, env vars, and sensitive details.
+ */
+export function sanitizeToolError(error: unknown): string {
+  const message = String(error);
+  // Remove internal paths
+  let sanitized = message
+    .replace(/\/home\/node\/[^\s)]+/g, "[internal]")
+    .replace(/\/Volumes\/[^\s)]+/g, "[internal]")
+    .replace(/\/Users\/[^\s)]+/g, "[internal]")
+    .replace(/\/var\/[^\s)]+/g, "[internal]")
+    .replace(/\/tmp\/[^\s)]+/g, "[internal]");
+  // Remove stack traces (at ... (file:line:col) pattern)
+  // Match "at something (file:line:col)" or "at file:line:col"
+  sanitized = sanitized
+    .replace(/\bat\s+[^\n]+\(\[[^\]]*\]\)/g, "[stack]")
+    .replace(/\bat\s+[^\n]+\([^)]*\d+:\d+\)/g, "[stack]")
+    .replace(/\bat\s+.+\.ts:\d+:\d+/g, "[stack]")
+    .replace(/\bat\s+.+\.js:\d+:\d+/g, "[stack]")
+    .replace(/\bat\s+.+\.mjs:\d+:\d+/g, "[stack]");
+  // Remove env vars
+  sanitized = sanitized
+    .replace(/\b[A-Z_]+=[^\s]+/g, "[env]")
+    .replace(/\bprocess\.env\.[A-Z_]+/g, "[env]");
+  // Remove token patterns
+  sanitized = sanitized
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{10,}\b/g, "[redacted]")
+    .replace(/\bgh[pousr]_[A-Za-z0-9]{10,}\b/g, "[redacted]")
+    .replace(/\b(?:bearer|token|pat)\s*[:=]\s*\S+/gi, "[redacted]");
+  return sanitized;
+}
+
+/**
  * Centralized sanitization for all CEO-facing responses.
  *
  * Pipeline:

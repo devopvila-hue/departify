@@ -68,6 +68,8 @@ export type BusinessCapability =
   | "inbox.read"
   | "inbox.classify"
   | "inbox.work.create"
+  | "github.repository.read"
+  | "github.repository.write"
   | AdsBusinessCapability;
 
 /** Provider-owned capability ids are validated by the Ads registry at runtime. */
@@ -391,6 +393,24 @@ export const CAPABILITY_REGISTRY: Readonly<Record<string, CapabilityDescriptor>>
       "Convierte un elemento del inbox en un DepartmentTask durable.",
     provider: "google",
     toolIds: ["inbox.work.create"],
+  },
+  "github.repository.read": {
+    id: "github.repository.read",
+    name: "Read GitHub repositories",
+    nameEs: "Leer repositorios de GitHub",
+    description:
+      "Lista e inspecciona repositorios de GitHub conectados para auditorías SEO y análisis de código.",
+    provider: "github",
+    toolIds: ["github.repos.list", "github.repos.inspect"],
+  },
+  "github.repository.write": {
+    id: "github.repository.write",
+    name: "Write to GitHub repositories",
+    nameEs: "Escribir en repositorios de GitHub",
+    description:
+      "Crea o actualiza archivos en repositorios de GitHub conectados.",
+    provider: "github",
+    toolIds: ["github.repos.write"],
   },
   ...Object.fromEntries(
     ADS_CAPABILITIES.map((capability) => [
