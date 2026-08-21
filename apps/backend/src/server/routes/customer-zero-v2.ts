@@ -341,6 +341,7 @@ import type { EngineAdapter } from "@departify/engine-adapter";
 import {
   buildRuntimeCapabilityManifest,
   businessSafeConnectionLabel,
+  isRuntimeCapabilityAvailable,
   type RuntimeCapabilityManifest,
 } from "../../customer-zero/capability-manifest.js";
 import {
@@ -348,7 +349,7 @@ import {
   type DepartifyToolResult,
   toolsForManifest,
 } from "../../customer-zero/departify-business-tools.js";
-import { nativeToolsForManifest } from "../../customer-zero/native-business-tools.js";
+import { nativeToolsForManifest, nativeToolForCapability } from "../../customer-zero/native-business-tools.js";
 import {
   compileRuntimeBusinessContext,
   renderRuntimeBusinessContextForNativeEngine,
@@ -5367,6 +5368,148 @@ function runtimeCandidate(message: string, session: CustomerZeroSession): boolea
   return /\b(correo|correos|email|mail|inbox|calendario|calendar|evento|reuni[oó]n|agenda|drive|pdf|archivo|documento|tarea|organiza|organizar|aprobaci[oó]n|resultado|pr[oó]ximos eventos|empresa|negocio|contexto|facebook|fb|p[aá]gina|publica|publicar|post|hazlo|con\s+[a-z0-9._%+-]+@)/i.test(lower);
 }
 
+// ─── Incident 04 — Deterministic Required Capability Execution ─────────
+//
+// When the system can determine that a user message requires a specific
+// read capability (email, calendar, drive), and that capability is
+// AVAILABLE, the execution is MANDATORY — not delegated to the model's
+// free will. The model still synthesizes the final response, but it
+// receives real data instead of deciding whether to call the tool.
+//
+// This reuses the existing intent classifiers and execution functions.
+// The resolver maps messages to capability IDs; the executor runs them.
+
+/**
+ * Resolve the required read capability for a user message.
+ * Returns the capability ID if the message clearly requires a factual
+ * data read, or null if the message is conversational/ambiguous.
+ *
+ * Uses existing intent classifiers — no new regex authority.
+ */
+function resolveRequiredReadCapability(
+  message: string,
+  runtime: RuntimeBridgeInput,
+): string | null {
+  // Email read: "dime cuál es mi último correo", "¿qué correos tengo?"
+  // Exclude email creation/marketing: "hazme un mailing", "campaña de correos"
+  if (
+    isEmailQuestion(message) &&
+    !isEmailSendRequest(message) &&
+    !/\b(mailing|campa[nñ]a|newsletter|bolet[ií]n)\b/i.test(message)
+  ) {
+    return "email.business.search";
+  }
+  // Calendar read: "¿qué tengo hoy?", "mis próximos eventos"
+  if (isCalendarReadRequest(message)) {
+    return "calendar.list";
+  }
+  // Drive read: "busca en Drive", "¿qué documentos tengo?"
+  if (isDriveRequest(message)) {
+    return "drive.search";
+  }
+  return null;
+}
+
+/**
+ * Execute a required read capability directly, bypassing the model's
+ * tool-calling decision. Returns the result text or null on failure.
+ *
+ * Reuses existing execution functions — no new executor system.
+ */
+async function executeRequiredReadCapability(
+  session: CustomerZeroSession,
+  capability: string,
+  message: string,
+  deps: ServerDeps,
+): Promise<string | null> {
+  const isEs = session.state.locale !== "en";
+  try {
+    switch (capability) {
+      case "email.business.search": {
+        const result = await readEmailNativeResult(session.organizationId, {
+          message,
+          locale: session.state.locale,
+          session,
+          limit: 5,
+          ...(session.state.currentUserId ? { userId: session.state.currentUserId } : {}),
+        });
+        if (!result) return null;
+        return result.summary;
+      }
+      case "calendar.list": {
+        const outcome = await runGoogleBusinessTurn(
+          session,
+          message,
+          "calendar_read",
+          isEs,
+        );
+        return outcome.reply;
+      }
+      case "drive.search": {
+        const outcome = await runDriveTurn(session, message, isEs);
+        return outcome?.reply ?? null;
+      }
+      default:
+        return null;
+    }
+  } catch (err) {
+    console.info("[required-capability-execution]", {
+      capability,
+      error: err instanceof Error ? err.message : String(err),
+      organizationId: session.organizationId,
+    });
+    return null;
+  }
+}
+
+/** Deterministic NOT_CONNECTED message — capability is unavailable. */
+function capabilityNotConnectedMessage(capability: string, isEs: boolean): string {
+  switch (capability) {
+    case "email.business.search":
+    case "email.business.read":
+      return isEs
+        ? "Tu correo todavía no está conectado. Ve a Conexiones para conectarlo y vuelvo a intentarlo."
+        : "Your email is not connected yet. Go to Connections to connect it and I'll try again.";
+    case "calendar.list":
+      return isEs
+        ? "Calendar todavía no está activado. Puedes dar acceso a Calendar desde Conexiones."
+        : "Calendar is not activated yet. You can grant Calendar access from Connections.";
+    case "drive.search":
+    case "drive.read":
+      return isEs
+        ? "Drive todavía no está activado. Puedes dar acceso a Drive desde Conexiones."
+        : "Drive is not activated yet. You can grant Drive access from Connections.";
+    default:
+      return isEs
+        ? "La capacidad necesaria no está conectada. Puedes activarla desde Conexiones."
+        : "The required capability is not connected. You can activate it from Connections.";
+  }
+}
+
+/** Deterministic EXECUTION_FAILED message — capability ran but returned nothing. */
+function capabilityExecutionFailedMessage(capability: string, isEs: boolean): string {
+  switch (capability) {
+    case "email.business.search":
+    case "email.business.read":
+      return isEs
+        ? "No pude obtener tus correos en este momento. Inténtalo de nuevo en unos instantes."
+        : "I couldn't retrieve your emails right now. Please try again in a moment.";
+    case "calendar.list":
+      return isEs
+        ? "No pude consultar tu calendario en este momento. Inténtalo de nuevo en unos instantes."
+        : "I couldn't check your calendar right now. Please try again in a moment.";
+    case "drive.search":
+    case "drive.read":
+      return isEs
+        ? "No pude buscar en tu Drive en este momento. Inténtalo de nuevo en unos instantes."
+        : "I couldn't search your Drive right now. Please try again in a moment.";
+    default:
+      return isEs
+        ? "No pude completar la operación solicitada. Inténtalo de nuevo en unos instantes."
+        : "I couldn't complete the requested operation. Please try again in a moment.";
+  }
+}
+
 /**
  * Model-provided `confirm` is only advisory. A side effect may be approved
  * by the runtime bridge only when the CEO's current turn is itself an
@@ -6536,6 +6679,102 @@ async function runCeoMessageTurn(
       // opportunity as used so no future turn asks again.
       await markEntrepreneurNameAskedOnce(session, deps);
 
+      // ─── Incident 04 — Deterministic Required Capability Execution ───
+      // Three deterministic states:
+      //   NOT_CONNECTED  → capability unavailable → deterministic guidance, skip engine
+      //   EXECUTION_FAILED → execution returned null → deterministic failure, skip engine
+      //   SUCCESS → real data passed as toolResult, tool removed from manifest (exactly-once)
+      let preExecutedToolResult: string | undefined;
+      {
+        const requiredCap = resolveRequiredReadCapability(operationalMessage, runtime);
+        if (requiredCap) {
+          const capAvailable = isRuntimeCapabilityAvailable(runtime.context.capabilities, requiredCap);
+
+          if (!capAvailable) {
+            // ── NOT_CONNECTED — deterministic guidance, engine never called ──
+            if (trace) {
+              traceStage(trace, "T3.5_required_capability_not_connected", {
+                capability: requiredCap,
+              });
+            }
+            const isEs = session.state.locale !== "en";
+            const notConnectedReply = capabilityNotConnectedMessage(requiredCap, isEs);
+            return completeRuntimeCeoTurn(
+              session,
+              conversation,
+              message,
+              notConnectedReply,
+              [],
+              ["not_connected"],
+              null,
+              trace,
+            );
+          }
+
+          // ── Capability is available — execute mandatorily ──
+          if (trace) {
+            traceStage(trace, "T3.5_required_capability_resolved", {
+              capability: requiredCap,
+              available: true,
+            });
+          }
+          const execResult = await executeRequiredReadCapability(
+            session,
+            requiredCap,
+            operationalMessage,
+            deps,
+          );
+
+          if (!execResult) {
+            // ── EXECUTION_FAILED — deterministic failure, engine never called ──
+            if (trace) {
+              traceStage(trace, "T3.6_required_capability_execution_failed", {
+                capability: requiredCap,
+              });
+            }
+            const isEs = session.state.locale !== "en";
+            const failedReply = capabilityExecutionFailedMessage(requiredCap, isEs);
+            return completeRuntimeCeoTurn(
+              session,
+              conversation,
+              message,
+              failedReply,
+              [],
+              ["execution_failed"],
+              null,
+              trace,
+            );
+          }
+
+          // ── SUCCESS — pass real data, remove tool from manifest (exactly-once) ──
+          preExecutedToolResult =
+            `DEPARTIFY_PRE_EXECUTED_RESULT (mandatory read — the data below is real, not to be invented):\n` +
+            `Capability: ${requiredCap}\n` +
+            `Result:\n${execResult}\n\n` +
+            `IMPORTANT: This capability has already been executed for this turn. ` +
+            `Do NOT call it again. Use the data above to answer the user.`;
+
+          // Exactly-once enforcement: remove the satisfied tool from the
+          // manifest so the model cannot re-invoke the same operation.
+          const satisfiedToolName = nativeToolForCapability(requiredCap);
+          if (satisfiedToolName) {
+            const idx = runtime.nativeToolNames.indexOf(satisfiedToolName);
+            if (idx !== -1) {
+              (runtime.nativeToolNames as string[]).splice(idx, 1);
+            }
+          }
+
+          if (trace) {
+            traceStage(trace, "T3.6_required_capability_executed", {
+              capability: requiredCap,
+              resultBytes: Buffer.byteLength(execResult, "utf8"),
+              exactlyOnce: true,
+              removedTool: satisfiedToolName ?? null,
+            });
+          }
+        }
+      }
+
       let nativeResult = await runtime.engine.sendMessage({
         sessionId: activeSessionId,
         // Native mode receives the CEO's actual utterance. The existing
@@ -6544,6 +6783,10 @@ async function runCeoMessageTurn(
         message,
         runtimeContext: activeContext,
         nativeBusinessTools: true,
+        // Incident 04 — pre-executed tool result. When the system
+        // deterministically resolved and executed a required capability,
+        // the real data is passed here so the model MUST use it.
+        ...(preExecutedToolResult ? { toolResult: preExecutedToolResult } : {}),
         // Sprint 67 P0 — forward the chunk sink so the SSE handler can
         // emit `content_delta` frames while the model is still running.
         ...(chunkSink ? { onChunk: chunkSink } : {}),

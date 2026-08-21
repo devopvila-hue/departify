@@ -72,3 +72,14 @@ export function requiredCapabilityForNativeTool(
 ): string | null {
   return REQUIRED_CAPABILITY[name] ?? null;
 }
+
+/** Reverse lookup: given a capability ID, return the native tool name that
+ *  requires it, or null if no tool maps to that capability. */
+export function nativeToolForCapability(
+  capabilityId: string,
+): NativeReadToolName | null {
+  for (const [tool, cap] of Object.entries(REQUIRED_CAPABILITY)) {
+    if (cap === capabilityId) return tool as NativeReadToolName;
+  }
+  return null;
+}

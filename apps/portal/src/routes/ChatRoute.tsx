@@ -413,18 +413,29 @@ export function ChatRoute() {
           ((await api.conversations(organizationId))?.conversations ?? [])[0]
             ?.id,
         ].filter((id): id is string => Boolean(id));
+    console.info("[recovery]", {
+      stage: "attempt",
+      candidateCount: candidates.length,
+      expectedConversationId,
+    });
     for (const conversationId of candidates) {
-      const data = await api.conversation(organizationId, conversationId);
+      // Incident 04 — Force-refresh from server. The React Query cache
+      // may still hold stale data from before this turn completed;
+      // ensureQueryData returns stale entries immediately and re-fetches
+      // in the background, which is too late for recovery.
+      const data = await api.refreshConversation(organizationId, conversationId);
       if (generation !== loadGenerationRef.current) return false;
       const messages = data?.messages ?? [];
       const last = messages.at(-1);
       const previous = messages.at(-2);
-      if (
-        previous?.role === "user" &&
-        previous.content === userMessage &&
-        last?.role === "assistant" &&
-        last.content.trim().length > 0
-      ) {
+      const matchUser = previous?.role === "user" && previous.content === userMessage;
+      const matchAssistant = last?.role === "assistant" && last.content.trim().length > 0;
+      if (matchUser && matchAssistant) {
+        console.info("[recovery]", {
+          stage: "success",
+          conversationId,
+          messageCount: messages.length,
+        });
         setTranscript(messages.map(visibleMessage));
         setCurrentConversationId(conversationId);
         setCurrentSummary(data?.conversation.summary ?? null);
@@ -434,7 +445,18 @@ export function ChatRoute() {
         // does NOT render the "could not respond" error alert.
         return true;
       }
+      console.info("[recovery]", {
+        stage: "mismatch",
+        conversationId,
+        messageCount: messages.length,
+        lastRole: last?.role,
+        previousRole: previous?.role,
+        matchUser,
+        matchAssistant,
+        lastContentLength: last?.content?.trim()?.length ?? 0,
+      });
     }
+    console.info("[recovery]", { stage: "failed", candidateCount: candidates.length });
     return false;
   }
 
@@ -692,6 +714,13 @@ export function ChatRoute() {
       typeof result.reply !== "string" ||
       result.reply.trim().length === 0
     ) {
+      // Incident 04 — observability: distinguish SSE result missing from empty reply
+      console.info("[chat-timeline]", {
+        correlationId,
+        stage: "T16_portal_sse_result_missing_or_empty",
+        resultIsNull: !result,
+        replyIsEmpty: result ? typeof result.reply !== "string" || result.reply.trim().length === 0 : null,
+      });
       // Sprint 67 P0.8 — Founder Run Recovery. If the backend emitted a
       // founderRunId, the run is still executing in the background. Poll
       // the founder-runs API until it completes, then recover the result.

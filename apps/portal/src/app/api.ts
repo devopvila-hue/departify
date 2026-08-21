@@ -1936,6 +1936,23 @@ export const api = {
       5_000,
       `${conversationId}:${before ?? "latest"}`,
     ),
+  /**
+   * Incident 04 — Force-refresh a conversation from the server, bypassing
+   * the React Query cache. Used by recoverCompletedTurn when the SSE
+   * result was lost and we need the freshest persisted transcript.
+   */
+  refreshConversation: async (org: string, conversationId: string): Promise<ConversationPageView | null> => {
+    try {
+      await portalQueryClient.invalidateQueries({
+        queryKey: portalQueryKeys.org(org, "conversation", `${conversationId}:latest`),
+      });
+    } catch {
+      // Invalidation failure is non-fatal; the fetch below will still run.
+    }
+    return getJson<ConversationPageView>(
+      `/api/customer-zero/${org}/conversations/${conversationId}`,
+    );
+  },
   sendConversationMessage: async (
     org: string,
     conversationId: string,
