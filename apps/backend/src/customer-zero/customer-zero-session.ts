@@ -209,6 +209,14 @@ export interface CustomerZeroSessionState {
     readonly message: string;
     readonly startedAt: number;
   } | undefined;
+  /**
+   * Conversation Reliability War Room — Turn mutex.
+   * Prevents concurrent requests from corrupting session state.
+   * When a turn starts processing, this is set to a promise that resolves
+   * when the turn completes. Subsequent requests must await this before
+   * proceeding.
+   */
+  turnMutex?: Promise<void> | undefined;
 }
 
 export interface DiscoveryTurn {

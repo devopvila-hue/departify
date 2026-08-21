@@ -183,6 +183,11 @@ export class OpenClawGatewayClient {
     // Attach handlers BEFORE awaiting open so the `connect.challenge` that the
     // gateway sends immediately after open is never missed.
     ws.onmessage = (ev: MessageEvent) => this.handleMessage(ev);
+    // Conversation Reliability War Room — Reattach active event capture
+    // handler after WebSocket reconnect so streaming continues.
+    if (this.activeEventHandler) {
+      ws.addEventListener("message", this.activeEventHandler);
+    }
     ws.onclose = () => {
       this.failPending(
         new EngineUnavailableError("Gateway connection closed", {
@@ -325,13 +330,13 @@ export class OpenClawGatewayClient {
     await this.ensureConnected();
     const runEvents: RunEvents = { assistantChunks: [], toolCalls: [] };
 
+    // Conversation Reliability War Room — Use request() for sessions.send
+    // to get retry+reconnect on transient failures. agent.wait still uses
+    // requestOnce because retrying a wait could cause duplicate agent runs.
     let sendResult: unknown;
     try {
-      // `sessions.send` accepts only the documented params (key, message,
-      // etc.). Model overrides are applied at session create / agent config,
-      // never embedded in the send frame.
       timeline?.("T6_provider_request_started");
-      sendResult = await this.requestOnce("sessions.send", params);
+      sendResult = await this.request("sessions.send", params);
     } catch (err) {
       throw this.mapToEngineError(err, "sessions.send");
     }
@@ -671,6 +676,9 @@ export class OpenClawGatewayClient {
     };
   }
 
+  /** Stored event capture handler for reattachment after WebSocket reconnect. */
+  private activeEventHandler: ((ev: MessageEvent) => void) | null = null;
+
   private startEventCapture(
     runEvents: RunEvents,
     activeRunId: string,
@@ -732,8 +740,16 @@ export class OpenClawGatewayClient {
         }
       }
     };
+    // Conversation Reliability War Room — Store handler for reattachment
+    // after WebSocket reconnect. The handler is reattached in ensureConnected.
+    this.activeEventHandler = handler;
     this.ws?.addEventListener("message", handler);
-    return { stop: () => this.ws?.removeEventListener("message", handler) };
+    return {
+      stop: () => {
+        this.ws?.removeEventListener("message", handler);
+        this.activeEventHandler = null;
+      },
+    };
   }
 
   private failPending(err: Error): void {

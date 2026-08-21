@@ -59,14 +59,24 @@ export async function hydratePendingWorkForConversation(
     session.pendingWork.getActive(session.organizationId, conversationId, "calendar"),
     session.pendingWork.getActive(session.organizationId, conversationId, "facebook_pages"),
   ]);
-  if (!session.state.pendingEmailWork && email && validEmail(email.payload)) {
+  // Conversation Reliability War Room — Always overwrite in-memory state
+  // with durable store version. The durable store is the source of truth.
+  // This prevents stale pending work from blocking new operations after
+  // a failed turn that left pending work in memory.
+  if (email && validEmail(email.payload)) {
     session.state.pendingEmailWork = email.payload;
+  } else if (!email) {
+    delete session.state.pendingEmailWork;
   }
-  if (!session.state.pendingCalendarWork && calendar && validCalendar(calendar.payload)) {
+  if (calendar && validCalendar(calendar.payload)) {
     session.state.pendingCalendarWork = { ...calendar.payload, id: calendar.operationId };
+  } else if (!calendar) {
+    delete session.state.pendingCalendarWork;
   }
-  if (!session.state.pendingFacebookPagesWork && facebook && validFacebook(facebook.payload)) {
+  if (facebook && validFacebook(facebook.payload)) {
     session.state.pendingFacebookPagesWork = facebook.payload;
+  } else if (!facebook) {
+    delete session.state.pendingFacebookPagesWork;
   }
 }
 

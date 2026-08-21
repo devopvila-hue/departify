@@ -3964,6 +3964,10 @@ export async function registerCustomerZeroV2Routes(
       // Authorization (founderAuth) ≠ Development intent. Being a founder means
       // you CAN use dev mode, not that every message IS a dev request.
 
+      // Conversation Reliability War Room — Turn mutex declaration.
+      // Declared before try so it's accessible in the catch block.
+      let releaseTurnMutex: (() => void) | undefined;
+
       try {
         // Sprint 67 P0.3 — lightweight fast path. Greetings, thanks, and
         // trivial conversation skip the heavy runtime build (~10 Supabase
@@ -4026,6 +4030,16 @@ export async function registerCustomerZeroV2Routes(
           }
         }
 
+        // Conversation Reliability War Room — Turn mutex.
+        // Wait for any in-progress turn to complete before starting a new one.
+        // This prevents concurrent requests from corrupting session state.
+        if (session.state.turnMutex) {
+          await session.state.turnMutex;
+        }
+        session.state.turnMutex = new Promise<void>((resolve) => {
+          releaseTurnMutex = resolve;
+        });
+
         // Sprint 68 Incident 02 — Active work tracking.
         // Set before processCeoMessage so a reconnecting client can detect
         // that work is still in progress. Cleared when result is emitted.
@@ -4059,6 +4073,9 @@ export async function registerCustomerZeroV2Routes(
         // Sprint 68 Incident 02 — Clear active work tracking.
         // The result is about to be emitted; work is no longer in progress.
         session.state.activeWork = undefined;
+        // Conversation Reliability War Room — Release turn mutex.
+        session.state.turnMutex = undefined;
+        releaseTurnMutex!();
 
         const responseStatus = ceoTurnResponseStatus(runtime?.trace ?? trace);
         if (responseStatus >= 400) {
@@ -4096,6 +4113,9 @@ export async function registerCustomerZeroV2Routes(
       } catch (cause) {
         // Sprint 68 Incident 02 — Clear active work on any error path.
         session.state.activeWork = undefined;
+        // Conversation Reliability War Room — Release turn mutex on error.
+        session.state.turnMutex = undefined;
+        releaseTurnMutex!();
 
         if (cause instanceof MaxActiveConversationsError) {
           send("error", {
@@ -4885,7 +4905,8 @@ function normalizePendingOperationMessage(message: string): string {
 
 function classifyPendingOperationDecision(message: string): PendingOperationDecision {
   const normalized = normalizePendingOperationMessage(message);
-  if (/^(?:no|cancela|cancelar|descarta(?:lo|la)?|olvida(?:lo|la)?|no\s+lo\s+hagas?|no\s+la\s+crees?|mejor\s+no|dejalo|dejalo\s+estar|skip|cancel)$/i.test(normalized)) {
+  // CANCEL: "no" alone, or "no" followed by correction/alternative ("no, el personal", "no, la semana que viene")
+  if (/^(?:no|cancela|cancelar|descarta(?:lo|la)?|olvida(?:lo|la)?|no\s+lo\s+hagas?|no\s+la\s+crees?|mejor\s+no|dejalo|dejalo\s+estar|skip|cancel)(?:\s+.+)?$/i.test(normalized)) {
     return "CANCEL";
   }
   if (/^(?:si|crea(?:lo|la)?|hazlo|adelante|confirma|confirmo|yes|approve|go ahead|ok|vale|perfecto|dale|envialo|mandalo|envia(?:lo)?|manda(?:lo)?|proceed|do\s+it|send\s+it|go\s+ahead\s+and\s+(?:send|create|publish))(?:\s+(?:envialo|mandalo|crea(?:lo|la)?|hazlo|ya|adelante|confirma|confirmo|yes|approve|go ahead|ok|vale|perfecto|dale))?$/.test(normalized)) {
@@ -5593,6 +5614,9 @@ export function classifyMessageIntent(message: string): MessageIntentCategory {
   // Follow-up with format modifiers (e.g., "sí, en PDF", "en Drive", "por email")
   // These reference a previous proposal and need full context.
   if (isFollowUpWithFormatModifier(trimmed)) return "HEAVY";
+  // Anaphoric references and short follow-ups that need previous context.
+  // "resúmelo", "explicamelo", "el anterior", "ese", "el de antes", etc.
+  if (isAnaphoricReference(trimmed)) return "HEAVY";
   // Very short messages (< 15 chars) that don't contain business keywords
   // are likely trivial conversation.
   if (trimmed.length < 15) {
@@ -5654,6 +5678,35 @@ function isPdfGenerationRequest(message: string): boolean {
   if (followUpPatterns.test(message)) return true;
   // Simple "en PDF" pattern
   if (/\ben\s+pdf\b/i.test(lower)) return true;
+  return false;
+}
+
+/**
+ * Detect anaphoric references and short follow-ups that need previous context.
+ * These are pronouns, deictic references, or action words that refer to
+ * something discussed in a previous turn.
+ *
+ * Examples:
+ *  - "resúmelo" / "resumen" — summarize the previous result
+ *  - "explicamelo" — explain the previous result
+ *  - "guardalo" / "mandalo" / "hazlo" — do something with the previous result
+ *  - "ese" / "eso" / "este" / "esta" — reference previous entity
+ *  - "el anterior" / "la anterior" / "el de antes" — reference previous item
+ *  - "el último" / "la última" — reference most recent item
+ *  - "lo que dijiste" / "lo que mencionaste" — reference previous statement
+ *  - "ábrelo" / "ábralo" — open the previous item
+ *  - "enséñamelo" / "muéstramelo" — show me the previous item
+ */
+function isAnaphoricReference(message: string): boolean {
+  const lower = message.toLocaleLowerCase("es-ES").trim();
+  // Short action words that reference previous context (pronoun + verb)
+  if (/^(?:resum[eé]n?lo|res[uú]melo|explic[aá]melo|guarda(?:lo|la)?|manda(?:lo|la)?|env[ií]a(?:lo|la)?|hazlo|hazla|[aá]brelo|[aá]bralo|ens[eé][ñn]amelo|mu[eé]stramelo|comp[aá]rtelo|comp[aá]rtela|desc[aá]rgalo|desc[aá]rgala|b[oó]rralo|b[oó]rrala|elim[ií]nalo|elim[ií]nala|edita(?:lo|la)?|modif[ií]calo|modif[ií]cala|corr[ií]gelo|corr[ií]gela)$/i.test(lower)) return true;
+  // Deictic references
+  if (/^(?:ese|eso|este|esta|estos|estas|eso\s+de|ese\s+de|este\s+de)$/i.test(lower)) return true;
+  // "El/La + reference" patterns
+  if (/^(?:el|la|los|las)\s+(?:anterior|anteriores|pasad[oa]s?|últim[oa]s?|de\s+antes|mismo|mismos|misma|mismas|que\s+dijiste|que\s+mencionaste|que\s+me\s+dijiste)$/i.test(lower)) return true;
+  // "Lo que" references
+  if (/^lo\s+que\s+(?:dijiste|mencionaste|me\s+dijiste|hablaste|comentaste|explicaste)$/i.test(lower)) return true;
   return false;
 }
 
