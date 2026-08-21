@@ -4048,72 +4048,124 @@ export async function registerCustomerZeroV2Routes(
           startedAt: Date.now(),
         };
 
-        const result = await processCeoMessage(
-          session,
-          body.message,
-          body.conversationId,
-          deps.marketing,
-          deps.engineRuntimePolicy,
-          runtime,
-          trace,
-          deps,
-          request.authUser?.id,
-          // Sprint 64 — Live Activity: the sink writes each event to the
-          // SSE stream as it happens, so the CEO sees progress in real time.
-          captureActivity,
-          // Sprint 67 P0 — surface progressive assistant text as the
-          // model streams, without waiting for agent.wait to settle.
-          chunkSink,
-        );
-        traceStage(trace, "T15_backend_response_finalization", {
-          responseStatus: ceoTurnResponseStatus(trace),
-          finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
-        });
-        emitCeoTurnTrace(session, runtime?.trace ?? trace, result);
-        // Sprint 68 Incident 02 — Clear active work tracking.
-        // The result is about to be emitted; work is no longer in progress.
-        session.state.activeWork = undefined;
-        // Conversation Reliability War Room — Release turn mutex.
-        session.state.turnMutex = undefined;
-        releaseTurnMutex!();
-
-        const responseStatus = ceoTurnResponseStatus(runtime?.trace ?? trace);
-        if (responseStatus >= 400) {
-          const errorCode =
-            (runtime?.trace ?? trace).engineErrorCode ?? "ENGINE_EXECUTION";
-          // Sprint 66 P0 — the CEO-facing message stays generic for the
-          // product surface, but the responsible engineer must be able to
-          // find the proximate cause in the internal log. Surface the
-          // engine status, error code, and timeline so the failure is
-          // traceable instead of buried behind a catch-all phrase.
-          request.log.error(
-            {
-              correlationId,
-              organizationId,
-              engineErrorCode: errorCode,
-              openclawStatus: (runtime?.trace ?? trace).openclawStatus,
-              sessionFound: trace.sessionFound,
-              durationMs: Date.now() - trace.startedMonotonicAt,
-              timeline: trace.timeline,
-            },
-            "opening SSE engine failure before persistence",
+        // ── SUCCESS COMMIT POINT ──────────────────────────────────────
+        // Sprint 68 — Terminal outcome invariant.
+        // `processCeoMessage` is the ONLY phase whose failure justifies
+        // an `error` SSE event.  Once it returns a valid result the turn
+        // is COMMITTED SUCCESS: every subsequent step (tracing, mutex
+        // release, response-status check) is non-critical bookkeeping.
+        // If any of those throw, we MUST still send `result` to the CEO
+        // — never `error`.  The portal relies on receiving exactly one
+        // terminal event per turn; sending `result` then `error` is the
+        // SUCCESS + FAILURE contamination that this invariant prevents.
+        //
+        // Two-phase structure:
+        //   Phase 1 (pre-commit): processCeoMessage — failures → error
+        //   Phase 2 (post-commit): bookkeeping — failures → log, result
+        // ─────────────────────────────────────────────────────────────
+        let result: CeoMessageResult;
+        try {
+          result = await processCeoMessage(
+            session,
+            body.message,
+            body.conversationId,
+            deps.marketing,
+            deps.engineRuntimePolicy,
+            runtime,
+            trace,
+            deps,
+            request.authUser?.id,
+            // Sprint 64 — Live Activity: the sink writes each event to the
+            // SSE stream as it happens, so the CEO sees progress in real time.
+            captureActivity,
+            // Sprint 67 P0 — surface progressive assistant text as the
+            // model streams, without waiting for agent.wait to settle.
+            chunkSink,
           );
+        } catch (cause) {
+          // Pre-commit failure: processCeoMessage itself failed.
+          // The turn never produced a valid result → error is correct.
+          session.state.activeWork = undefined;
+          session.state.turnMutex = undefined;
+          releaseTurnMutex!();
+
+          if (cause instanceof MaxActiveConversationsError) {
+            send("error", {
+              code: "MAX_ACTIVE_CONVERSATIONS",
+              message: cause.message,
+              activeCount: cause.activeCount,
+              maxActive: MAX_ACTIVE_CONVERSATIONS_VALUE,
+              statusCode: 409,
+            });
+            end();
+            return;
+          }
+          emitCeoTurnFailureTrace(trace, cause);
           send("error", {
-            code: errorCode,
+            code: "INTERNAL",
             message:
-              "No he podido completar esa respuesta porque el motor de negocio ha fallado. Vuelve a intentarlo.",
+              "No he podido completar esa respuesta. Vuelve a intentarlo.",
             requestId: correlationId,
-            statusCode: responseStatus,
+            statusCode: 500,
           });
           end();
           return;
         }
+
+        // ── Post-commit: result is valid, turn is COMMITTED SUCCESS ──
+        // All operations below are non-critical bookkeeping.  Failures
+        // are logged but MUST NOT transform the turn into a user-visible
+        // error.  The CEO will always receive `result`.
+        try {
+          traceStage(trace, "T15_backend_response_finalization", {
+            responseStatus: ceoTurnResponseStatus(trace),
+            finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
+          });
+          emitCeoTurnTrace(session, runtime?.trace ?? trace, result);
+        } catch (bookkeepingError) {
+          // Non-critical: tracing must never break a committed turn.
+          request.log.warn(
+            { correlationId, error: bookkeepingError },
+            "post-commit bookkeeping failed — result still delivered",
+          );
+        }
+
+        // Clear active work and release mutex — these are best-effort.
+        try {
+          session.state.activeWork = undefined;
+          session.state.turnMutex = undefined;
+          releaseTurnMutex!();
+        } catch (mutexError) {
+          request.log.warn(
+            { correlationId, error: mutexError },
+            "post-commit mutex release failed",
+          );
+        }
+
+        // Engine failure status check: even if the engine reported a
+        // failure, the result is already committed.  Log the anomaly
+        // but deliver the result — the CEO must not see a contradiction.
+        const responseStatus = ceoTurnResponseStatus(runtime?.trace ?? trace);
+        if (responseStatus >= 400) {
+          request.log.error(
+            {
+              correlationId,
+              organizationId,
+              engineErrorCode:
+                (runtime?.trace ?? trace).engineErrorCode ?? "ENGINE_EXECUTION",
+              openclawStatus: (runtime?.trace ?? trace).openclawStatus,
+              responseStatus,
+              timeline: trace.timeline,
+            },
+            "post-commit engine failure detected — delivering result anyway (SUCCESS COMMIT POINT)",
+          );
+        }
         send("result", result);
         end();
       } catch (cause) {
-        // Sprint 68 Incident 02 — Clear active work on any error path.
+        // Outer catch: failures in pre-commit phases (lightweight path,
+        // runtime build, mutex setup) that happen before processCeoMessage.
         session.state.activeWork = undefined;
-        // Conversation Reliability War Room — Release turn mutex on error.
         session.state.turnMutex = undefined;
         releaseTurnMutex!();
 

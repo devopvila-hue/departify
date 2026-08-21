@@ -1777,6 +1777,13 @@ export const api = {
     headers.set("content-type", "application/json");
     headers.set("accept", "text/event-stream");
     headers.set("x-departify-correlation-id", correlationId);
+    // Sprint 68 — hoisted so the catch block can return a committed result.
+    let result:
+      | (CommandCenterMessageResult & {
+          conversationId?: string;
+          error?: MaxActiveConversationsError;
+        })
+      | null = null;
     try {
       const response = await fetch(url, {
         method: "POST",
@@ -1801,12 +1808,6 @@ export const api = {
       let buffer = "";
       let founderRunId: string | null = null;
       let founderRunConversationId: string | null = null;
-      let result:
-        | (CommandCenterMessageResult & {
-            conversationId?: string;
-            error?: MaxActiveConversationsError;
-          })
-        | null = null;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -1856,19 +1857,25 @@ export const api = {
               error?: MaxActiveConversationsError;
             };
           } else if (eventName === "error") {
-            result = {
-              organizationId: org,
-              reply: "",
-              events: [],
-              routing: { intent: "error", departments: [], rationale: "" },
-              connectionSuggestion: null,
-              pendingToolId: null,
-              conversationId: conversationId ?? null,
-              error: parsed as MaxActiveConversationsError,
-            } as CommandCenterMessageResult & {
-              conversationId?: string;
-              error?: MaxActiveConversationsError;
-            };
+            // Sprint 68 — Terminal state machine: never overwrite a
+            // valid result with an error.  The backend's SUCCESS COMMIT
+            // POINT guarantees at most one terminal event, but this
+            // guard defends against stale or misrouted SSE frames.
+            if (!(result && typeof result.reply === "string" && result.reply.trim().length > 0)) {
+              result = {
+                organizationId: org,
+                reply: "",
+                events: [],
+                routing: { intent: "error", departments: [], rationale: "" },
+                connectionSuggestion: null,
+                pendingToolId: null,
+                conversationId: conversationId ?? null,
+                error: parsed as MaxActiveConversationsError,
+              } as CommandCenterMessageResult & {
+                conversationId?: string;
+                error?: MaxActiveConversationsError;
+              };
+            }
           }
         }
       }
@@ -1897,8 +1904,18 @@ export const api = {
       if (signal?.aborted) {
         return null;
       }
-      // Stream transport failed for a real reason — fall back to the
-      // JSON endpoint so the CEO still gets a reply.
+      // Sprint 68 — Terminal state machine.
+      // If the SSE stream already delivered a valid `result` event
+      // before the transport failed, that result is COMMITTED SUCCESS.
+      // Falling back to the JSON endpoint would re-run the CEO message
+      // and risk returning a different (potentially error) outcome,
+      // overwriting the success the CEO already saw.  Return the
+      // committed result instead.
+      if (result && typeof result.reply === "string" && result.reply.trim().length > 0) {
+        return result;
+      }
+      // Stream transport failed before any result arrived — fall back
+      // to the JSON endpoint so the CEO still gets a reply.
       return api.commandCenterMessage(
         org,
         message,
@@ -1999,6 +2016,14 @@ export const api = {
     headers.set("content-type", "application/json");
     headers.set("accept", "text/event-stream");
     headers.set("x-departify-correlation-id", correlationId);
+    // Sprint 68 — hoisted so the catch block can return a committed result.
+    let result:
+      | (CommandCenterMessageResult & {
+          conversationId?: string;
+          error?: MaxActiveConversationsError;
+          founderRunId?: string;
+        })
+      | null = null;
     try {
       const response = await fetch(url, {
         method: "POST",
@@ -2020,13 +2045,6 @@ export const api = {
       const decoder = new TextDecoder();
       let buffer = "";
       let founderRunId: string | null = null;
-      let result:
-        | (CommandCenterMessageResult & {
-            conversationId?: string;
-            error?: MaxActiveConversationsError;
-            founderRunId?: string;
-          })
-        | null = null;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -2069,20 +2087,24 @@ export const api = {
               founderRunId?: string;
             };
           } else if (eventName === "error") {
-            result = {
-              organizationId: org,
-              reply: "",
-              events: [],
-              routing: { intent: "error", departments: [], rationale: "" },
-              connectionSuggestion: null,
-              pendingToolId: null,
-              conversationId: conversationId,
-              error: parsed as MaxActiveConversationsError,
-            } as CommandCenterMessageResult & {
-              conversationId?: string;
-              error?: MaxActiveConversationsError;
-              founderRunId?: string;
-            };
+            // Sprint 68 — Terminal state machine: never overwrite a
+            // valid result with an error.
+            if (!(result && typeof result.reply === "string" && result.reply.trim().length > 0)) {
+              result = {
+                organizationId: org,
+                reply: "",
+                events: [],
+                routing: { intent: "error", departments: [], rationale: "" },
+                connectionSuggestion: null,
+                pendingToolId: null,
+                conversationId: conversationId,
+                error: parsed as MaxActiveConversationsError,
+              } as CommandCenterMessageResult & {
+                conversationId?: string;
+                error?: MaxActiveConversationsError;
+                founderRunId?: string;
+              };
+            }
           }
         }
       }
@@ -2102,8 +2124,14 @@ export const api = {
       if (signal?.aborted) {
         return null;
       }
-      // Stream transport failed for a real reason — fall back to the
-      // JSON endpoint so the CEO still gets a reply.
+      // Sprint 68 — Terminal state machine.
+      // If the SSE stream already delivered a valid `result` event
+      // before the transport failed, return the committed result.
+      if (result && typeof result.reply === "string" && result.reply.trim().length > 0) {
+        return result;
+      }
+      // Stream transport failed before any result arrived — fall back
+      // to the JSON endpoint so the CEO still gets a reply.
       return api.sendConversationMessage(
         org,
         conversationId,
