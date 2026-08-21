@@ -621,117 +621,12 @@ export async function registerConversationRoutes(
         }
       };
 
-      // ── Sprint 67 P0.8 — DURABLE FOUNDER RUN INTERCEPT ────────────
-      // For authenticated founders, submit a durable run and subscribe
-      // to store events. The execution is fully decoupled from this HTTP
-      // connection — if SSE disconnects, the run continues in background.
-      // The portal can reconnect via /founder/runs/:runId/stream.
-      if (deps.engine && request.authUser?.id) {
-        let userRole: string | undefined;
-        if (deps.organizations) {
-          const memberships = await deps.organizations.listForUser(request.authUser.id);
-          const membership = memberships.find((m) => m.organizationId === organizationId);
-          userRole = membership?.role;
-        }
-        const founderAuth = checkFounderAuthorization(
-          request.authUser.id,
-          organizationId,
-          userRole,
-        );
-
-        if (founderAuth) {
-          console.info("[founder-sse] Intercepting founder message for durable run", {
-            userId: request.authUser.id,
-            organizationId,
-            conversationId,
-          });
-
-          // Add user message to conversation
-          await session.conversations.addMessage(conversationId, "user", redactFounderSensitiveInput(body.message));
-
-          // Submit durable run — fire-and-forget
-          const executor = getFounderRunExecutor(deps.engine);
-          const runId = executor.submit({
-            organizationId,
-            userId: request.authUser.id,
-            message: body.message,
-            onChunk: chunkSink,
-            onPersist: (run) => session.conversations
-              .addMessage(conversationId, "assistant", run.finalText ?? "")
-              .then(() => undefined),
-          });
-
-          // Emit the runId so the portal can reconnect if SSE drops
-          send("founder_run", { runId, conversationId });
-
-          // Subscribe to store events and forward as SSE frames
-          let sseClosed = false;
-          const onRunEvent = (eventRunId: string, event: FounderRunEvent): void => {
-            if (sseClosed || eventRunId !== runId) return;
-            // Forward the event as an SSE frame
-            send("event", event);
-
-            // On terminal events, send the canonical result and close
-            if (event.eventType === "run.completed") {
-              const run = founderRunStore.get(runId);
-              send("result", {
-                organizationId,
-                reply: run?.finalText ?? "",
-                events: [],
-                routing: { intent: "founder_build", departments: [], rationale: "" },
-                connectionSuggestion: null,
-                pendingToolId: null,
-                conversationId,
-              });
-              end();
-            } else if (event.eventType === "run.failed" || event.eventType === "run.cancelled") {
-              const run = founderRunStore.get(runId);
-              send("error", {
-                code: run?.errorCode ?? "FOUNDER_RUN_FAILED",
-                message: run?.errorMessage ?? "El run terminó sin respuesta.",
-                requestId: correlationId,
-              });
-              end();
-            }
-          };
-          founderRunStore.on("run:event", onRunEvent);
-
-          const onSseClose = (): void => {
-            sseClosed = true;
-            founderRunStore.off("run:event", onRunEvent);
-          };
-          raw.on("close", onSseClose);
-          raw.on("error", onSseClose);
-
-          // Heartbeat to keep connection alive during long runs
-          const heartbeat = setInterval(() => {
-            if (sseClosed) {
-              clearInterval(heartbeat);
-              return;
-            }
-            try {
-              raw.write(`: keep-alive\n\n`);
-            } catch {
-              onSseClose();
-            }
-          }, 15_000);
-          heartbeat.unref();
-
-          // Check if run already completed while we were setting up
-          const existingRun = founderRunStore.get(runId);
-          if (existingRun && (existingRun.status === "completed" || existingRun.status === "failed")) {
-            onRunEvent(runId, {
-              id: 0,
-              runId,
-              eventType: existingRun.status === "completed" ? "run.completed" : "run.failed",
-              data: {},
-              createdAt: Date.now(),
-            });
-          }
-
-          return; // Skip normal processCeoMessage flow
-        }
-      }
+      // Sprint 68 Incident 03 — Founder messages use Business Mode by default.
+      // Development Mode is ONLY entered via explicit signals:
+      //   1. detectFounderBuildCommand() → FounderBuildExecutor (build commands)
+      //   2. POST /api/customer-zero/:orgId/founder/runs → FounderRunExecutor (dedicated REST)
+      // All other founder messages (including chat) go through the normal CEO path
+      // with native business tools and Connections-layer capability resolution.
 
       try {
         // Sprint 67 P0.3 — lightweight fast path for conversations endpoint.

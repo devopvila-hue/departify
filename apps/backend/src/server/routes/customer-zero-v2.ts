@@ -3953,115 +3953,14 @@ export async function registerCustomerZeroV2Routes(
         }
       }
 
-      // ── Sprint 67 P0.8 — DURABLE FOUNDER RUN INTERCEPT ────────────
-      // For authenticated founders, submit a durable run and subscribe
-      // to store events. The execution is fully decoupled from this HTTP
-      // connection — if SSE disconnects, the run continues in background.
-      // The portal can reconnect via /founder/runs/:runId/stream.
-      if (deps.engine && request.authUser?.id) {
-        let userRole: string | undefined;
-        if (deps.organizations) {
-          const memberships = await deps.organizations.listForUser(request.authUser.id);
-          const membership = memberships.find((m) => m.organizationId === organizationId);
-          userRole = membership?.role;
-        }
-        const founderAuth = checkFounderAuthorization(
-          request.authUser.id,
-          organizationId,
-          userRole,
-        );
-
-        if (founderAuth) {
-          console.info("[founder-sse] Intercepting founder message for durable run (command-center)", {
-            userId: request.authUser.id,
-            organizationId,
-          });
-
-          // Ensure conversation exists and add user message
-          const conversation = await ensureConversation(session, body.message, body.conversationId);
-          await session.conversations.addMessage(conversation.id, "user", redactFounderSensitiveInput(body.message));
-
-          // Submit durable run — fire-and-forget
-          const executor = getFounderRunExecutor(deps.engine);
-          const runId = executor.submit({
-            organizationId,
-            userId: request.authUser.id,
-            message: body.message,
-            onChunk: chunkSink,
-            onPersist: (run) => session.conversations
-              .addMessage(conversation.id, "assistant", run.finalText ?? "")
-              .then(() => undefined),
-          });
-
-          // Emit the runId so the portal can reconnect if SSE drops
-          send("founder_run", { runId, conversationId: conversation.id });
-
-          // Subscribe to store events and forward as SSE frames
-          let sseClosed = false;
-          const onRunEvent = (eventRunId: string, event: FounderRunEvent): void => {
-            if (sseClosed || eventRunId !== runId) return;
-            send("event", event);
-
-            if (event.eventType === "run.completed") {
-              const run = founderRunStore.get(runId);
-              send("result", {
-                organizationId,
-                reply: run?.finalText ?? "",
-                events: [],
-                routing: { intent: "founder_build", departments: [], rationale: "" },
-                connectionSuggestion: null,
-                pendingToolId: null,
-                conversationId: conversation.id,
-              });
-              end();
-            } else if (event.eventType === "run.failed" || event.eventType === "run.cancelled") {
-              const run = founderRunStore.get(runId);
-              send("error", {
-                code: run?.errorCode ?? "FOUNDER_RUN_FAILED",
-                message: run?.errorMessage ?? "El run terminó sin respuesta.",
-                requestId: correlationId,
-              });
-              end();
-            }
-          };
-          founderRunStore.on("run:event", onRunEvent);
-
-          const onSseClose = (): void => {
-            sseClosed = true;
-            founderRunStore.off("run:event", onRunEvent);
-          };
-          raw.on("close", onSseClose);
-          raw.on("error", onSseClose);
-
-          // Heartbeat to keep connection alive during long runs
-          const heartbeat = setInterval(() => {
-            if (sseClosed) {
-              clearInterval(heartbeat);
-              return;
-            }
-            try {
-              raw.write(`: keep-alive\n\n`);
-            } catch {
-              onSseClose();
-            }
-          }, 15_000);
-          heartbeat.unref();
-
-          // Check if run already completed while we were setting up
-          const existingRun = founderRunStore.get(runId);
-          if (existingRun && (existingRun.status === "completed" || existingRun.status === "failed")) {
-            onRunEvent(runId, {
-              id: 0,
-              runId,
-              eventType: existingRun.status === "completed" ? "run.completed" : "run.failed",
-              data: {},
-              createdAt: Date.now(),
-            });
-          }
-
-          return; // Skip normal processCeoMessage flow
-        }
-      }
+      // Sprint 68 Incident 03 — Founder messages use Business Mode by default.
+      // Development Mode is ONLY entered via explicit signals:
+      //   1. detectFounderBuildCommand() → FounderBuildExecutor (build commands)
+      //   2. POST /api/customer-zero/:orgId/founder/runs → FounderRunExecutor (dedicated REST)
+      // All other founder messages (including chat) go through the normal CEO path
+      // with native business tools and Connections-layer capability resolution.
+      // Authorization (founderAuth) ≠ Development intent. Being a founder means
+      // you CAN use dev mode, not that every message IS a dev request.
 
       try {
         // Sprint 67 P0.3 — lightweight fast path. Greetings, thanks, and
@@ -6196,148 +6095,14 @@ async function runCeoMessageTurn(
   else delete session.state.currentUserId;
   const turnStartedAt = Date.now();
 
-  // Sprint 67 P0.7 — FOUNDER DEVELOPMENT MODE
-  // For authenticated founders, bypass ALL Departify routing and send
-  // directly to OpenClaw with full tools. This is the architectural
-  // change: Founder Chat → OpenClaw directly, not through Departify.
-  // A recovered approval-gated operation is always resolved by the existing
-  // deterministic state machine, even for a founder. Sending it to OpenClaw
-  // would bypass the Sprint 68 pre-LLM resolver and risk losing continuity.
-  const hasRecoveredPendingWork = Boolean(
-    session.state.pendingEmailWork ||
-    session.state.pendingCalendarWork ||
-    session.state.pendingFacebookPagesWork,
-  );
-  if (deps.engine && userId && !hasRecoveredPendingWork) {
-    let userRole: string | undefined;
-    if (deps.organizations) {
-      const memberships = await deps.organizations.listForUser(userId);
-      const membership = memberships.find((m) => m.organizationId === organizationId);
-      userRole = membership?.role;
-    }
-    const founderAuth = checkFounderAuthorization(userId, organizationId, userRole);
-
-    if (founderAuth) {
-      // Founder is authorized — send directly to OpenClaw with full tools
-      console.info("[founder-direct] Routing to OpenClaw directly", {
-        userId,
-        organizationId,
-        messageLength: message.length,
-        mode: "durable-run",
-      });
-
-      // Sprint 67 P0.8 — DURABLE FOUNDER RUN.
-      //
-      // The browser connection MUST NOT own the OpenClaw execution.
-      // We submit the message to the shared FounderRunExecutor which runs
-      // OpenClaw in the background, independent of this HTTP/SSE request.
-      // - If SSE disconnects → RUN CONTINUES
-      // - If browser refreshes → RUN CONTINUES
-      // - If portal reconnects → shows the CURRENT RUN via runId
-      // - If execution takes 5 minutes → it's allowed (10 min safety net)
-      //
-      // The old inline mutex + sendMessage is replaced: the executor owns
-      // the per-session lock (acquireSessionLock) and survives the request.
-      // We ONLY await the terminal state; we never own the execution.
-      const runId = getFounderRunExecutor(deps.engine).submit({
-        organizationId,
-        userId,
-        message,
-        ...(chunkSink ? { onChunk: chunkSink } : {}),
-        // Persist the final assistant text durably even if this connection
-        // dies before waitForTerminal resolves. The executor calls this
-        // regardless of request lifecycle.
-        onPersist: (run) => session.conversations
-          .addMessage(conversation.id, "assistant", run.finalText ?? "")
-          .then(() => undefined),
-      });
-
-      if (trace) {
-        trace.openclawCalled = true;
-        trace.finalResponseSource = "openclaw";
-      }
-
-      console.info("[founder-direct] Submitted durable run", {
-        runId,
-        sessionKey: `founder-development:${organizationId}:${userId}`,
-      });
-
-      // Await the terminal state. Execution is decoupled — the executor
-      // continues even if this request is abandoned or times out.
-      const terminalRun = await founderRunCompletion.waitForTerminal(
-        founderRunStore,
-        runId,
-      );
-
-      if (!terminalRun) {
-        console.error("[founder-direct] Run did not reach terminal state", { runId });
-        return completeDeterministicOperationTurn(
-          session,
-          conversation,
-          message,
-          "Error: el run no llegó a estado terminal. Intenta de nuevo.",
-          "founder_build",
-          "blocked",
-        );
-      }
-
-      console.info("[founder-direct] Durable run completed", {
-        runId,
-        status: terminalRun.status,
-        textLength: terminalRun.finalText?.length ?? 0,
-        toolCallCount: terminalRun.toolCallCount,
-        durationMs:
-          (terminalRun.completedAt ?? Date.now()) -
-          (terminalRun.startedAt ?? terminalRun.createdAt),
-      });
-
-      // Sprint 67 P0.8 — Structured status handling. NO error-string
-      // matching. The terminal run carries a structured status + errorCode.
-      if (terminalRun.status === "completed" && terminalRun.finalText) {
-        if (trace) {
-          trace.openclawStatus = "completed";
-          trace.nativeResponseTerminal = true;
-          trace.assistantTextBytes = Buffer.byteLength(terminalRun.finalText, "utf8");
-          if (terminalRun.transcriptPersistence === "persisted") {
-            traceStage(trace, "T14_persistence_completed");
-          } else if (terminalRun.transcriptPersistence === "failed") {
-            traceStage(trace, "T14_persistence_failed", { errorClass: "secondary_write" });
-          }
-        }
-        return completeDeterministicOperationTurn(
-          session,
-          conversation,
-          message,
-          terminalRun.finalText,
-          "founder_build",
-          "success",
-          null,
-          null,
-          true, // assistant text already persisted via onPersist
-        );
-      }
-
-      // Terminal but failed/cancelled → surface the structured error.
-      // NO fabricated success, NO generic "no podido responder" placeholder.
-      const errorCode = terminalRun.errorCode ?? "UNKNOWN";
-      const errorMessage =
-        terminalRun.errorMessage ?? "El run terminó sin respuesta utilizable.";
-      console.error("[founder-direct] Run ended without success", {
-        runId,
-        status: terminalRun.status,
-        errorCode,
-        errorMessage,
-      });
-      return completeDeterministicOperationTurn(
-        session,
-        conversation,
-        message,
-        `Error en run (${errorCode}): ${errorMessage}`,
-        "founder_build",
-        "blocked",
-      );
-    }
-  }
+  // Sprint 68 Incident 03 — Founder messages use Business Mode by default.
+  // Development Mode is ONLY entered via explicit signals:
+  //   1. detectFounderBuildCommand() → FounderBuildExecutor (build commands)
+  //   2. POST /api/customer-zero/:orgId/founder/runs → FounderRunExecutor (dedicated REST)
+  // All other founder messages (including chat) go through the normal CEO path
+  // with native business tools and Connections-layer capability resolution.
+  // Authorization (founderAuth) ≠ Development intent. Being a founder means
+  // you CAN use dev mode, not that every message IS a dev request.
 
   await session.conversations.addMessage(conversation.id, "user", message);
 
