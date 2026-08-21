@@ -612,6 +612,7 @@ export async function registerConversationRoutes(
       // All other founder messages (including chat) go through the normal CEO path
       // with native business tools and Connections-layer capability resolution.
 
+      let successCommitted = false;
       try {
         // Sprint 67 P0.3 — lightweight fast path for conversations endpoint.
         const intentCategory = classifyMessageIntent(body.message);
@@ -653,59 +654,77 @@ export async function registerConversationRoutes(
             { departmentId: "marketing" },
           );
         }
-        const result = await processCeoMessage(
-          session,
-          body.message,
-          conversationId,
-          deps.marketing,
-          deps.engineRuntimePolicy,
-          runtime,
-          trace,
-          deps,
-          request.authUser?.id,
-          // Sprint 65 P0 — the sink writes each event to the SSE stream
-          // as it happens, so the CEO sees progress on every turn.
-          captureActivity,
-          // Sprint 67 P0 — surface progressive assistant text as soon
-          // as the gateway emits it, without waiting for agent.wait.
-          chunkSink,
-        );
-        traceStage(trace, "T15_backend_response_finalization", {
-          responseStatus: ceoTurnResponseStatus(trace),
-          finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
-        });
-        emitCeoTurnTrace(session, trace, result);
+        let result: Awaited<ReturnType<typeof processCeoMessage>>;
+        try {
+          result = await processCeoMessage(
+            session,
+            body.message,
+            conversationId,
+            deps.marketing,
+            deps.engineRuntimePolicy,
+            runtime,
+            trace,
+            deps,
+            request.authUser?.id,
+            captureActivity,
+            chunkSink,
+          );
+        } catch (cause) {
+          if (cause instanceof MaxActiveConversationsError) {
+            send("error", {
+              code: "MAX_ACTIVE_CONVERSATIONS",
+              message: cause.message,
+              activeCount: cause.activeCount,
+              maxActive: MAX_ACTIVE_CONVERSATIONS,
+              statusCode: 409,
+            });
+            end();
+            return;
+          }
+          emitCeoTurnFailureTrace(trace, cause);
+          send("error", {
+            code: "INTERNAL",
+            message: "No he podido completar esa respuesta. Vuelve a intentarlo.",
+            requestId: correlationId,
+            statusCode: 500,
+          });
+          end();
+          return;
+        }
+
+        // A valid result is the delegated/conversation SUCCESS COMMIT POINT.
+        // Tracing, status projection and compaction are post-commit and can no
+        // longer replace it with an error terminal event.
+        try {
+          traceStage(trace, "T15_backend_response_finalization", {
+            responseStatus: ceoTurnResponseStatus(trace),
+            finalTextBytes: Buffer.byteLength(result.reply, "utf8"),
+          });
+          emitCeoTurnTrace(session, trace, result);
+        } catch (bookkeepingError) {
+          request.log.warn(
+            { correlationId, error: bookkeepingError },
+            "conversation post-commit bookkeeping failed; result still delivered",
+          );
+        }
         const responseStatus = ceoTurnResponseStatus(trace);
         if (responseStatus >= 400) {
-          const errorCode = trace.engineErrorCode ?? "ENGINE_EXECUTION";
-          // Sprint 66 P0 — the CEO-facing message stays generic for the
-          // product surface, but the responsible engineer must be able to
-          // find the proximate cause in the internal log. Surface the
-          // engine status, error code, and timeline so the failure is
-          // traceable instead of buried behind a catch-all phrase.
           request.log.error(
             {
               correlationId,
               organizationId,
               conversationId,
-              engineErrorCode: errorCode,
+              engineErrorCode: trace.engineErrorCode ?? "ENGINE_EXECUTION",
               openclawStatus: trace.openclawStatus,
-              sessionFound: trace.sessionFound,
-              durationMs: Date.now() - trace.startedMonotonicAt,
+              responseStatus,
               timeline: trace.timeline,
             },
-            "conversation SSE engine failure before persistence",
+            "conversation post-commit engine failure detected; result still delivered",
           );
-          send("error", {
-            code: errorCode,
-            message:
-              "No he podido completar esa respuesta porque el motor de negocio ha fallado. Vuelve a intentarlo.",
-            requestId: correlationId,
-            statusCode: responseStatus,
-          });
-          end();
-          return;
         }
+
+        successCommitted = true;
+        send("result", result);
 
         // Compaction after the engine result is streamed, identical to
         // the JSON endpoint. Compaction is best-effort; a failure must
@@ -731,9 +750,16 @@ export async function registerConversationRoutes(
           });
         }
 
-        send("result", result);
         end();
       } catch (cause) {
+        if (successCommitted) {
+          request.log.warn(
+            { correlationId, error: cause },
+            "conversation post-commit work failed; committed result preserved",
+          );
+          end();
+          return;
+        }
         if (cause instanceof MaxActiveConversationsError) {
           send("error", {
             code: "MAX_ACTIVE_CONVERSATIONS",

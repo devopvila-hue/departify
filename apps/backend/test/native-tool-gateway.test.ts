@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type {
   EngineAdapter,
   EngineHealth,
@@ -16,6 +16,12 @@ import { makeFakeTenant } from "./helpers/fake-tenant.js";
 import { issueScopedRuntimeToken } from "../src/customer-zero/runtime-identity.js";
 import { MarketingService } from "../src/customer-zero/marketing-service.js";
 import { InMemoryCompanyDnaStore } from "../src/customer-zero/company-dna.js";
+import { InMemoryToolStateStore } from "../src/customer-zero/tool-state.js";
+import {
+  createInMemoryGoogleTokenStore,
+  installGoogleTokenStore,
+  type GoogleTokenStore,
+} from "../src/customer-zero/google-tokens.js";
 
 class GatewayTestEngine implements EngineAdapter {
   readonly inputs: EngineSendMessageInput[] = [];
@@ -25,7 +31,9 @@ class GatewayTestEngine implements EngineAdapter {
   }> = [];
   nativeSelection = true;
   nativeFailure = false;
+  nativePostGenerationFailure = false;
   nativeText = "Contexto de empresa consultado.";
+  delegatedText = "Resultado especialista listo.";
   async createSession(input?: { sessionId?: string }): Promise<EngineSession> {
     return { id: input?.sessionId ?? "ceo:test", status: "active" };
   }
@@ -42,8 +50,11 @@ class GatewayTestEngine implements EngineAdapter {
         ? /\bsegundo\b/i.test(input.message)
           ? "Segundo email revisado: más corto y directo."
           : this.nativeText
-        : "ok",
+        : this.delegatedText,
       status: "completed",
+      ...(input.nativeBusinessTools && this.nativePostGenerationFailure
+        ? { postGenerationFailure: true }
+        : {}),
       ...(input.nativeBusinessTools && this.nativeSelection
         ? {
             toolCalls: [
@@ -88,12 +99,25 @@ async function waitFor(check: () => boolean, timeoutMs = 3_000): Promise<void> {
   expect(check()).toBe(true);
 }
 
+async function waitForAsync(
+  check: () => Promise<boolean>,
+  timeoutMs = 3_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await check()) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(await check()).toBe(true);
+}
+
 describe("native company context gateway", () => {
   let server: FastifyInstance;
   let engine: GatewayTestEngine;
   let offServer: FastifyInstance;
   let offEngine: GatewayTestEngine;
   let companyDna: InMemoryCompanyDnaStore;
+  let toolState: InMemoryToolStateStore;
+  let googleTokens: GoogleTokenStore;
   const secret = "native-gateway-test-secret";
 
   beforeAll(async () => {
@@ -101,11 +125,15 @@ describe("native company context gateway", () => {
     engine = new GatewayTestEngine();
     offEngine = new GatewayTestEngine();
     companyDna = new InMemoryCompanyDnaStore();
+    toolState = new InMemoryToolStateStore();
+    googleTokens = createInMemoryGoogleTokenStore();
+    installGoogleTokenStore(googleTokens);
     server = await buildServer(loadBackendConfig(), {
       auth: tenant,
       organizations: tenant,
       engine,
       companyDna,
+      toolState,
       marketing: new MarketingService({ engine, companyDna }),
       nativeBusinessTools: true,
     });
@@ -117,10 +145,17 @@ describe("native company context gateway", () => {
     });
   });
 
+  afterAll(() => {
+    installGoogleTokenStore(null);
+  });
+
   afterEach(() => {
     delete process.env.DEPARTIFY_RUNTIME_TOKEN;
     engine.nativeSelection = true;
     engine.nativeFailure = false;
+    engine.nativePostGenerationFailure = false;
+    engine.nativeText = "Contexto de empresa consultado.";
+    engine.delegatedText = "Resultado especialista listo.";
   });
 
   it("returns bounded canonical context and ignores model organization arguments", async () => {
@@ -191,6 +226,7 @@ describe("native company context gateway", () => {
       payload: {
         toolName: "departify.marketing.delegate",
         params: {
+          department: "marketing",
           objective: "Preparar una campaña de captación para septiembre",
           specialists: ["agent_content_strategist", "agent_ads_specialist"],
         },
@@ -271,6 +307,184 @@ describe("native company context gateway", () => {
       headers: { authorization: "Bearer token-a" },
     });
     expect(conversation.json().messages.at(-1).role).toBe("assistant");
+  });
+
+  it("propagates organization Drive capabilities to delegated SEO without crossing tenants", async () => {
+    process.env.DEPARTIFY_RUNTIME_TOKEN = secret;
+    engine.delegatedText =
+      "Auditoría SEO completada: canonical verificado y entregable preparado en Drive.";
+
+    const startA = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "SEO Tenant Alpha",
+        hasWebsite: true,
+        url: "https://alpha.example",
+        description: "Empresa Alpha.",
+        goal: "Corregir SEO",
+      },
+    });
+    const orgA = startA.json().organizationId as string;
+    const verifiedAt = new Date().toISOString();
+    await toolState.upsert({
+      organizationId: orgA,
+      toolId: "google_drive",
+      label: "Google Drive",
+      declared: true,
+      status: "connected",
+      grantedCapabilities: ["drive.search", "drive.read"],
+      verifiedAt,
+      health: "operational",
+    });
+    await googleTokens.put({
+      organizationId: orgA,
+      userId: "founder-alpha",
+      provider: "google_drive",
+      accessToken: "test-access-alpha",
+      refreshToken: "test-refresh-alpha",
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+      email: "founder-alpha@example.test",
+      displayName: "Founder Alpha",
+      operationalVerifiedAt: verifiedAt,
+      operationalProbeError: null,
+      operationalCapabilities: ["drive.search", "drive.read"],
+    });
+
+    const invokeSeo = async (organizationId: string) => {
+      const token = issueScopedRuntimeToken({
+        secret,
+        organizationId,
+        sessionKey: `departify:ceo:${organizationId}`,
+      }).token;
+      return server.inject({
+        method: "POST",
+        url: "/internal/native-tools/tool",
+        headers: { authorization: `Bearer ${token}` },
+        payload: {
+          toolName: "departify.marketing.delegate",
+          params: {
+            department: "seo",
+            objective: "Auditar y corregir el canonical",
+            specialists: ["agent_seo_specialist"],
+          },
+        },
+      });
+    };
+
+    const beforeA = engine.inputs.length;
+    const acceptedA = await invokeSeo(orgA);
+    expect(acceptedA.statusCode).toBe(200);
+    expect(acceptedA.json().data).toMatchObject({
+      acceptedAsync: true,
+      department: "seo",
+    });
+    await waitForAsync(async () => {
+      const feed = await server.inject({
+        method: "GET",
+        url: `/api/customer-zero/${orgA}/work-feed`,
+        headers: { authorization: "Bearer token-a" },
+      });
+      return feed.json().tasks.some(
+        (task: { departmentId: string; status: string }) =>
+          task.departmentId === "seo" && task.status === "completed",
+      );
+    });
+    const specialistA = engine.inputs
+      .slice(beforeA)
+      .find((input) => input.agentId === "agent_seo_specialist");
+    expect(specialistA?.runtimeContext).toContain(
+      '"id":"drive.search","available":true',
+    );
+    expect(specialistA?.runtimeContext).toContain(
+      '"id":"drive.read","available":true',
+    );
+    expect(specialistA?.runtimeContext).not.toContain("test-refresh-alpha");
+    expect(specialistA?.runtimeContext).not.toContain("test-access-alpha");
+    expect(specialistA?.runtimeContext).not.toMatch(/Elvira|Content Strategist/);
+    expect(specialistA?.runtimeContext).toContain('"id":"seo","name":"SEO"');
+
+    const feedA = await server.inject({
+      method: "GET",
+      url: `/api/customer-zero/${orgA}/work-feed`,
+      headers: { authorization: "Bearer token-a" },
+    });
+    expect(feedA.json().tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          departmentId: "seo",
+          assignedEmployeeId: "agent_seo_specialist",
+          status: "completed",
+        }),
+      ]),
+    );
+    expect(feedA.json().results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          departmentId: "seo",
+          content: engine.delegatedText,
+        }),
+      ]),
+    );
+    expect(JSON.stringify(feedA.json())).not.toMatch(
+      /Elvira|Content Strategist|plan de Marketing/i,
+    );
+
+    const conversationsA = await server.inject({
+      method: "GET",
+      url: `/api/customer-zero/${orgA}/conversations`,
+      headers: { authorization: "Bearer token-a" },
+    });
+    const conversationA = await server.inject({
+      method: "GET",
+      url: `/api/customer-zero/${orgA}/conversations/${conversationsA.json().conversations[0].id}`,
+      headers: { authorization: "Bearer token-a" },
+    });
+    const visibleCompletions = conversationA
+      .json()
+      .messages.filter(
+        (message: { role: string; content: string }) =>
+          message.role === "assistant" &&
+          message.content.includes("El trabajo de SEO ha terminado"),
+      );
+    expect(visibleCompletions).toHaveLength(1);
+    expect(visibleCompletions[0].content).not.toMatch(
+      /Departify no ha podido responderte|Marketing|Elvira/i,
+    );
+
+    const startB = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "SEO Tenant Beta",
+        hasWebsite: true,
+        url: "https://beta.example",
+        description: "Empresa Beta sin Drive.",
+        goal: "Corregir SEO",
+      },
+    });
+    const orgB = startB.json().organizationId as string;
+    const beforeB = engine.inputs.length;
+    expect((await invokeSeo(orgB)).statusCode).toBe(200);
+    await waitFor(
+      () =>
+        engine.inputs
+          .slice(beforeB)
+          .some((input) => input.agentId === "agent_seo_specialist"),
+    );
+    const specialistB = engine.inputs
+      .slice(beforeB)
+      .find((input) => input.agentId === "agent_seo_specialist");
+    expect(specialistB?.runtimeContext).toContain(
+      '"id":"drive.search","available":false',
+    );
+    expect(specialistB?.runtimeContext).not.toContain("SEO Tenant Alpha");
+    expect(specialistB?.runtimeContext).not.toContain(
+      "founder-alpha@example.test",
+    );
   });
 
   it("rejects a token from tenant A when its signed claims are changed to tenant B", async () => {
@@ -467,6 +681,53 @@ describe("native company context gateway", () => {
     expect(response.json().reply).not.toMatch(
       /Lo paso a Elvira|Marketing|No puedo afirmar/i,
     );
+  });
+
+  it("emits one SSE success and no failure after a valid native result is committed", async () => {
+    engine.nativeSelection = false;
+    engine.nativePostGenerationFailure = true;
+    engine.nativeText = "Resultado SEO válido y persistido.";
+    const start = await server.inject({
+      method: "POST",
+      url: "/api/customer-zero/start",
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        companyName: "Delegated Success Commit",
+        hasWebsite: false,
+        description: "B2B software company.",
+        goal: "Corregir SEO",
+      },
+    });
+    const organizationId = start.json().organizationId as string;
+    const created = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/conversations`,
+      headers: { authorization: "Bearer token-a" },
+      payload: {},
+    });
+    const conversationId = created.json().conversation.id as string;
+    const response = await server.inject({
+      method: "POST",
+      url: `/api/customer-zero/${organizationId}/conversations/${conversationId}/messages/stream`,
+      headers: { authorization: "Bearer token-a" },
+      payload: {
+        message: "Analiza esta propuesta empresarial y dame una recomendación detallada.",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.body.match(/event: result/g)).toHaveLength(1);
+    expect(response.body).not.toContain("event: error");
+    expect(response.body).toContain(engine.nativeText);
+
+    const history = await server.inject({
+      method: "GET",
+      url: `/api/customer-zero/${organizationId}/conversations/${conversationId}`,
+      headers: { authorization: "Bearer token-a" },
+    });
+    expect(history.json().messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: engine.nativeText,
+    });
   });
 
   it("keeps the legacy Marketing message ingress on the canonical conversation", async () => {

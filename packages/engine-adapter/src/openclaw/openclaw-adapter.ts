@@ -460,7 +460,7 @@ export function renderOpenClawTurn(input: EngineSendMessageInput): string {
         "result, use the relevant native capability again with its structured continuation fields " +
         "(email offset, Drive parentId, mimeType, or calendar timeOfDay) instead of guessing from " +
         "prose. If the previous result has no continuation id, issue a new bounded read with the " +
-        "appropriate filter. Department objectives, Marketing state, and prior assistant suggestions " +
+        "appropriate filter. Department objectives, department state, and prior assistant suggestions " +
         "are context only and never outrank the current factual read request. For every factual mailbox, " +
         "calendar, Drive, or company-state request, " +
         "you MUST call the relevant native capability before any natural-language answer; do not " +
@@ -473,9 +473,10 @@ export function renderOpenClawTurn(input: EngineSendMessageInput): string {
         "result, inspect the currently exposed capabilities and select departify.work.deliverable " +
         "when an authorized source capability and transformation can satisfy it. Use its business " +
         "arguments; never ask the user to mention or create an internal procedure. For a genuine " +
-        "Marketing objective, route to the Marketing department (Elvira heads that " +
-        "department): choose one or more authorized Marketing specialists and call " +
-        "departify.marketing.delegate with their internal ids. That capability runs " +
+        "Marketing objective, route to Marketing (Elvira heads that department). For an SEO " +
+        "objective or a follow-up to an SEO result, preserve SEO ownership and route to SEO, " +
+        "never to Elvira. Call departify.marketing.delegate with the owning department and only " +
+        "specialists authorized for that department. That capability runs " +
         "specialist work sessions and returns their work for your synthesis. A question " +
         "to the user about whether to hand work to a person is conversation only; never delegate " +
         "merely because a response mentions a person.\n\n" +

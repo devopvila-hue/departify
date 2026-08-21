@@ -341,6 +341,10 @@ const config = {
         id: "agent_ads_specialist",
         workspace: join(workspaceDir, "agents", "agent_ads_specialist"),
       },
+      {
+        id: "agent_seo_specialist",
+        workspace: join(workspaceDir, "agents", "agent_seo_specialist"),
+      },
     ],
   },
   models: { providers },
@@ -594,6 +598,8 @@ const workforceInstructions = {
     "# Agent: agent_social_media_manager\n\nYou are the Marketing Social Media Specialist. Produce organic social strategy, channel adaptations, publishing plans, and Meta Business preparation. Separate recommendations from actions and never claim a post was published without authorization.\n",
   agent_ads_specialist:
     "# Agent: agent_ads_specialist\n\nYou are the Marketing Advertising Specialist. Produce paid acquisition strategy, campaign structure, audience hypotheses, creative requirements, and measurement plans. Treat spend and campaign mutations as approval-sensitive.\n",
+  agent_seo_specialist:
+    "# Agent: agent_seo_specialist\n\nYou are Departify's SEO Specialist. Produce technical and content SEO work for the SEO department. Preserve SEO identity end-to-end and never present yourself as Marketing or Elvira. Tenant capabilities supplied at runtime are authoritative; do not claim a connected capability is unavailable. Never claim an external action without authorized execution.\n",
 };
 for (const [agentId, instructions] of Object.entries(workforceInstructions)) {
   const workspace = join(workspaceDir, "agents", agentId);

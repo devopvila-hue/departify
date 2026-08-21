@@ -23,7 +23,10 @@ import {
   createWorkExecutor,
   workStoreForRoutes,
 } from "./customer-zero-v2.js";
-import { compileRuntimeBusinessContext } from "../../customer-zero/department-context-compiler.js";
+import {
+  compileRuntimeBusinessContext,
+  renderRuntimeBusinessContextForNativeEngine,
+} from "../../customer-zero/department-context-compiler.js";
 import { buildRuntimeCapabilityManifest } from "../../customer-zero/capability-manifest.js";
 import { GoogleDriveAdapter } from "../../customer-zero/google-drive-adapter.js";
 import { findOperationalGoogleIdentityForOrg } from "../../customer-zero/credential-resolver.js";
@@ -57,6 +60,9 @@ const MARKETING_SPECIALIST_IDS = new Set(
 const MARKETING_SPECIALIST_LABELS = new Map(
   MARKETING_ROSTER.map((employee) => [employee.id, employee.label]),
 );
+const SEO_SPECIALIST_ID = "agent_seo_specialist";
+
+type DelegatedDepartment = "marketing" | "seo";
 
 interface NativeMarketingDelegationTask {
   readonly specialistId: string;
@@ -212,7 +218,8 @@ function nativeText(args: Record<string, unknown>, key: string): string {
  */
 async function runNativeMarketingDelegation(input: {
   organizationId: string;
-  userId: string;
+  userId?: string;
+  departmentId: DelegatedDepartment;
   objective: string;
   context: string;
   tasks: readonly NativeMarketingDelegationTask[];
@@ -222,11 +229,55 @@ async function runNativeMarketingDelegation(input: {
   if (!input.deps.engine) throw new Error("engine_unavailable");
   const engine = input.deps.engine;
   const workStore = workStoreForRoutes();
+  const [companyDna, connections, tasks, results, googleSummaries, approvals, objectives] =
+    await Promise.all([
+      resolveCompanyDnaStore(input.deps).get(input.organizationId),
+      buildCanonicalConnectionViews(input.session, input.session.state.locale),
+      workStore.listTasksForOrg(input.organizationId, 50),
+      workStore.listResultsForOrg(input.organizationId, 20),
+      getGoogleTokenStore().listForOrg(input.organizationId),
+      input.deps.marketing?.listApprovals(input.organizationId) ?? Promise.resolve([]),
+      input.deps.marketing?.listObjectives(input.organizationId) ?? Promise.resolve([]),
+    ]);
+  const runtimeConnections = nativeRuntimeConnections(
+    connections,
+    googleSummaries,
+    input.userId,
+  );
+  const capabilities = buildRuntimeCapabilityManifest(runtimeConnections);
+  const delegatedRuntimeContext = renderRuntimeBusinessContextForNativeEngine(
+    compileRuntimeBusinessContext({
+      session: input.session,
+      departmentId: input.departmentId,
+      companyDna,
+      capabilities,
+      connections: runtimeConnections,
+      tasks,
+      results,
+      approvals: input.departmentId === "marketing" ? approvals : [],
+      activeObjective:
+        input.departmentId === "marketing"
+          ? objectives.find((objective) => objective.status === "active") ?? null
+          : null,
+      recentActivity:
+        input.departmentId === "marketing"
+          ? buildMarketingOperationalActivity(tasks, results)
+          : [],
+    }),
+  );
+  console.info("[delegated-work-trace]", {
+    organizationHash: safeTraceHash(input.organizationId),
+    requestedDepartment: input.departmentId,
+    delegatedDepartment: input.departmentId,
+    capabilityIds: capabilities.capabilities
+      .filter((capability) => capability.available)
+      .map((capability) => capability.id),
+  });
   const completed = await Promise.all(
     input.tasks.map(
       async (assignment): Promise<NativeMarketingDelegationItem> => {
         try {
-          const specialistSessionId = `employee:${input.organizationId}:${input.userId}:${assignment.specialistId}`;
+          const specialistSessionId = `employee:${input.organizationId}:${input.userId ?? "organization"}:${assignment.specialistId}`;
           const existing = await engine.getSession(
             specialistSessionId,
             assignment.specialistId,
@@ -238,11 +289,15 @@ async function runNativeMarketingDelegation(input: {
               agentId: assignment.specialistId,
             }));
           const specialistPrompt = [
-            `Elvira te delega este objetivo de Marketing: ${input.objective}`,
+            input.departmentId === "seo"
+              ? `Departify te delega este objetivo del departamento SEO: ${input.objective}`
+              : `Elvira te delega este objetivo de Marketing: ${input.objective}`,
             input.context
               ? `Contexto verificado de la empresa: ${input.context}`
               : "",
-            "Entrega trabajo accionable para que Elvira lo sintetice en un máximo de 600 palabras. Usa viñetas. Distingue recomendaciones de acciones externas. No inventes conexiones, publicaciones, gasto ni resultados de proveedores.",
+            input.departmentId === "seo"
+              ? "Entrega trabajo SEO accionable en un máximo de 600 palabras. Usa viñetas. Conserva la identidad SEO y no te presentes como Marketing ni como Elvira. Las capabilities del contexto son la verdad autorizada de la empresa: no declares desconectada una capability disponible. Distingue recomendaciones de acciones externas."
+              : "Entrega trabajo accionable para que Elvira lo sintetice en un máximo de 600 palabras. Usa viñetas. Las capabilities del contexto son la verdad autorizada de la empresa: no declares desconectada una capability disponible. Distingue recomendaciones de acciones externas. No inventes publicaciones, gasto ni resultados de proveedores.",
           ]
             .filter(Boolean)
             .join("\n\n");
@@ -251,6 +306,7 @@ async function runNativeMarketingDelegation(input: {
               sessionId: specialistSession.id,
               agentId: assignment.specialistId,
               message: specialistPrompt,
+              runtimeContext: delegatedRuntimeContext,
             }),
             `${assignment.specialistId}_generation`,
           );
@@ -263,7 +319,7 @@ async function runNativeMarketingDelegation(input: {
           const output = specialistResult.text.trim().slice(0, 8_000);
           const storedResult = await workStore.createResult({
             organizationId: input.organizationId,
-            departmentId: "marketing",
+            departmentId: input.departmentId,
             relatedWorkItemId: assignment.taskId,
             title: `${assignment.label}: resultado de trabajo`,
             summary: output.slice(0, 400),
@@ -272,12 +328,12 @@ async function runNativeMarketingDelegation(input: {
               specialistId: assignment.specialistId,
               objective: input.objective.slice(0, 500),
             },
-            source: "OpenClaw native Marketing workforce",
+            source: `Departify delegated ${input.departmentId} workforce`,
             producedByCapability: "results.publish",
           });
           await workStore.updateTask(assignment.taskId, {
             status: "completed",
-            statusMessage: "Marketing ha terminado este trabajo.",
+            statusMessage: `${input.departmentId === "seo" ? "SEO" : "Marketing"} ha terminado este trabajo.`,
             progress: 1,
             completedAt: new Date().toISOString(),
             resultId: storedResult.id,
@@ -297,7 +353,7 @@ async function runNativeMarketingDelegation(input: {
           try {
             await workStore.updateTask(assignment.taskId, {
               status: "failed",
-              statusMessage: "No se ha podido completar este trabajo de Marketing.",
+              statusMessage: `No se ha podido completar este trabajo de ${input.departmentId === "seo" ? "SEO" : "Marketing"}.`,
               progress: 0,
               completedAt: new Date().toISOString(),
               errorCode,
@@ -322,8 +378,13 @@ async function runNativeMarketingDelegation(input: {
     } => assignment.status === "completed" && Boolean(assignment.output),
   );
   let synthesis: string | undefined;
-  if (finished.length > 0) {
-    const elviraSessionId = `employee:${input.organizationId}:${input.userId}:agent_marketing_director`;
+  if (input.departmentId === "seo" && finished.length > 0) {
+    synthesis = finished
+      .map((assignment) => assignment.output)
+      .join("\n\n")
+      .slice(0, 16_000);
+  } else if (finished.length > 0) {
+    const elviraSessionId = `employee:${input.organizationId}:${input.userId ?? "organization"}:agent_marketing_director`;
     try {
       const existingElvira = await engine.getSession(
         elviraSessionId,
@@ -368,26 +429,41 @@ async function runNativeMarketingDelegation(input: {
   );
   let finalMessage: string;
   if (synthesis) {
-    finalMessage = `El plan de Marketing ha terminado:\n\n${synthesis}`;
-    await workStore.createResult({
-      organizationId: input.organizationId,
-      departmentId: "marketing",
-      relatedWorkItemId: finished[0]?.taskId ?? null,
-      title: "Resultado del plan de Marketing",
-      summary: synthesis.slice(0, 400),
-      content: synthesis,
-      data: {
-        objective: input.objective.slice(0, 500),
-        specialistIds: finished.map((assignment) => assignment.specialistId),
-      },
-      source: "Marketing",
-      producedByCapability: "results.publish",
-    });
+    const departmentLabel = input.departmentId === "seo" ? "SEO" : "Marketing";
+    finalMessage = `El trabajo de ${departmentLabel} ha terminado:\n\n${synthesis}`;
+    // SEO already has one authoritative specialist DepartmentResult. Marketing
+    // additionally persists Elvira's synthesis because it is a distinct result.
+    if (input.departmentId === "marketing") {
+      try {
+        await workStore.createResult({
+          organizationId: input.organizationId,
+          departmentId: input.departmentId,
+          relatedWorkItemId: finished[0]?.taskId ?? null,
+          title: `Resultado del trabajo de ${departmentLabel}`,
+          summary: synthesis.slice(0, 400),
+          content: synthesis,
+          data: {
+            objective: input.objective.slice(0, 500),
+            specialistIds: finished.map((assignment) => assignment.specialistId),
+          },
+          source: departmentLabel,
+          producedByCapability: "results.publish",
+        });
+      } catch (cause) {
+        console.error("[delegated-work-trace]", {
+          organizationHash: safeTraceHash(input.organizationId),
+          requestedDepartment: input.departmentId,
+          completionDepartment: input.departmentId,
+          status: "post_commit_synthesis_persistence_failed",
+          errorClass: cause instanceof Error ? cause.name : "unknown",
+        });
+      }
+    }
   } else if (finished.length > 0) {
-    finalMessage = `He recibido resultados del plan de Marketing. Puedes consultarlos en Resultados.`;
+    finalMessage = `He recibido resultados del trabajo de ${input.departmentId === "seo" ? "SEO" : "Marketing"}. Puedes consultarlos en Resultados.`;
   } else {
     finalMessage =
-      "No he podido completar el plan de Marketing. No se ha publicado ni ejecutado ninguna acción externa. Puedes reintentarlo.";
+      `No he podido completar el trabajo de ${input.departmentId === "seo" ? "SEO" : "Marketing"}. No se ha publicado ni ejecutado ninguna acción externa. Puedes reintentarlo.`;
   }
   await input.session.conversations.addMessage(
     conversation.id,
@@ -401,10 +477,18 @@ async function runNativeMarketingDelegation(input: {
     nativeTool: true,
     toolName: MARKETING_DELEGATION_TOOL,
     organizationHash: safeTraceHash(input.organizationId),
+    requestedDepartment: input.departmentId,
+    specialistDepartment: input.departmentId,
+    resultDepartment: input.departmentId,
+    completionDepartment: input.departmentId,
+    visibleDepartment: input.departmentId,
     status: "background_completed",
     completedSpecialists: finished.length,
     failedSpecialists: completed.length - finished.length,
     synthesis: Boolean(synthesis),
+    successCommitted: finished.length > 0,
+    terminalSuccessCount: finished.length > 0 ? 1 : 0,
+    terminalFailureCount: finished.length > 0 ? 0 : 1,
   });
 }
 
@@ -1030,13 +1114,24 @@ export async function registerInternalEngineRoutes(
         };
       } else if (toolName === MARKETING_DELEGATION_TOOL) {
         const objective = nativeText(args, "objective");
+        const requestedDepartment = nativeText(args, "department");
         const requestedSpecialists = Array.isArray(args.specialists)
           ? args.specialists.filter(
               (value): value is string => typeof value === "string",
             )
           : [];
+        const departmentId: DelegatedDepartment = requestedDepartment === "seo"
+          ? "seo"
+          : requestedDepartment === "marketing"
+            ? "marketing"
+            : requestedSpecialists.includes(SEO_SPECIALIST_ID)
+              ? "seo"
+              : "marketing";
+        const allowedSpecialists = departmentId === "seo"
+          ? new Set([SEO_SPECIALIST_ID])
+          : MARKETING_SPECIALIST_IDS;
         const specialistIds = [...new Set(requestedSpecialists)].filter((id) =>
-          MARKETING_SPECIALIST_IDS.has(id),
+          allowedSpecialists.has(id),
         );
         const context = nativeText(args, "context").slice(0, 6000);
         if (
@@ -1049,7 +1144,7 @@ export async function registerInternalEngineRoutes(
             status: "blocked",
             operation: toolName,
             summary:
-              "La delegación necesita un objetivo y uno o más especialistas de Marketing válidos.",
+              `La delegación necesita un objetivo y uno o más especialistas de ${departmentId === "seo" ? "SEO" : "Marketing"} válidos.`,
           };
         } else {
           // Native OpenClaw delegation is itself the real Marketing handoff.
@@ -1065,20 +1160,21 @@ export async function registerInternalEngineRoutes(
           const workStore = workStoreForRoutes();
           const tasks: NativeMarketingDelegationTask[] = [];
           for (const specialistId of specialistIds) {
-            const label =
-              MARKETING_SPECIALIST_LABELS.get(specialistId) ?? specialistId;
+            const label = specialistId === SEO_SPECIALIST_ID
+              ? "Responsable de SEO"
+              : MARKETING_SPECIALIST_LABELS.get(specialistId) ?? specialistId;
             const task = await workStore.createTask({
               organizationId: identity.organizationId,
-              departmentId: "marketing",
+              departmentId,
               objectiveId: null,
-              requestedBy: "elvira",
+              requestedBy: departmentId === "seo" ? "departify" : "elvira",
               assignedEmployeeId: specialistId,
               title: `${label}: ${objective.slice(0, 120)}`,
               summary: objective,
               capability: "results.publish",
               toolId: "openclaw.agent",
               status: "running",
-              statusMessage: "Marketing está trabajando en este plan.",
+              statusMessage: `${departmentId === "seo" ? "SEO" : "Marketing"} está trabajando en este plan.`,
               progress: 0.1,
               requiredCapabilities: ["results.publish"],
               startedAt: new Date().toISOString(),
@@ -1114,7 +1210,8 @@ export async function registerInternalEngineRoutes(
           // conversation when the work is finished.
           void runNativeMarketingDelegation({
             organizationId: identity.organizationId,
-            userId: identity.userId ?? "unknown-user",
+            ...(identity.userId ? { userId: identity.userId } : {}),
+            departmentId,
             objective,
             context,
             tasks,
@@ -1132,8 +1229,9 @@ export async function registerInternalEngineRoutes(
           result = {
             status: "success",
             operation: toolName,
-            summary: "He puesto en marcha el plan de Marketing. El trabajo queda en curso y aparecerá aquí cuando termine.",
+            summary: `He puesto en marcha el trabajo de ${departmentId === "seo" ? "SEO" : "Marketing"}. Queda en curso y aparecerá aquí cuando termine.`,
             data: {
+              department: departmentId,
               objective: objective.slice(0, 500),
               delegated,
               acceptedAsync: true,

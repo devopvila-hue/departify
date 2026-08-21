@@ -42,8 +42,13 @@ test("registers the native tool surface", async () => {
   assert.deepEqual(deliverable.parameters.properties.capability.enum, ["crm.contacts.list"]);
   assert.deepEqual(deliverable.parameters.properties.transformation.enum, ["score"]);
   const delegation = tools.find((tool) => tool.name === "departify.marketing.delegate");
-  assert.deepEqual(delegation.parameters.required, ["objective", "specialists"]);
+  assert.deepEqual(delegation.parameters.required, ["department", "objective", "specialists"]);
+  assert.deepEqual(delegation.parameters.properties.department.enum, ["marketing", "seo"]);
   assert.equal(delegation.parameters.properties.specialists.maxItems, 3);
+  assert.equal(
+    delegation.parameters.properties.specialists.items.enum.includes("agent_seo_specialist"),
+    true,
+  );
   assert.equal(tools.some((tool) => tool.name.includes("send")), false);
 });
 

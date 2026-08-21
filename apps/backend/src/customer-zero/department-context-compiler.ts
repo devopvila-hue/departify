@@ -645,6 +645,7 @@ export function syncCompiledContext(
 
 export interface RuntimeBusinessContextInput {
   readonly session: CustomerZeroSession;
+  readonly departmentId?: "marketing" | "seo";
   readonly companyDna?: CompanyDnaRecord | null;
   readonly capabilities: RuntimeCapabilityManifest;
   readonly connections: readonly {
@@ -722,7 +723,7 @@ export interface RuntimeBusinessContext {
     readonly status: string;
   } | null;
   readonly departments: readonly {
-    readonly id: "marketing";
+    readonly id: "marketing" | "seo";
     readonly name: string;
     readonly head: { readonly name: string; readonly role: string };
     readonly activeObjective: {
@@ -758,6 +759,7 @@ export interface RuntimeBusinessContext {
   }[];
   readonly recentResults: readonly {
     readonly id: string;
+    readonly departmentId: string;
     readonly title: string;
     readonly summary: string;
   }[];
@@ -841,6 +843,7 @@ export function compileRuntimeBusinessContext(
   input: RuntimeBusinessContextInput,
 ): RuntimeBusinessContext {
   const base = compileDepartmentContext(input.session);
+  const departmentId = input.departmentId ?? "marketing";
   const dna = input.companyDna;
   const activeWork = input.tasks
     .filter((task) => ["queued", "running", "waiting_approval"].includes(task.status))
@@ -852,7 +855,9 @@ export function compileRuntimeBusinessContext(
       status: task.status,
       statusMessage: task.statusMessage,
     }));
-  const marketingWork = activeWork.filter((task) => task.departmentId === "marketing");
+  const departmentWork = activeWork.filter(
+    (task) => task.departmentId === departmentId,
+  );
   const departmentProvisioned = input.companyDna
     ? Boolean(dna?.departmentProvisionedAt)
     : Boolean(base.ready);
@@ -866,12 +871,19 @@ export function compileRuntimeBusinessContext(
       ? { title: base.companyDNA.goal, desiredOutcome: base.companyDNA.goal, status: "active" }
       : null;
   const specialists = departmentProvisioned
-    ? MARKETING_ROSTER.map((employee) => ({
-        id: employee.id,
-        name: employee.label,
-        role: employee.role,
-        specialty: employee.capabilities.join(", "),
-      }))
+    ? departmentId === "seo"
+      ? [{
+          id: "agent_seo_specialist",
+          name: "Responsable de SEO",
+          role: "Especialista SEO",
+          specialty: "Auditoría técnica, contenido y posicionamiento orgánico",
+        }]
+      : MARKETING_ROSTER.map((employee) => ({
+          id: employee.id,
+          name: employee.label,
+          role: employee.role,
+          specialty: employee.capabilities.join(", "),
+        }))
     : [];
 
   return {
@@ -913,12 +925,14 @@ export function compileRuntimeBusinessContext(
     activeObjective,
     departments: [
       {
-        id: "marketing",
-        name: "Marketing",
-        head: { name: "Elvira", role: "Directora de Marketing" },
+        id: departmentId,
+        name: departmentId === "seo" ? "SEO" : "Marketing",
+        head: departmentId === "seo"
+          ? { name: "SEO", role: "Departamento SEO" }
+          : { name: "Elvira", role: "Directora de Marketing" },
         activeObjective,
         specialists,
-        activeWork: marketingWork.map(({ id, title, status }) => ({ id, title, status })),
+        activeWork: departmentWork.map(({ id, title, status }) => ({ id, title, status })),
       },
     ],
     capabilities: input.capabilities,
@@ -930,6 +944,7 @@ export function compileRuntimeBusinessContext(
       .map((approval) => ({ id: approval.id, title: approval.title, status: approval.status })),
     recentResults: input.results.slice(0, 10).map((result) => ({
       id: result.id,
+      departmentId: result.departmentId,
       title: result.title,
       summary: result.summary,
     })),

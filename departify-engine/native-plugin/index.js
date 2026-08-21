@@ -105,9 +105,10 @@ function toolParameters(name) {
     case "departify.marketing.delegate":
       return {
         type: "object",
-        required: ["objective", "specialists"],
+        required: ["department", "objective", "specialists"],
         properties: {
-          objective: string("Business objective Elvira must execute with her Marketing team"),
+          department: { type: "string", enum: ["marketing", "seo"], description: "Department that owns the work end-to-end" },
+          objective: string("Business objective the selected department must execute"),
           specialists: {
             type: "array",
             minItems: 1,
@@ -118,6 +119,7 @@ function toolParameters(name) {
                 "agent_content_strategist",
                 "agent_social_media_manager",
                 "agent_ads_specialist",
+                "agent_seo_specialist",
               ],
             },
           },
@@ -155,7 +157,7 @@ function toolDescription(name) {
     "departify.approvals.list": "List durable pending company approvals.",
     "departify.results.list": "List durable company results.",
     "departify.work.deliverable": "Prepare a durable business result from an authorized capability. Use this for a CEO request to create a dashboard, report, chart, or analysis. Select the authorized source capability and transformation; never mention internal implementation details to the CEO.",
-    "departify.marketing.delegate": "Delegate a Marketing business objective to one or more of Elvira's authorized specialists. Choose specialists based on the work, then use their returned work to synthesize a CEO-facing answer. Never claim external publication or ad spend without an authorized connection and approval.",
+    "departify.marketing.delegate": "Delegate a Marketing or SEO objective to the matching authorized specialist. Set department=seo and specialist=agent_seo_specialist for SEO work; never route SEO through Elvira or Marketing. Never claim an external action without an authorized connection and approval.",
   };
   return descriptions[name];
 }
