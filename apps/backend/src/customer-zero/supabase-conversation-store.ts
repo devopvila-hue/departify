@@ -85,6 +85,20 @@ export class SupabaseConversationStore implements ConversationStore {
     throw error ?? new Error("Unable to create canonical conversation");
   }
 
+  async startNew(
+    organizationId: string,
+    title = "Nueva conversación",
+  ): Promise<ConversationRecord> {
+    const { data, error } = await this.admin.rpc("start_new_conversation", {
+      target_organization_id: organizationId,
+      conversation_title: title,
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error("Unable to start new conversation");
+    return mapConversation(row as ConversationRow);
+  }
+
   async listForOrg(organizationId: string): Promise<ConversationRecord[]> {
     const { data, error } = await this.admin
       .from("conversations")

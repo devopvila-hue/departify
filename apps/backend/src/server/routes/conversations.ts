@@ -5,7 +5,7 @@
  * same P0-A tenant boundary (membership is enforced by the auth hook), and
  * every conversation operation is constrained to the organization id.
  *
- *   GET  /:org/conversations                          → list active (with activeCount + max)
+ *   GET  /:org/conversations                          → resolve the active thread
  *   GET  /:org/conversations/history                  → list including archived (recoverable)
  *   POST /:org/conversations                          → create (title optional)
  *   GET  /:org/conversations/:conversationId          → record + messages
@@ -13,10 +13,8 @@
  *   POST /:org/conversations/:conversationId/archive   → archive
  *
  * Hard rules:
- *   - Maximum 5 ACTIVE conversations. The 6th `POST /conversations` returns
- *     409 with a structured payload that the portal renders as
- *     "Ya tienes 5 conversaciones activas — archiva una para continuar".
- *     No silent deletion. Historical information survives.
+ *   - Exactly one ACTIVE conversation per organization. `/new` atomically
+ *     archives it and creates its successor. Historical information survives.
  *   - Org isolation is structural: every operation carries
  *     `organizationId` and the store refuses cross-org access.
  *   - Compaction is run on demand, after the message add, when the
@@ -31,11 +29,14 @@ import {
   COMPACTION_THRESHOLD_CHARS,
   DEFAULT_CONVERSATION_TITLE,
   shouldCompact,
-  splitForCompaction,
-  summarizeOldMessages,
-  canonicalSummary,
-  type ConversationMessage,
 } from "../../customer-zero/conversation-store.js";
+import {
+  compactConversation,
+  isConversationCommandAuthorized,
+  startNewConversation,
+  withConversationTurnLock,
+  type ConversationCommand,
+} from "../../customer-zero/conversation-lifecycle.js";
 import {
   buildCeoRuntimeForRequest,
   createCeoTurnTrace,
@@ -56,8 +57,8 @@ import { checkFounderAuthorization } from "../../customer-zero/founder-build-mod
 import { getFounderRunExecutor } from "../../customer-zero/founder-run-executor.js";
 import { founderRunStore, redactFounderSensitiveInput, type FounderRunEvent } from "../../customer-zero/founder-run-store.js";
 
-/** Maximum user-visible active conversations for any organization. */
-export const MAX_ACTIVE_CONVERSATIONS = 5;
+/** Exactly one user-visible active conversation for any organization. */
+export const MAX_ACTIVE_CONVERSATIONS = 1;
 
 export async function registerConversationRoutes(
   server: FastifyInstance,
@@ -348,6 +349,9 @@ export async function registerConversationRoutes(
       if (!conversation) {
         return reply.code(404).send({ error: "Conversation not found." });
       }
+      if (conversation.status !== "active") {
+        return reply.code(409).send({ error: "Conversation is archived." });
+      }
       session.state.currentConversationId = conversation.id;
       traceStage(trace, "T3_conversation_session_resolution_complete");
       let result;
@@ -377,7 +381,7 @@ export async function registerConversationRoutes(
               code: "MAX_ACTIVE_CONVERSATIONS",
               message: cause.message,
               activeCount: cause.activeCount,
-              maxActive: 5,
+              maxActive: MAX_ACTIVE_CONVERSATIONS,
             },
           });
         }
@@ -401,36 +405,7 @@ export async function registerConversationRoutes(
           0,
         );
         if (shouldCompact(totalChars)) {
-          const { older } = splitForCompaction(allMessages);
-          const persisted = await session.conversations.get(
-            organizationId,
-            persistedConversationId,
-          );
-          const priorIndex = persisted?.compactedUpToMessageId
-            ? allMessages.findIndex((message) => message.id === persisted.compactedUpToMessageId)
-            : -1;
-          const newOlder = older.filter((message) =>
-            allMessages.findIndex((candidate) => candidate.id === message.id) > priorIndex,
-          );
-          if (newOlder.length > 0) {
-            const lastFolded = newOlder[newOlder.length - 1] as ConversationMessage;
-            // Incident 05 — Canonical compaction: REPLACE summary, not append.
-            const { summary } = canonicalSummary(
-              persisted?.summary,
-              newOlder.map((m) => ({ role: m.role, content: m.content })),
-            );
-            // Count total messages folded (watermark-based, not accumulated)
-            const totalFolded = priorIndex >= 0
-              ? allMessages.findIndex((candidate) => candidate.id === lastFolded.id) + 1
-              : newOlder.length;
-            await session.conversations.saveCompaction(
-              organizationId,
-              persistedConversationId,
-              summary,
-              lastFolded.id,
-              totalFolded,
-            );
-          }
+          await compactConversation(session, persistedConversationId);
         }
         traceStage(trace, "T14_secondary_compaction_completed");
       } catch {
@@ -544,6 +519,9 @@ export async function registerConversationRoutes(
       );
       if (!conversation) {
         return reply.code(404).send({ error: "Conversation not found." });
+      }
+      if (conversation.status !== "active") {
+        return reply.code(409).send({ error: "Conversation is archived." });
       }
       session.state.currentConversationId = conversation.id;
       traceStage(trace, "T3_conversation_session_resolution_complete");
@@ -744,41 +722,7 @@ export async function registerConversationRoutes(
             0,
           );
           if (shouldCompact(totalChars)) {
-            const { older } = splitForCompaction(allMessages);
-            const persisted = await session.conversations.get(
-              organizationId,
-              persistedConversationId,
-            );
-            const priorIndex = persisted?.compactedUpToMessageId
-              ? allMessages.findIndex(
-                  (message) => message.id === persisted.compactedUpToMessageId,
-                )
-              : -1;
-            const newOlder = older.filter(
-              (message) =>
-                allMessages.findIndex(
-                  (candidate) => candidate.id === message.id,
-                ) > priorIndex,
-            );
-            if (newOlder.length > 0) {
-              const lastFolded = newOlder[newOlder.length - 1] as ConversationMessage;
-              // Incident 05 — Canonical compaction: REPLACE summary, not append.
-              const { summary } = canonicalSummary(
-                persisted?.summary,
-                newOlder.map((m) => ({ role: m.role, content: m.content })),
-              );
-              // Count total messages folded (watermark-based, not accumulated)
-              const totalFolded = priorIndex >= 0
-                ? allMessages.findIndex((candidate) => candidate.id === lastFolded.id) + 1
-                : newOlder.length;
-              await session.conversations.saveCompaction(
-                organizationId,
-                persistedConversationId,
-                summary,
-                lastFolded.id,
-                totalFolded,
-              );
-            }
+            await compactConversation(session, persistedConversationId);
           }
           traceStage(trace, "T14_secondary_compaction_completed");
         } catch {
@@ -811,6 +755,58 @@ export async function registerConversationRoutes(
         });
         end();
       }
+    },
+  );
+
+  server.post(
+    "/api/customer-zero/:organizationId/conversations/:conversationId/command",
+    {
+      schema: {
+        tags: ["command-center"],
+        summary: "Execute an authorized conversation lifecycle command",
+        params: {
+          type: "object",
+          required: ["organizationId", "conversationId"],
+          properties: {
+            organizationId: { type: "string" },
+            conversationId: { type: "string" },
+          },
+        },
+        body: {
+          type: "object",
+          required: ["command"],
+          properties: { command: { type: "string", enum: ["new", "compact"] } },
+          additionalProperties: false,
+        },
+      },
+    },
+    async (request, reply) => {
+      const { organizationId, conversationId } = request.params as {
+        organizationId: string;
+        conversationId: string;
+      };
+      const { command } = request.body as { command: ConversationCommand };
+      const session = await requireSession(organizationId, deps);
+      const role = request.authContext?.membership.role;
+      if (deps.auth && !isConversationCommandAuthorized(command, role)) {
+        return reply.code(403).send({ error: "Not authorized." });
+      }
+      return withConversationTurnLock(session, async () => {
+        // Revalidate after acquiring the lock. Concurrent duplicate `/new`
+        // requests cannot roll over the successor created by the first.
+        const current = await session.conversations.get(organizationId, conversationId);
+        if (!current) return reply.code(404).send({ error: "Conversation not found." });
+        if (current.status !== "active") {
+          return reply.code(409).send({ error: "Conversation is archived." });
+        }
+        session.state.currentConversationId = conversationId;
+        if (command === "new") {
+          const conversation = await startNewConversation(session);
+          return reply.code(200).send({ command, conversation });
+        }
+        const compaction = await compactConversation(session, conversationId);
+        return reply.code(200).send({ command, ...compaction });
+      });
     },
   );
 

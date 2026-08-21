@@ -6,6 +6,7 @@ import {
 import {
   getCustomerZeroSession,
   getOrCreateCustomerZeroSession,
+  appendLegacyConversationProjection,
   hydrateSessionToolState,
   runDiscoveryForSession,
   runMarketingPreparationForSession,
@@ -532,11 +533,10 @@ export async function registerCustomerZeroRoutes(
         const output = outcome.output as { reply?: string } | undefined;
         const replyText = output?.reply ?? "El Director de Marketing no respondió.";
 
-        session.state.conversation = [
-          ...session.state.conversation,
+        appendLegacyConversationProjection(session,
           { role: "user", content: message },
           { role: "assistant", content: replyText },
-        ];
+        );
 
         return reply.code(200).send({ organizationId, reply: replyText });
       } catch (cause) {

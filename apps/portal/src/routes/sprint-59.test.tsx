@@ -107,16 +107,35 @@ function mount(ui: ReactElement) {
   );
 }
 
+function sseResult(body: unknown): Response {
+  const payload = new TextEncoder().encode(
+    `event: result\ndata: ${JSON.stringify(body)}\n\n`,
+  );
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(payload);
+        controller.close();
+      },
+    }),
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+}
+
 function mockFetch(handler: (url: string, init?: RequestInit) => unknown) {
   vi.stubGlobal(
     "fetch",
-    vi.fn((url: string, init?: RequestInit) =>
-      Promise.resolve({
+    vi.fn((url: string, init?: RequestInit) => {
+      const body = handler(url, init);
+      if (String(url).endsWith("/stream") && init?.method === "POST") {
+        return Promise.resolve(sseResult(body));
+      }
+      return Promise.resolve({
         ok: true,
         status: 200,
-        json: async () => handler(url, init),
-      } as Response),
-    ),
+        json: async () => body,
+      } as Response);
+    }),
   );
 }
 

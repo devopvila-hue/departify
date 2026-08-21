@@ -60,6 +60,11 @@ export interface ConversationStore {
     organizationId: string,
     title?: string,
   ): Promise<ConversationRecord>;
+  /** Atomically archive the current active thread and create its successor. */
+  startNew(
+    organizationId: string,
+    title?: string,
+  ): Promise<ConversationRecord>;
   listForOrg(organizationId: string): Promise<ConversationRecord[]>;
   /** List conversations of any status (default: only `active`).
    *  Archived conversations are recoverable from history without counting
@@ -347,6 +352,23 @@ export class InMemoryConversationStore implements ConversationStore {
   ): Promise<ConversationRecord> {
     const active = await this.listForOrg(organizationId);
     if (active[0]) return active[0];
+    return this.create(organizationId, title);
+  }
+
+  async startNew(
+    organizationId: string,
+    title = DEFAULT_CONVERSATION_TITLE,
+  ): Promise<ConversationRecord> {
+    const now = new Date().toISOString();
+    for (const [id, conversation] of this.conversations) {
+      if (conversation.organizationId === organizationId && conversation.status === "active") {
+        this.conversations.set(id, {
+          ...conversation,
+          status: "archived",
+          updatedAt: now,
+        });
+      }
+    }
     return this.create(organizationId, title);
   }
 

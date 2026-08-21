@@ -116,6 +116,7 @@ export function ChatRoute() {
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [commandNotice, setCommandNotice] = useState<string | null>(null);
   /**
    * Sprint 67 P0.1-B — Next Best Actions under the latest assistant
    * reply. Cleared at the start of every turn so a stale chip can never
@@ -605,6 +606,12 @@ export function ChatRoute() {
   async function send(overrideValue?: string) {
     const value = (overrideValue ?? input).trim();
     if (!organizationId || !value || busy) return;
+    const command = /^\/(new|compact)$/i.exec(value)?.[1]?.toLowerCase();
+    if (command === "new" || command === "compact") {
+      setInput("");
+      await runConversationCommand(command);
+      return;
+    }
     // Stale chips must not survive into the new turn. Preserve them in
     // a ref so they can be restored if the turn fails (P0.2 fix).
     previousNextActionsRef.current = nextActions;
@@ -837,6 +844,44 @@ export function ChatRoute() {
     setNextActions(actions.length > 3 ? actions.slice(0, 3) : actions);
   }
 
+  async function runConversationCommand(command: "new" | "compact") {
+    if (!organizationId || !currentConversationId || busy) return;
+    setBusy(true);
+    setError(null);
+    setCommandNotice(null);
+    try {
+      const result = await api.conversationCommand(
+        organizationId,
+        currentConversationId,
+        command,
+      );
+      if (!result) throw new Error("Conversation command failed");
+      if (command === "new") {
+        loadGenerationRef.current += 1;
+        setCurrentConversationId(result.conversation.id);
+        setTranscript([]);
+        setEvents([]);
+        setCurrentSummary(null);
+        setHasOlderMessages(false);
+        setOlderCursor(null);
+        setNextActions([]);
+        setCommandNotice("Nueva conversación iniciada.");
+        requestFollowToLatest();
+      } else {
+        setCurrentSummary(result.conversation.summary ?? null);
+        setCommandNotice(
+          result.compacted
+            ? "Contexto compactado."
+            : "El contexto ya estaba optimizado.",
+        );
+      }
+    } catch {
+      setError("No he podido aplicar ese comando. Vuelve a intentarlo.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const focusedRef = useRef(false);
   useEffect(() => {
     if (focusedRef.current) return;
@@ -849,10 +894,36 @@ export function ChatRoute() {
   return (
     <div className="dfy-chat-page">
       <div className="dfy-chat-topbar">
-        <div className="dfy-chat-continuity" aria-label="Conversación única">
-          <SparkIcon /> Conversación continua de tu empresa
+        <div className="dfy-chat-continuity" aria-label="Conversación activa">
+          <SparkIcon /> Conversación de tu empresa
+        </div>
+        <div className="dfy-chat-command-bar" role="toolbar" aria-label="Comandos de conversación">
+          <button
+            type="button"
+            className="dfy-chat-command"
+            disabled={busy || !currentConversationId}
+            onClick={() => void runConversationCommand("new")}
+            title="Inicia una conversación limpia sin borrar el conocimiento de empresa"
+          >
+            <PlusIcon /> Nueva conversación
+          </button>
+          <button
+            type="button"
+            className="dfy-chat-command"
+            disabled={busy || !currentConversationId}
+            onClick={() => void runConversationCommand("compact")}
+            title="Reduce el contexto manteniendo el historial"
+          >
+            <SparkIcon /> Compactar contexto
+          </button>
         </div>
       </div>
+
+      {commandNotice && (
+        <div className="dfy-chat-command-notice" role="status">
+          {commandNotice}
+        </div>
+      )}
 
       {currentSummary && (
         <div

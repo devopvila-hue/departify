@@ -1747,6 +1747,7 @@ function buildProactiveStrategyMessage(
 export function buildCommandCenterInput(
   session: CustomerZeroSession,
   message: string,
+  history: readonly { role: "user" | "assistant"; content: string }[] = [],
 ): CommandCenterInput {
   const work = session.state.marketingWork;
   const items = work?.items ?? [];
@@ -1774,6 +1775,6 @@ export function buildCommandCenterInput(
     inflight,
     connections: [...session.state.connections.values()],
     unmappedTools: session.state.unmappedTools ?? [],
-    history: session.state.conversation,
+    history,
   };
 }

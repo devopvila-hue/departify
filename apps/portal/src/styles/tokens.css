@@ -2792,8 +2792,51 @@ select {
 .dfy-chat-topbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 10px 20px 0;
+}
+.dfy-chat-command-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.dfy-chat-command {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--dfy-color-border);
+  border-radius: var(--dfy-radius-sm);
+  padding: 6px 10px;
+  background: var(--dfy-color-surface);
+  color: var(--dfy-color-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.dfy-chat-command:hover:not(:disabled) {
+  border-color: var(--dfy-color-accent);
+}
+.dfy-chat-command:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.dfy-chat-command-notice {
+  margin: 8px 20px 0;
+  color: var(--dfy-color-muted);
+  font-size: 13px;
+}
+@media (max-width: 640px) {
+  .dfy-chat-command-bar {
+    width: 100%;
+  }
+  .dfy-chat-command {
+    flex: 1;
+    justify-content: center;
+    min-width: 0;
+  }
 }
 .dfy-chat-history-toggle,
 .dfy-chat-new {

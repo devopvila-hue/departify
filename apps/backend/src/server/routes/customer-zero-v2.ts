@@ -27,6 +27,7 @@ import {
 import {
   getOrCreateCustomerZeroSession,
   getCustomerZeroSession,
+  appendLegacyConversationProjection,
   hydrateSessionToolState,
   persistToolState,
   runDiscoveryForSession,
@@ -39,6 +40,10 @@ import {
   persistPendingWorkAtTurnCompletion,
   persistPendingWorkForConversation,
 } from "../../customer-zero/pending-work-state.js";
+import {
+  compactConversation,
+  withConversationTurnLock,
+} from "../../customer-zero/conversation-lifecycle.js";
 import {
   BYOK_DEFAULT_MODEL,
   BYOK_PROVIDER,
@@ -194,11 +199,8 @@ import {
 import {
   DEFAULT_CONVERSATION_TITLE,
   deriveConversationTitle,
-  splitForCompaction,
-  summarizeOldMessages,
-  canonicalSummary,
-  type ConversationRecord,
   type ConversationMessage,
+  type ConversationRecord,
 } from "../../customer-zero/conversation-store.js";
 import {
   buildDnaRawDataFromSuggestion,
@@ -3461,9 +3463,9 @@ export async function registerCustomerZeroV2Routes(
    *       contextual message carrying the work item / department surface
    *       reference and routes it through the Command Center.
    *
-   * The transcript is the same `session.state.conversation` array the
-   * Customer Zero flow already uses. The events are returned separately so
-   * the portal can render them as cards without polluting the transcript.
+   * The durable conversation store owns the transcript. Structured events
+   * are returned separately so the portal can render them without polluting
+   * the persisted message history.
    * -------------------------------------------------------------------------*/
 
   server.get(
@@ -3964,10 +3966,6 @@ export async function registerCustomerZeroV2Routes(
       // Authorization (founderAuth) ≠ Development intent. Being a founder means
       // you CAN use dev mode, not that every message IS a dev request.
 
-      // Conversation Reliability War Room — Turn mutex declaration.
-      // Declared before try so it's accessible in the catch block.
-      let releaseTurnMutex: (() => void) | undefined;
-
       try {
         // Sprint 67 P0.3 — lightweight fast path. Greetings, thanks, and
         // trivial conversation skip the heavy runtime build (~10 Supabase
@@ -4030,16 +4028,6 @@ export async function registerCustomerZeroV2Routes(
           }
         }
 
-        // Conversation Reliability War Room — Turn mutex.
-        // Wait for any in-progress turn to complete before starting a new one.
-        // This prevents concurrent requests from corrupting session state.
-        if (session.state.turnMutex) {
-          await session.state.turnMutex;
-        }
-        session.state.turnMutex = new Promise<void>((resolve) => {
-          releaseTurnMutex = resolve;
-        });
-
         // Sprint 68 Incident 02 — Active work tracking.
         // Set before processCeoMessage so a reconnecting client can detect
         // that work is still in progress. Cleared when result is emitted.
@@ -4086,8 +4074,6 @@ export async function registerCustomerZeroV2Routes(
           // Pre-commit failure: processCeoMessage itself failed.
           // The turn never produced a valid result → error is correct.
           session.state.activeWork = undefined;
-          session.state.turnMutex = undefined;
-          releaseTurnMutex!();
 
           if (cause instanceof MaxActiveConversationsError) {
             send("error", {
@@ -4130,11 +4116,9 @@ export async function registerCustomerZeroV2Routes(
           );
         }
 
-        // Clear active work and release mutex — these are best-effort.
+        // Clear active work after the committed result.
         try {
           session.state.activeWork = undefined;
-          session.state.turnMutex = undefined;
-          releaseTurnMutex!();
         } catch (mutexError) {
           request.log.warn(
             { correlationId, error: mutexError },
@@ -4166,8 +4150,6 @@ export async function registerCustomerZeroV2Routes(
         // Outer catch: failures in pre-commit phases (lightweight path,
         // runtime build, mutex setup) that happen before processCeoMessage.
         session.state.activeWork = undefined;
-        session.state.turnMutex = undefined;
-        releaseTurnMutex!();
 
         if (cause instanceof MaxActiveConversationsError) {
           send("error", {
@@ -4252,8 +4234,7 @@ export async function registerCustomerZeroV2Routes(
 
       const isEs = session.state.locale !== "en";
       if (action === "reject") {
-        session.state.conversation = [
-          ...session.state.conversation,
+        appendLegacyConversationProjection(session,
           { role: "user", content: isEs ? "No incorporar" : "Don't incorporate" },
           {
             role: "assistant",
@@ -4261,7 +4242,7 @@ export async function registerCustomerZeroV2Routes(
               ? "De acuerdo. No modificaré lo que sabemos de la empresa. El aprendizaje se queda como conocimiento del departamento de Marketing."
               : "Understood. I will not change what we know about the company. The learning stays as Marketing department knowledge.",
           },
-        ];
+        );
         return reply.code(200).send({
           organizationId,
           action: "rejected",
@@ -4284,8 +4265,7 @@ export async function registerCustomerZeroV2Routes(
       } catch (cause) {
         const message =
           cause instanceof Error ? cause.message : "Cannot promote this memory kind.";
-        session.state.conversation = [
-          ...session.state.conversation,
+        appendLegacyConversationProjection(session,
           {
             role: "user",
             content: isEs ? "Incorporar al DNA" : "Incorporate into DNA",
@@ -4296,7 +4276,7 @@ export async function registerCustomerZeroV2Routes(
               ? `No puedo promocionar este tipo de conocimiento al DNA de la empresa. ${message}`
               : `I cannot promote this type of knowledge to Company DNA. ${message}`,
           },
-        ];
+        );
         return reply.code(400).send({ error: message });
       }
       try {
@@ -4308,8 +4288,7 @@ export async function registerCustomerZeroV2Routes(
       }
       const updatedDna = mostRecentReport(session)?.companyDna ?? null;
 
-      session.state.conversation = [
-        ...session.state.conversation,
+      appendLegacyConversationProjection(session,
         {
           role: "user",
           content: isEs ? "Incorporar al DNA" : "Incorporate into DNA",
@@ -4320,7 +4299,7 @@ export async function registerCustomerZeroV2Routes(
             ? `Hecho. He incorporado «${suggestion.title}» al conocimiento compartido de la empresa.`
             : `Done. I have incorporated "${suggestion.title}" into the company's shared knowledge.`,
         },
-      ];
+      );
 
       return reply.code(200).send({
         organizationId,
@@ -5041,6 +5020,8 @@ function newCeoTurnTrace(
   startedMonotonicAt = performance.now(),
 ): CeoTurnTraceState {
   const organizationHash = safeTraceHash(session.organizationId);
+  const turnNumber = (session.state.turnSequence ?? 0) + 1;
+  session.state.turnSequence = turnNumber;
   return {
     requestCorrelationId,
     organizationHash,
@@ -5049,7 +5030,7 @@ function newCeoTurnTrace(
     timeline: {},
     logicalSessionKey: `ceo:${organizationHash}`,
     engineSessionId: null,
-    turnNumber: session.state.conversation.filter((entry) => entry.role === "user").length + 1,
+    turnNumber,
     pendingOperationTypeBefore: pendingOperationType(session),
     pendingOperationType: pendingOperationType(session),
     activeDepartment: session.state.marketingTeam ? "marketing" : null,
@@ -5247,6 +5228,10 @@ async function buildRuntimeBridge(
   trace: CeoTurnTraceState,
   userId?: string,
   message?: string,
+  options?: {
+    rotationToken?: string;
+    excludedNativeToolNames?: readonly string[];
+  },
 ): Promise<RuntimeBridgeInput | null> {
   if (!deps.engine) return null;
   const workStore = workStoreForRoutes();
@@ -5339,7 +5324,10 @@ async function buildRuntimeBridge(
   const capabilities = buildRuntimeCapabilityManifest(
     runtimeConnections,
   );
-  const nativeToolNames = deps.nativeBusinessTools ? nativeToolsForManifest(capabilities) : [];
+  const excludedNativeToolNames = new Set(options?.excludedNativeToolNames ?? []);
+  const nativeToolNames = deps.nativeBusinessTools
+    ? nativeToolsForManifest(capabilities).filter((name) => !excludedNativeToolNames.has(name))
+    : [];
   const exposedToolNames = deps.nativeBusinessTools
     ? nativeToolNames
     : toolsForManifest(capabilities).map((tool) => tool.name);
@@ -5384,6 +5372,9 @@ async function buildRuntimeBridge(
     const suffix = conversation.compactedUpToMessageId.slice(0, 8);
     sessionId = `${sessionId}:${suffix}`;
   }
+  if (options?.rotationToken) {
+    sessionId = `${sessionId}:recovery-${options.rotationToken}`;
+  }
   const existingEngineSession = await deps.engine.getSession(sessionId);
   const engineSession = existingEngineSession
     ?? await deps.engine.createSession({ sessionId });
@@ -5414,6 +5405,10 @@ export async function buildRuntimeBridgeForCeoTurn(
   trace: CeoTurnTraceState,
   userId?: string,
   message?: string,
+  options?: {
+    rotationToken?: string;
+    excludedNativeToolNames?: readonly string[];
+  },
 ): Promise<RuntimeBridgeInput | null> {
   return buildRuntimeBridge(
     session,
@@ -5422,6 +5417,7 @@ export async function buildRuntimeBridgeForCeoTurn(
     trace,
     userId,
     message,
+    options,
   );
 }
 
@@ -6362,7 +6358,16 @@ async function runCeoMessageTurn(
 
   const operationalMessage = normalizeOperationalLanguage(message);
   const deliverableRequest = classifyDeliverableRequest(operationalMessage);
-  const baseInput = buildCommandCenterInput(session, operationalMessage);
+  const routingHistory = await session.conversations.listMessages(
+    organizationId,
+    conversation.id,
+    20,
+  );
+  const baseInput = buildCommandCenterInput(
+    session,
+    operationalMessage,
+    routingHistory.map((entry) => ({ role: entry.role, content: entry.content })),
+  );
   const pendingDecision = pendingDecisionForSession(session, operationalMessage);
   const lastReceipt = session.state.lastExecutionReceipt;
   const repeatedApprovedOperation = Boolean(
@@ -6791,6 +6796,7 @@ async function runCeoMessageTurn(
       //   EXECUTION_FAILED → execution returned null → deterministic failure, skip engine
       //   SUCCESS → real data passed as toolResult, tool removed from manifest (exactly-once)
       let preExecutedToolResult: string | undefined;
+      let preExecutedToolName: string | null = null;
       {
         const requiredCap = resolveRequiredReadCapability(operationalMessage, runtime);
         if (requiredCap) {
@@ -6863,6 +6869,7 @@ async function runCeoMessageTurn(
           // Exactly-once enforcement: remove the satisfied tool from the
           // manifest so the model cannot re-invoke the same operation.
           const satisfiedToolName = nativeToolForCapability(requiredCap);
+          preExecutedToolName = satisfiedToolName;
           if (satisfiedToolName) {
             const idx = runtime.nativeToolNames.indexOf(satisfiedToolName);
             if (idx !== -1) {
@@ -6923,46 +6930,7 @@ async function runCeoMessageTurn(
         
         // 1. Force secondary compaction on Departify side immediately
         try {
-          const persistedConversationId = conversation.id;
-          const allMessages = await session.conversations.listMessages(
-            organizationId,
-            persistedConversationId,
-          );
-          const { older } = splitForCompaction(allMessages);
-          const persisted = await session.conversations.get(
-            organizationId,
-            persistedConversationId,
-          );
-          const priorIndex = persisted?.compactedUpToMessageId
-            ? allMessages.findIndex((msg) => msg.id === persisted.compactedUpToMessageId)
-            : -1;
-          const newOlder = older.filter((msg) =>
-            allMessages.findIndex((candidate) => candidate.id === msg.id) > priorIndex,
-          );
-          
-          const messagesToFold = newOlder.length > 0
-            ? newOlder
-            : (older.length > 0 ? older : (allMessages.length > 0 ? allMessages : []));
-          if (messagesToFold.length > 0) {
-            const lastFolded = messagesToFold[messagesToFold.length - 1] as ConversationMessage;
-            // Incident 05 — Canonical compaction: REPLACE summary, not append.
-            // Use canonicalSummary to create ONE bounded summary.
-            const { summary } = canonicalSummary(
-              persisted?.summary,
-              messagesToFold.map((m) => ({ role: m.role, content: m.content })),
-            );
-            // Count total messages folded (watermark-based, not accumulated)
-            const totalFolded = priorIndex >= 0
-              ? allMessages.findIndex((candidate) => candidate.id === lastFolded.id) + 1
-              : messagesToFold.length;
-            await session.conversations.saveCompaction(
-              organizationId,
-              persistedConversationId,
-              summary,
-              lastFolded.id,
-              totalFolded,
-            );
-          }
+          await compactConversation(session, conversation.id);
         } catch (compactionErr: unknown) {
           traceStage(trace, "T13_recovery_compaction_failed", {
             error: compactionErr instanceof Error ? compactionErr.message : String(compactionErr),
@@ -6977,6 +6945,12 @@ async function runCeoMessageTurn(
           trace,
           userId,
           message,
+          {
+            rotationToken: randomUUID().slice(0, 8),
+            ...(preExecutedToolName
+              ? { excludedNativeToolNames: [preExecutedToolName] }
+              : {}),
+          },
         );
 
         if (rotatedRuntime) {
@@ -6990,6 +6964,8 @@ async function runCeoMessageTurn(
             message,
             runtimeContext: activeContext,
             nativeBusinessTools: true,
+            ...(preExecutedToolResult ? { toolResult: preExecutedToolResult } : {}),
+            ...(chunkSink ? { onChunk: chunkSink } : {}),
             ...(trace
               ? { timeline: (stage: string, metadata?: Readonly<Record<string, unknown>>) => traceStage(trace, stage, metadata) }
               : {}),
@@ -7839,11 +7815,10 @@ async function runCeoMessageTurn(
 
   // Legacy in-memory transcript (kept for back-compat; NOT the source of
   // truth — durable conversations are).
-  session.state.conversation = [
-    ...session.state.conversation,
+  appendLegacyConversationProjection(session,
     { role: "user", content: message },
     marketingTurn ?? { role: "assistant", content: assistantReply },
-  ];
+  );
 
   // Per-turn events: ONLY the events that actually happened this
   // turn (the assistant transcript + work-state pills when real
@@ -7939,6 +7914,17 @@ export async function processLightweightMessage(
   deps: ServerDeps = {},
   trace?: CeoTurnTraceState,
 ): Promise<CeoMessageResult> {
+  return withConversationTurnLock(session, () =>
+    runLightweightMessageTurn(session, message, deps, trace),
+  );
+}
+
+async function runLightweightMessageTurn(
+  session: CustomerZeroSession,
+  message: string,
+  deps: ServerDeps,
+  trace?: CeoTurnTraceState,
+): Promise<CeoMessageResult> {
   const conversation = await ensureConversation(session, message);
   if (trace) traceStage(trace, "T3_conversation_session_resolution_complete");
   await session.conversations.addMessage(conversation.id, "user", message);
@@ -7963,11 +7949,10 @@ export async function processLightweightMessage(
   if (trace) traceStage(trace, "T13_persistence_started");
   await session.conversations.addMessage(conversation.id, "assistant", reply);
   if (trace) traceStage(trace, "T14_persistence_completed");
-  session.state.conversation = [
-    ...session.state.conversation,
+  appendLegacyConversationProjection(session,
     { role: "user", content: message },
     { role: "assistant", content: reply },
-  ];
+  );
   if (trace) {
     trace.finalResponseSource = "lightweight_fast_path";
     trace.nativeResponseTerminal = true;
@@ -8024,39 +8009,39 @@ export async function processCeoMessage(
   ) => void,
   chunkSink?: (chunk: { text: string; finished: boolean }) => void,
 ): Promise<CeoMessageResult> {
-  const result = await runCeoMessageTurn(
-    session,
-    message,
-    conversationId,
-    marketing,
-    engineRuntimePolicy,
-    runtime,
-    trace,
-    deps,
-    userId,
-    activitySink,
-    chunkSink,
-  );
-  const pendingType = result.routing.intent === "email_action"
-    ? "email"
-    : result.routing.intent === "calendar_create"
-      ? "calendar"
-      : result.routing.intent === "request_approval"
-        ? "facebook_pages"
-        : undefined;
-  await persistPendingWorkAtTurnCompletion(
-    session,
-    result.conversationId,
-    userId,
-    pendingType,
-    session.state.lastExecutionReceipt?.status === "succeeded" ? "succeeded" : undefined,
-  );
-  // Sprint 67 P0.7 — Founder Direct Mode does not need business suggestion chips.
-  // The founder is using OpenClaw directly, not Departify's business capabilities.
-  const nextActions = result.routing?.intent === "founder_build"
-    ? []
-    : await computeNextBestActionsForResult(session, deps, result);
-  return { ...result, nextActions };
+  return withConversationTurnLock(session, async () => {
+    const result = await runCeoMessageTurn(
+      session,
+      message,
+      conversationId,
+      marketing,
+      engineRuntimePolicy,
+      runtime,
+      trace,
+      deps,
+      userId,
+      activitySink,
+      chunkSink,
+    );
+    const pendingType = result.routing.intent === "email_action"
+      ? "email"
+      : result.routing.intent === "calendar_create"
+        ? "calendar"
+        : result.routing.intent === "request_approval"
+          ? "facebook_pages"
+          : undefined;
+    await persistPendingWorkAtTurnCompletion(
+      session,
+      result.conversationId,
+      userId,
+      pendingType,
+      session.state.lastExecutionReceipt?.status === "succeeded" ? "succeeded" : undefined,
+    );
+    const nextActions = result.routing?.intent === "founder_build"
+      ? []
+      : await computeNextBestActionsForResult(session, deps, result);
+    return { ...result, nextActions };
+  });
 }
 
 /**
@@ -8166,18 +8151,16 @@ async function completeRuntimeCeoTurn(
         error: cause instanceof Error ? cause.message : "unknown",
       });
     }
-    session.state.conversation = [
-      ...session.state.conversation,
+    appendLegacyConversationProjection(session,
       { role: "user", content: message },
       { role: "assistant", content: finalReply },
-    ];
+    );
   } else {
     // A generation failure is not an assistant turn. Persisting the generic
     // fallback would make the failed request look completed after reload.
-    session.state.conversation = [
-      ...session.state.conversation,
+    appendLegacyConversationProjection(session,
       { role: "user", content: message },
-    ];
+    );
   }
   const intent = runtimeIntentForTools(toolNames);
   const state = primaryStatus === "success" || primaryStatus === "accepted_unverified"
@@ -8297,11 +8280,10 @@ async function completeDurableWorkStatusTurn(
         ? `No he encontrado ningún trabajo durable con esa referencia.`
         : `I could not find durable work with that reference.`;
   await session.conversations.addMessage(conversation.id, "assistant", reply);
-  session.state.conversation = [
-    ...session.state.conversation,
+  appendLegacyConversationProjection(session,
     { role: "user", content: message },
     { role: "assistant", content: reply },
-  ];
+  );
   return {
     organizationId: session.organizationId,
     reply,
@@ -8361,11 +8343,10 @@ async function completeDeterministicOperationTurn(
       });
     }
   }
-  session.state.conversation = [
-    ...session.state.conversation,
+  appendLegacyConversationProjection(session,
     { role: "user", content: message },
     { role: "assistant", content: reply },
-  ];
+  );
   return {
     organizationId: session.organizationId,
     reply,
@@ -8549,10 +8530,15 @@ export async function ensureConversation(
   conversationId?: string,
 ): Promise<ConversationRecord> {
   const organizationId = session.organizationId;
-  // A CEO message always belongs to the organization's canonical thread.
-  // The client-supplied id is accepted only as a legacy hint; it can never
-  // select or create a second user-visible session.
-  void conversationId;
+  if (conversationId) {
+    const selected = await session.conversations.get(organizationId, conversationId);
+    if (!selected || selected.status !== "active") {
+      throw new Error("The selected conversation is not active for this organization.");
+    }
+    session.state.currentConversationId = selected.id;
+    await renameIfUntitled(session, selected, message);
+    return (await session.conversations.get(organizationId, selected.id)) ?? selected;
+  }
   const canonical = await session.conversations.ensureCanonical(
     organizationId,
     DEFAULT_CONVERSATION_TITLE,

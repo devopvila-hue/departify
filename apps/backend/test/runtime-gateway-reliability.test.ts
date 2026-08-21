@@ -15,6 +15,7 @@ import type { FastifyInstance } from "fastify";
 import { makeFakeTenant } from "./helpers/fake-tenant.js";
 import { InMemoryCompanyDnaStore } from "../src/customer-zero/company-dna.js";
 import { isInternalRuntimeLeak } from "../src/server/routes/customer-zero-v2.js";
+import { COMPACTION_SUMMARY_BUDGET } from "../src/customer-zero/conversation-store.js";
 
 class ReliabilityTestEngine implements EngineAdapter {
   inputs: EngineSendMessageInput[] = [];
@@ -105,7 +106,7 @@ describe("runtime/gateway reliability P0 tests", () => {
     engine.sessionIds = [];
   });
 
-  it("Test 1 & 4 & 5 & 6 & 8: long conversation -> automatic secondary compaction -> history, DNA and context preserved on server restart", async () => {
+  it("Test 1 & 4 & 5 & 6 & 8: 30 HTTP turns -> bounded compaction -> history, DNA and context preserved on restart", async () => {
     // 1. Onboard / start session
     const start = await server.inject({
       method: "POST",
@@ -129,8 +130,11 @@ describe("runtime/gateway reliability P0 tests", () => {
     });
     const activeConversationId = activeConversationsInit.json().conversations[0].id;
 
-    // Send multiple turns with long messages to accumulate characters (>8000) and trigger secondary compaction
-    for (let i = 0; i < 15; i++) {
+    const contextBytes: number[] = [];
+    const summaryChars: number[] = [];
+    // Exercise the real HTTP route, engine bridge, persistence and automatic
+    // compaction for 30 consecutive turns in one owned conversation.
+    for (let i = 0; i < 30; i++) {
       const longMessage = `This is conversational turn index ${i} to test context accumulation budget. ` +
         "We are verifying that the secondary compaction process properly folds older messages into the durable summary " +
         "when the total character threshold is exceeded. This keeps the active session context window safe. ".repeat(6);
@@ -143,7 +147,35 @@ describe("runtime/gateway reliability P0 tests", () => {
         },
       });
       expect(response.statusCode).toBe(200);
+      expect(response.json().reply).toBe("Factual analysis completed successfully.");
+      const lastInput = engine.inputs.at(-1);
+      expect(lastInput?.runtimeContext).toBeDefined();
+      contextBytes.push(Buffer.byteLength(lastInput?.runtimeContext ?? "", "utf8"));
+      const snapshot = await server.inject({
+        method: "GET",
+        url: `/api/customer-zero/${org}/conversations`,
+        headers: { authorization: "Bearer token-a" },
+      });
+      summaryChars.push(snapshot.json().conversations[0].summary?.length ?? 0);
     }
+
+    const compactedContext = contextBytes.slice(15);
+    expect(Math.max(...compactedContext)).toBeLessThan(24_000);
+    expect(Math.max(...summaryChars)).toBeLessThanOrEqual(COMPACTION_SUMMARY_BUDGET);
+    console.log("[chat-liberation-soak]", {
+      failures: 0,
+      turns: 30,
+      contextBytes: {
+        min: Math.min(...contextBytes),
+        avg: Math.round(contextBytes.reduce((sum, value) => sum + value, 0) / contextBytes.length),
+        max: Math.max(...contextBytes),
+      },
+      summaryChars: {
+        min: Math.min(...summaryChars),
+        avg: Math.round(summaryChars.reduce((sum, value) => sum + value, 0) / summaryChars.length),
+        max: Math.max(...summaryChars),
+      },
+    });
 
     // Verify compaction summary was created on conversation
     const activeConversations = await server.inject({
@@ -163,10 +195,10 @@ describe("runtime/gateway reliability P0 tests", () => {
     // Verify raw history remains preserved
     const msgHistory = await server.inject({
       method: "GET",
-      url: `/api/customer-zero/${org}/conversations/${active.id}`,
+      url: `/api/customer-zero/${org}/conversations/${active.id}?limit=100`,
       headers: { authorization: "Bearer token-a" },
     });
-    expect(msgHistory.json().messages.length).toBeGreaterThan(15);
+    expect(msgHistory.json().messages.length).toBe(60);
 
     // Test 5: Verify DNA is intact
     const status = await server.inject({

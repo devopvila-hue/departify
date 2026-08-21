@@ -144,13 +144,13 @@ describe("Incident 06 — Portal terminal state machine", () => {
     // If the SSE stream throws BEFORE any result event was received,
     // the catch block should fall back to the JSON endpoint.
 
-    const result = null;
+    const result: { reply: string } | null = null;
 
     // Simulate the catch block logic
     const shouldReturnCommitted =
-      result &&
-      typeof result.reply === "string" &&
-      result.reply.trim().length > 0;
+      result !== null &&
+      typeof (result as { reply: string }).reply === "string" &&
+      (result as { reply: string }).reply.trim().length > 0;
 
     expect(shouldReturnCommitted).toBeFalsy();
   });

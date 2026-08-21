@@ -1754,9 +1754,8 @@ export const api = {
   /**
    * Sprint 64 — Live Activity streaming. POSTs to the SSE endpoint and
    * invokes `onActivity` for every progressive work_state event as it
-   * arrives, then resolves with the terminal result. Falls back to the
-   * JSON endpoint if the stream is unavailable or malformed, so the chat
-   * never breaks on older backends.
+   * arrives, then resolves with the terminal result. A transport failure is
+   * recovered by reading durable state; it never retries the mutation.
    */
   commandCenterMessageStream: async (
     org: string,
@@ -1794,14 +1793,7 @@ export const api = {
         ),
       });
       if (!response.ok || !response.body) {
-        // Non-streaming path (e.g. auth boundary or proxy). Fall back to
-        // the JSON endpoint so the CEO still gets a reply.
-        return api.commandCenterMessage(
-          org,
-          message,
-          conversationId,
-          correlationId,
-        );
+        return null;
       }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -1914,14 +1906,9 @@ export const api = {
       if (result && typeof result.reply === "string" && result.reply.trim().length > 0) {
         return result;
       }
-      // Stream transport failed before any result arrived — fall back
-      // to the JSON endpoint so the CEO still gets a reply.
-      return api.commandCenterMessage(
-        org,
-        message,
-        conversationId,
-        correlationId,
-      );
+      // The write may already have committed. The caller must recover by
+      // reading the durable conversation, never by repeating the POST.
+      return null;
     }
   },
   // Durable conversations (Phase P-B part 15 + 26).
@@ -1945,6 +1932,25 @@ export const api = {
         error?: MaxActiveConversationsError;
       }
     >(`/api/customer-zero/${org}/conversations`, title ? { title } : undefined),
+  conversationCommand: async (
+    org: string,
+    conversationId: string,
+    command: "new" | "compact",
+  ) => {
+    const result = await postJson<{
+      command: "new" | "compact";
+      conversation: ConversationView;
+      compacted?: boolean;
+      foldedMessages?: number;
+      contextBytes?: number;
+      summaryChars?: number;
+    }>(
+      `/api/customer-zero/${org}/conversations/${conversationId}/command`,
+      { command },
+    );
+    if (result) invalidateOrg(org, ["conversation", "conversations", "conversation-history"]);
+    return result;
+  },
   conversation: (org: string, conversationId: string, before?: string) =>
     cachedOrgGetJson<ConversationPageView>(
       org,
@@ -1994,8 +2000,8 @@ export const api = {
    * after the first; with it, the same progressive product activity
    * reaches the portal regardless of which message in the session we
    * are processing. Falls back to the JSON endpoint if the stream is
-   * unavailable or malformed, so the chat never breaks on older
-   * backends.
+   * unavailable or malformed, durable read recovery handles completion
+   * without repeating the write.
    */
   sendConversationMessageStream: async (
     org: string,
@@ -2032,14 +2038,7 @@ export const api = {
         ...(signal ? { signal } : {}),
       });
       if (!response.ok || !response.body) {
-        // Non-streaming path (e.g. auth boundary or proxy). Fall back to
-        // the JSON endpoint so the CEO still gets a reply.
-        return api.sendConversationMessage(
-          org,
-          conversationId,
-          message,
-          correlationId,
-        );
+        return null;
       }
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -2130,14 +2129,9 @@ export const api = {
       if (result && typeof result.reply === "string" && result.reply.trim().length > 0) {
         return result;
       }
-      // Stream transport failed before any result arrived — fall back
-      // to the JSON endpoint so the CEO still gets a reply.
-      return api.sendConversationMessage(
-        org,
-        conversationId,
-        message,
-        correlationId,
-      );
+      // The write may already have committed. The caller must recover by
+      // reading the durable conversation, never by repeating the POST.
+      return null;
     }
   },
 

@@ -40,7 +40,7 @@ function simulateConversation(
   const allMessages: Array<{ role: "user" | "assistant"; content: string }> = [];
 
   for (let i = 0; i < turns.length; i++) {
-    const turn = turns[i];
+    const turn = turns[i]!;
     allMessages.push(
       { role: "user", content: turn.user },
       { role: "assistant", content: turn.assistant },
@@ -177,12 +177,12 @@ describe("Conversation Reliability — 30-Turn Soak Test", () => {
     const results = simulateConversation(SOAK_TURNS);
 
     // Turn 24 switches to marketing — should still have context
-    const turn24 = results[23];
+    const turn24 = results[23]!;
     expect(turn24.domain).toBe("switch");
     expect(turn24.status).toBe("success");
 
     // Turn 25 switches to calendar — should still have context
-    const turn25 = results[24];
+    const turn25 = results[24]!;
     expect(turn25.domain).toBe("switch");
     expect(turn25.status).toBe("success");
   });
@@ -191,7 +191,7 @@ describe("Conversation Reliability — 30-Turn Soak Test", () => {
     const results = simulateConversation(SOAK_TURNS);
 
     // Turn 28 is a correction
-    const turn28 = results[27];
+    const turn28 = results[27]!;
     expect(turn28.domain).toBe("correction");
     expect(turn28.status).toBe("success");
   });
@@ -206,7 +206,7 @@ describe("Conversation Reliability — Fresh vs Old Parity", () => {
       { domain: "follow-up", user: "Resúmelo", assistant: "El correo trata sobre la campaña de verano." },
     ];
     const results = simulateConversation(turns);
-    expect(results[1].status).toBe("success");
+    expect(results[1]!.status).toBe("success");
   });
 
   it("old conversation: follow-ups work after compaction", () => {
@@ -230,7 +230,7 @@ describe("Conversation Reliability — Fresh vs Old Parity", () => {
     });
 
     const results = simulateConversation(turns);
-    const lastResult = results[results.length - 1];
+    const lastResult = results[results.length - 1]!;
     expect(lastResult.status).toBe("success");
   });
 });

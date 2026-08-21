@@ -16,9 +16,9 @@ work manually. Customer Zero 03 is shipping Google Workspace + Unified Inbox
 and will persist connection + inbox state.
 
 The founder decision is: Departify MUST NOT have one infinite eternal chat.
-The CEO must be able to create a new chat, return to previous chats, rename
-them, archive them, and continue a clean conversation WITHOUT losing company
-knowledge. A new chat does not mean a new company context.
+The CEO can start a clean conversation WITHOUT losing company knowledge. A
+new chat does not mean a new company context, and archived history remains
+recoverable.
 
 Departify distinguishes FOUR concepts that must never be collapsed into one:
 
@@ -37,8 +37,9 @@ Departify distinguishes FOUR concepts that must never be collapsed into one:
 
 ## Decision
 
-- The central chat remains the single conversational experience, but the
-  backend models durable conversation threads each with a `conversationId`.
+- The central chat remains the single conversational experience. Exactly one
+  thread is active per organization; `/new` atomically archives it and creates
+  its successor with a new `conversationId`.
 - Conversations are durable (Survive reload, logout/login, backend restart,
   redeploy) using the existing Supabase/Postgres repository conventions. No
   localStorage, no in-memory Map as production persistence.
@@ -73,8 +74,8 @@ Departify distinguishes FOUR concepts that must never be collapsed into one:
   that assumes one organization = one eternal conversation. The current
   `session.state.conversation` is transitional and is explicitly marked as
   such; the dependency must not be deepened.
-- The target UX: `+ Nuevo chat` and a recent-conversation sidebar (Today /
-  Yesterday / Previous) with business-intent titles the CEO can rename.
+- The target UX exposes `Nueva conversación` and `Compactar contexto` in the
+  chat command bar. Archived threads remain read-only and recoverable.
 - The CEO never sees agent, model, provider, workflow, runtime, MCP or
   specialist concepts.
 

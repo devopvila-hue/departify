@@ -128,13 +128,35 @@ const conversationTwoDetail = {
 function mockChatFetch() {
   vi.stubGlobal(
     "fetch",
-    vi.fn((url: string) => {
+    vi.fn((url: string, init?: RequestInit) => {
       const u = String(url);
       let body: unknown;
       if (u.includes("/conversations/history")) {
         body = { organizationId: "org_moon", conversations: [] };
       } else if (u.includes("/command-center/opening")) {
         body = openingEs;
+      } else if (u.includes("/conversations/conv-1/command")) {
+        const command = JSON.parse(String(init?.body ?? "{}")) as { command?: string };
+        body = command.command === "new"
+          ? {
+              command: "new",
+              conversation: {
+                ...conversationDetail.conversation,
+                id: "conv-3",
+                title: "Nueva conversación",
+              },
+            }
+          : {
+              command: "compact",
+              conversation: {
+                ...conversationDetail.conversation,
+                summary: "Resumen compacto",
+              },
+              compacted: true,
+              foldedMessages: 4,
+              contextBytes: 120,
+              summaryChars: 16,
+            };
       } else if (u.includes("/conversations/conv-1/messages")) {
         body = assistantReply;
       } else if (u.includes("/conversations/conv-2")) {
@@ -406,7 +428,7 @@ describe("Central Chat UX P0 — chat interaction", () => {
     await waitFor(() => expect(el.scrollTop).toBe(el.scrollHeight - el.clientHeight));
   });
 
-  it("S6. the CEO thread is continuous and does not expose session switching", async () => {
+  it("S6. the command bar exposes lifecycle actions without session internals", async () => {
     renderChat();
     await screen.findByText(/departify está organizando/i);
 
@@ -415,9 +437,39 @@ describe("Central Chat UX P0 — chat interaction", () => {
     fireEvent.click(screen.getByRole("button", { name: /enviar/i }));
     await screen.findByText(/he encontrado 2 correos/i);
 
-    expect(screen.queryByRole("button", { name: /conversaciones/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /nueva conversación/i })).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Conversación única")).toHaveTextContent("Conversación continua");
+    expect(screen.getByRole("toolbar", { name: /comandos de conversación/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /nueva conversación/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /compactar contexto/i })).toBeEnabled();
+    expect(screen.getByLabelText("Conversación activa")).toHaveTextContent("Conversación de tu empresa");
+    expect(document.body.textContent).not.toMatch(/OpenClaw|runtime|tools/i);
+  });
+
+  it("S6b. /new starts a clean thread with exactly one command request", async () => {
+    renderChat();
+    await screen.findByText(/¿tengo correos importantes\?/i);
+
+    fireEvent.click(screen.getByRole("button", { name: /nueva conversación/i }));
+
+    await screen.findByText("Nueva conversación iniciada.");
+    expect(screen.getByText("¿Qué quieres conseguir?")).toBeInTheDocument();
+    expect(screen.queryByText(/¿tengo correos importantes\?/i)).not.toBeInTheDocument();
+    const commandCalls = vi.mocked(globalThis.fetch).mock.calls.filter(([url]) =>
+      String(url).includes("/conversations/conv-1/command"),
+    );
+    expect(commandCalls).toHaveLength(1);
+  });
+
+  it("S6c. typed /compact uses the command endpoint and does not create a chat turn", async () => {
+    renderChat();
+    await screen.findByText(/¿tengo correos importantes\?/i);
+    const input = screen.getByLabelText(/mensaje para departify/i);
+    fireEvent.change(input, { target: { value: "/compact" } });
+    fireEvent.click(screen.getByRole("button", { name: /enviar/i }));
+
+    await screen.findByText("Contexto compactado.");
+    const calls = vi.mocked(globalThis.fetch).mock.calls;
+    expect(calls.filter(([url]) => String(url).includes("/conv-1/command"))).toHaveLength(1);
+    expect(calls.filter(([url]) => String(url).includes("/conv-1/messages"))).toHaveLength(0);
   });
 
   it("S7. an older organization load cannot overwrite the new organization transcript", async () => {

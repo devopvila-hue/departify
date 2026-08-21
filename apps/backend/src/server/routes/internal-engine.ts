@@ -43,7 +43,10 @@ import {
   type NativeReadToolName,
 } from "../../customer-zero/native-business-tools.js";
 import { MARKETING_ROSTER } from "../../customer-zero/marketing-roster.js";
-import type { CustomerZeroSession } from "../../customer-zero/customer-zero-session.js";
+import {
+  appendLegacyConversationProjection,
+  type CustomerZeroSession,
+} from "../../customer-zero/customer-zero-session.js";
 import { prepareFacebookPagesPublication } from "../../customer-zero/facebook-pages-publishing.js";
 
 const NATIVE_TOOL_NAME = "departify.company.context";
@@ -391,10 +394,9 @@ async function runNativeMarketingDelegation(input: {
     "assistant",
     finalMessage,
   );
-  input.session.state.conversation = [
-    ...input.session.state.conversation,
+  appendLegacyConversationProjection(input.session,
     { role: "assistant", content: finalMessage },
-  ];
+  );
   console.info("[native-tool-trace]", {
     nativeTool: true,
     toolName: MARKETING_DELEGATION_TOOL,

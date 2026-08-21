@@ -94,10 +94,25 @@ function makeReplyFixture(nextActions: unknown[] | undefined) {
   };
 }
 
+function sseResult(body: unknown): Response {
+  const payload = new TextEncoder().encode(
+    `event: result\ndata: ${JSON.stringify(body)}\n\n`,
+  );
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(payload);
+        controller.close();
+      },
+    }),
+    { status: 200, headers: { "content-type": "text/event-stream" } },
+  );
+}
+
 function mockChatFetch(reply: unknown) {
   vi.stubGlobal(
     "fetch",
-    vi.fn((url: string) => {
+    vi.fn((url: string, init?: RequestInit) => {
       const u = String(url);
       let body: unknown;
       if (u.includes("/conversations/history")) {
@@ -105,7 +120,6 @@ function mockChatFetch(reply: unknown) {
       } else if (u.includes("/command-center/opening")) {
         body = openingEs;
       } else if (u.includes("/command-center/message")) {
-        // Both the SSE stream and the JSON fallback land here in tests.
         body = reply;
       } else if (u.includes("/conversations/conv-nba/messages")) {
         body = reply;
@@ -115,6 +129,9 @@ function mockChatFetch(reply: unknown) {
         body = conversations;
       } else {
         body = { organizationId: "org_nba", conversations: [], activeCount: 0, maxActive: 5 };
+      }
+      if (u.endsWith("/stream") && init?.method === "POST") {
+        return Promise.resolve(sseResult(body));
       }
       return Promise.resolve({
         ok: true,
@@ -246,12 +263,6 @@ describe("Sprint 67 P0.1-B — Next Best Actions UI", () => {
         } else if (u.includes("/command-center/opening")) {
           body = openingEs;
         } else if (u.includes("/conversations/conv-nba/messages/stream") && method === "POST") {
-          // SSE stream URL: returns a body-less response so the api falls
-          // back to the JSON endpoint below. Turn counter is NOT incremented
-          // — only the fallback carries the response that reaches the chat.
-          body = seoReplyClone;
-        } else if (u.includes("/conversations/conv-nba/messages") && method === "POST") {
-          // JSON fallback: this is the response the chat receives.
           postCount += 1;
           try {
             const raw = init?.body;
@@ -263,6 +274,7 @@ describe("Sprint 67 P0.1-B — Next Best Actions UI", () => {
             // ignore
           }
           body = postCount === 1 ? seoReplyClone : followupReply;
+          return Promise.resolve(sseResult(body));
         } else if (u.includes("/conversations/conv-nba")) {
           body = conversationDetail;
         } else if (u.includes("/conversations")) {
@@ -291,8 +303,7 @@ describe("Sprint 67 P0.1-B — Next Best Actions UI", () => {
     await waitFor(() =>
       expect(document.body.textContent).toContain("Empezando a corregir."),
     );
-    // The same chat path was used twice — one turn for the typed message,
-    // one for the chip click. Total: 2 POSTs.
+    // One mutation per turn: no SSE-to-JSON replay.
     expect(postCount).toBe(2);
     // The chip request reached the backend as the user message body.
     expect(capturedSecondBody).toContain(

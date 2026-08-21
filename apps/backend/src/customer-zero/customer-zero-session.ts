@@ -124,6 +124,8 @@ export interface CustomerZeroSessionState {
    * asks once and the user answers.
    */
   entrepreneurPreferredName?: string | null;
+  /** Bounded compatibility projection for legacy onboarding endpoints only.
+   * Durable conversations are the sole chat source of truth. */
   conversation: readonly { role: "user" | "assistant"; content: string }[];
   /** The Marketing department's structured work for this organization. */
   marketingWork?: MarketingWorkState;
@@ -217,6 +219,20 @@ export interface CustomerZeroSessionState {
    * proceeding.
    */
   turnMutex?: Promise<void> | undefined;
+  /** Monotonic in-process trace sequence; never used as conversation context. */
+  turnSequence?: number;
+}
+
+const LEGACY_CONVERSATION_PROJECTION_LIMIT = 20;
+
+export function appendLegacyConversationProjection(
+  session: CustomerZeroSession,
+  ...turns: readonly { role: "user" | "assistant"; content: string }[]
+): void {
+  session.state.conversation = [
+    ...session.state.conversation,
+    ...turns,
+  ].slice(-LEGACY_CONVERSATION_PROJECTION_LIMIT);
 }
 
 export interface DiscoveryTurn {
