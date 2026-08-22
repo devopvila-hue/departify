@@ -1,5 +1,6 @@
-export { createEngineAdapter } from "./factory.js";
+export { createEngineAdapter, createMultiEngineFactory } from "./factory.js";
 export type { EngineAdapter } from "./contract.js";
+export { OrganizationRuntimeResolver } from "./runtime-resolver.js";
 export {
   EngineError,
   EngineUnavailableError,

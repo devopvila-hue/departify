@@ -2,9 +2,10 @@ import {
   loadAuthConfig,
   loadBackendConfig,
   loadEngineAdapterConfig,
+  loadMultiEngineConfig,
   type BackendConfig,
 } from "@departify/config";
-import { createEngineAdapter } from "@departify/engine-adapter";
+import { createEngineAdapter, createMultiEngineFactory } from "@departify/engine-adapter";
 import { existsSync } from "node:fs";
 import { loadEnvFile } from "node:process";
 import { buildServer } from "./server/server.js";
@@ -186,13 +187,24 @@ if (deps.workStore) {
 try {
   const engineConfig = loadEngineAdapterConfig();
   if (engineConfig.gatewayUrl) {
+    // Sprint ENGINE 02 Phase 2: multi-engine routing by organization ID.
+    // Engine A remains default; Engine B only for Customer Zero.
+    const multiEngineConfig = loadMultiEngineConfig();
+    const { resolver, createForOrg } = createMultiEngineFactory(
+      multiEngineConfig,
+      engineConfig,
+    );
+    // Store the resolver and factory on deps for per-request engine creation.
+    deps.engineRuntimeResolver = resolver;
+    deps.createEngineForOrg = createForOrg;
+    // Default engine (Engine A) for backward compatibility.
     deps.engine = createEngineAdapter(engineConfig);
     deps.engineRuntimePolicy = engineConfig.runtimePolicy ?? "strict";
     deps.nativeBusinessTools = /^(1|true|yes|on)$/i.test(
       process.env.OPENCLAW_NATIVE_BUSINESS_TOOLS ?? "",
     );
     console.log(
-      `[engine] adapter initialised provider=${engineConfig.provider} url=${engineConfig.gatewayUrl} policy=${engineConfig.runtimePolicy}`,
+      `[engine] adapter initialised provider=${engineConfig.provider} url=${engineConfig.gatewayUrl} policy=${engineConfig.runtimePolicy} runtimeMode=${multiEngineConfig.mode}`,
     );
     // DEPLOY 01: durable Marketing state via Supabase when auth is available;
     // otherwise in-memory repositories (dev/test only).

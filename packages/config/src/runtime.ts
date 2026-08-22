@@ -69,6 +69,14 @@ export type EngineProvider = "openclaw";
 
 export type EngineRuntimePolicy = "strict" | "legacy-fallback";
 
+/**
+ * Engine runtime mode for multi-engine routing.
+ * - "current": Engine A only (default)
+ * - "nemoclaw-poc": Engine B only (all orgs)
+ * - "multi": Per-org routing (specific orgs → Engine B, rest → Engine A)
+ */
+export type EngineRuntimeMode = "current" | "nemoclaw-poc" | "multi";
+
 /** Engine Adapter configuration (Sprint ENGINE 02). */
 export interface EngineAdapterConfig {
   provider: EngineProvider;
@@ -89,6 +97,22 @@ export interface EngineAdapterConfig {
   model?: string;
   /** Production runtime policy (DEPLOY 01). Defaults to "strict". */
   runtimePolicy?: EngineRuntimePolicy;
+}
+
+/**
+ * Multi-engine runtime configuration (Sprint ENGINE 02 Phase 2).
+ * Enables routing different organizations to different engine instances.
+ */
+export interface MultiEngineConfig {
+  /** Runtime mode. */
+  mode: EngineRuntimeMode;
+  /** Engine B (NemoClaw POC) configuration. */
+  nemoclawPoc?: {
+    gatewayUrl: string;
+    gatewayToken: string;
+    /** Organization IDs that use Engine B (multi mode only). */
+    orgIds: string[];
+  };
 }
 
 export const backendConfigSchema = envSchema.transform((env): BackendConfig => {
@@ -262,6 +286,43 @@ export const engineAdapterConfigSchema = envSchema.transform(
 
 export function loadEngineAdapterConfig(): EngineAdapterConfig {
   return engineAdapterConfigSchema.parse(process.env);
+}
+
+export const multiEngineConfigSchema = envSchema.transform(
+  (env): MultiEngineConfig => {
+    const mode = env.ENGINE_RUNTIME_MODE;
+    const nemoclawUrl = normalizeOptional(env.ENGINE_NEMOCLAW_POC_URL);
+    const nemoclawToken = normalizeOptional(env.ENGINE_NEMOCLAW_POC_TOKEN);
+    const nemoclawOrgs = normalizeOptional(env.ENGINE_NEMOCLAW_POC_ORGS);
+
+    if (mode !== "current" && (!nemoclawUrl || !nemoclawToken)) {
+      throw new Error(
+        "ENGINE_NEMOCLAW_POC_URL and ENGINE_NEMOCLAW_POC_TOKEN are required when ENGINE_RUNTIME_MODE is not 'current'.",
+      );
+    }
+
+    return {
+      mode,
+      ...(nemoclawUrl && nemoclawToken
+        ? {
+            nemoclawPoc: {
+              gatewayUrl: nemoclawUrl,
+              gatewayToken: nemoclawToken,
+              orgIds: nemoclawOrgs
+                ? nemoclawOrgs
+                    .split(",")
+                    .map((s) => s.trim())
+                    .filter(Boolean)
+                : [],
+            },
+          }
+        : {}),
+    };
+  },
+);
+
+export function loadMultiEngineConfig(): MultiEngineConfig {
+  return multiEngineConfigSchema.parse(process.env);
 }
 
 function normalizeOptional(value: string | undefined): string | undefined {

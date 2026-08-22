@@ -105,6 +105,18 @@ export const envSchema = z.object({
   /** Optional model override sent with every message (provider/model). */
   OPENCLAW_MODEL: z.string().optional().or(z.literal("")),
 
+  // ── Engine B Runtime Resolver (Sprint ENGINE 02 Phase 2) ──
+  /** Runtime mode: "current" = Engine A only, "nemoclaw-poc" = Engine B only, "multi" = per-org routing. */
+  ENGINE_RUNTIME_MODE: z
+    .enum(["current", "nemoclaw-poc", "multi"])
+    .default("current"),
+  /** Engine B (NemoClaw POC) gateway WebSocket URL. */
+  ENGINE_NEMOCLAW_POC_URL: z.string().optional().or(z.literal("")),
+  /** Engine B (NemoClaw POC) gateway token. */
+  ENGINE_NEMOCLAW_POC_TOKEN: optionalSecret,
+  /** Comma-separated list of organization IDs that use Engine B (multi mode only). */
+  ENGINE_NEMOCLAW_POC_ORGS: z.string().optional().or(z.literal("")),
+
   /** Internal, non-provider credential used by the native Departify tool gateway. */
   DEPARTIFY_RUNTIME_TOKEN: optionalSecret,
   /** Backend base URL reachable from the private OpenClaw runtime. */

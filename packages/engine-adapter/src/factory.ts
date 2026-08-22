@@ -2,6 +2,7 @@ import type { EngineAdapterConfig } from "@departify/config";
 import type { EngineAdapter } from "./contract.js";
 import { EngineProtocolError } from "./errors.js";
 import { OpenClawEngineAdapter } from "./openclaw/openclaw-adapter.js";
+import { OrganizationRuntimeResolver } from "./runtime-resolver.js";
 
 /**
  * Factory: the single provider-independent entry point.
@@ -24,6 +25,34 @@ export function createEngineAdapter(config: EngineAdapterConfig): EngineAdapter 
       );
     }
   }
+}
+
+/**
+ * Create a multi-engine resolver + adapter factory.
+ *
+ * Sprint ENGINE 02 Phase 2: enables routing different organizations to
+ * different engine instances.
+ *
+ * ```ts
+ * const { resolver, createForOrg } = createMultiEngineFactory(multiConfig, defaultConfig);
+ * const engine = createForOrg(organizationId);
+ * ```
+ */
+export function createMultiEngineFactory(
+  multiConfig: import("@departify/config").MultiEngineConfig,
+  defaultConfig: EngineAdapterConfig,
+): {
+  resolver: OrganizationRuntimeResolver;
+  createForOrg: (organizationId: string) => EngineAdapter;
+} {
+  const resolver = new OrganizationRuntimeResolver(multiConfig, defaultConfig);
+
+  const createForOrg = (organizationId: string): EngineAdapter => {
+    const config = resolver.resolve(organizationId);
+    return createEngineAdapter(config);
+  };
+
+  return { resolver, createForOrg };
 }
 
 export type { EngineAdapter };

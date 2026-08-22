@@ -1,5 +1,5 @@
 import type { AuthService } from "@departify/auth";
-import type { EngineAdapter } from "@departify/engine-adapter";
+import type { EngineAdapter, OrganizationRuntimeResolver } from "@departify/engine-adapter";
 import type { EngineRuntimePolicy } from "@departify/config";
 import type { OrganizationStore } from "../auth/tenant-contracts.js";
 import type { ToolStateStore } from "../customer-zero/tool-state.js";
@@ -54,6 +54,10 @@ export interface ServerDeps {
   publicBaseUrl?: string;
   /** Provider-independent engine adapter (Sprint ENGINE 02). */
   engine?: EngineAdapter;
+  /** Multi-engine runtime resolver (Sprint ENGINE 02 Phase 2). */
+  engineRuntimeResolver?: OrganizationRuntimeResolver;
+  /** Per-org engine adapter factory (Sprint ENGINE 02 Phase 2). */
+  createEngineForOrg?: (organizationId: string) => EngineAdapter;
   /** Departify-owned Marketing department service (Sprint ENGINE 03). */
   marketing?: MarketingService;
   /** Durable Marketing activity/audit repository. */
