@@ -5140,6 +5140,18 @@ export function emitCeoTurnTrace(
     completionGate,
     resultStatus: trace.toolResultStatuses.at(-1) ?? "completed",
     durationMs: Date.now() - trace.startedAt,
+    // Timing breakdown: key phase durations from timeline stages.
+    // Each value is ms from turn start to that stage. Differences show
+    // where time is spent: Supabase (T1→T4), Engine (T4→T12), etc.
+    timing: {
+      authMs: trace.timeline.T2_auth_tenant_resolution_complete,
+      contextMs: trace.timeline.T3_conversation_session_resolution_complete,
+      engineDispatchMs: trace.timeline.T4_request_sent_to_engine_adapter,
+      firstContentMs: trace.timeline.T9_first_useful_assistant_content,
+      engineCompleteMs: trace.timeline.T12_adapter_received_final,
+      persistenceMs: trace.timeline.T14_persistence_completed,
+      totalMs: Date.now() - trace.startedAt,
+    },
   });
 }
 
@@ -5253,6 +5265,7 @@ async function buildRuntimeBridge(
   const googleSummaries = await getGoogleTokenStore().listForOrg(
     session.organizationId,
   );
+  const supabaseReadStart = performance.now();
   const [conversation, connections, tasks, results, companyDna, approvals, activeObjective, recentMessages, retrievedMessages] = await Promise.all([
     session.state.currentConversationId
       ? session.conversations.get(session.organizationId, session.state.currentConversationId)
@@ -5285,6 +5298,17 @@ async function buildRuntimeBridge(
         )
       : Promise.resolve([]),
   ]);
+  const supabaseReadMs = Math.round(performance.now() - supabaseReadStart);
+  if (supabaseReadMs > 500) {
+    console.info("[supabase-timing]", {
+      organizationId: session.organizationId,
+      supabaseReadMs,
+      conversationFound: Boolean(conversation),
+      connectionsCount: connections.length,
+      tasksCount: tasks.length,
+      resultsCount: results.length,
+    });
+  }
   const recentConversation = [...recentMessages, ...retrievedMessages]
     .filter((item, index, all) => all.findIndex((candidate) => candidate.id === item.id) === index)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));

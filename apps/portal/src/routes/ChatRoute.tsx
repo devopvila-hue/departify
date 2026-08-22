@@ -636,6 +636,11 @@ export function ChatRoute() {
     // touch the transcript — they only confirm the run is alive.
     setIsWriting(true);
     setIsGenerating(true);
+    // P0 — optimistic user message. The CEO must see their own message
+    // in the transcript IMMEDIATELY, before the assistant starts working.
+    // Without this, the user types, hits send, and their message vanishes
+    // until the assistant response arrives seconds later.
+    setTranscript((prev) => [...prev, { role: "user" as const, content: value }]);
     setInput("");
     // Sending a new message always returns focus to the latest exchange,
     // even if the CEO was reading older history. Distinct from passive
@@ -808,29 +813,25 @@ export function ChatRoute() {
         suggestion: result.connectionSuggestion,
       });
     }
-    // Append the user line and the assistant reply so the CEO sees a
-    // continuous history. The hotfix removed the streaming placeholder,
-    // so we never have to recompute or replace an intermediate bubble.
-    // The writing indicator stayed on screen until this point and is
-    // cleared one render later by the `setIsWriting(false)` above.
+    // Append the assistant reply. The user message was already added
+    // optimistically at the start of send(), so we only need the
+    // assistant line here. If a reload or recovery already appended
+    // both lines, skip to avoid duplication.
     setTranscript((prev) => {
       const assistantLine = {
         role: "assistant" as const,
         content: visibleAssistantMessage(result!.reply),
         speaker: inferSpeaker(cleanEvents, result.routing?.intent),
       };
-      // Defensive: avoid duplicating the user line if the polling reload
-      // appended it first. The submit path does NOT pre-append a user
-      // line anymore — the writing indicator replaces it visually.
+      // Check if the last message is already this assistant reply
+      // (recovery or reload already handled it).
       const last = prev.at(-1);
-      if (last?.role === "user" && last.content === value) {
-        return [...prev, assistantLine];
+      if (last?.role === "assistant" && last.content === assistantLine.content) {
+        return prev;
       }
-      return [
-        ...prev,
-        { role: "user" as const, content: value },
-        assistantLine,
-      ];
+      // The user message is already in the transcript from the
+      // optimistic add. Just append the assistant reply.
+      return [...prev, assistantLine];
     });
     setEvents(cleanEvents);
     if (result.conversationId) setCurrentConversationId(result.conversationId);
