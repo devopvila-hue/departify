@@ -27,7 +27,12 @@ import {
 import { getFounderRunExecutor } from "../../customer-zero/founder-run-executor.js";
 import { checkFounderAuthorization } from "../../customer-zero/founder-build-mode.js";
 
-function getExecutor(deps: ServerDeps) {
+function getExecutor(deps: ServerDeps, organizationId?: string) {
+  // Sprint ENGINE 02 Phase 2: use per-org engine if runtime resolver is available
+  if (organizationId && deps.createEngineForOrg) {
+    const engine = deps.createEngineForOrg(organizationId);
+    return getFounderRunExecutor(engine);
+  }
   if (!deps.engine) {
     throw new Error("Engine adapter not available for founder runs");
   }
@@ -120,7 +125,7 @@ export async function registerFounderRunRoutes(
         return reply.code(401).send({ error: "No autorizado" });
       }
 
-      const runExecutor = getExecutor(deps);
+      const runExecutor = getExecutor(deps, organizationId);
       const runId = runExecutor.submit({
         organizationId,
         userId: identity.userId,

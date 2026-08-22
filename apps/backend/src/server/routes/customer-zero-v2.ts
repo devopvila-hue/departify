@@ -5008,7 +5008,11 @@ export async function buildCeoRuntimeForRequest(
     session.state.pendingCalendarWork && isCalendarReadRequest(normalizedMessage),
   );
   if (bypassRuntime) trace.routingBypassed = true;
-  if (!deps.engine || bypassRuntime || (pendingRead && deps.nativeBusinessTools !== true)) {
+  // Sprint ENGINE 02 Phase 2: check per-org engine availability
+  const hasEngine = deps.createEngineForOrg
+    ? true  // createEngineForOrg always returns an engine for any org
+    : !!deps.engine;
+  if (!hasEngine || bypassRuntime || (pendingRead && deps.nativeBusinessTools !== true)) {
     return null;
   }
   return buildRuntimeBridgeForCeoTurn(session, deps, trace, userId, message);
@@ -5233,7 +5237,11 @@ async function buildRuntimeBridge(
     excludedNativeToolNames?: readonly string[];
   },
 ): Promise<RuntimeBridgeInput | null> {
-  if (!deps.engine) return null;
+  // Sprint ENGINE 02 Phase 2: use per-org engine if runtime resolver is available
+  const engine = deps.createEngineForOrg
+    ? deps.createEngineForOrg(session.organizationId)
+    : deps.engine;
+  if (!engine) return null;
   const workStore = workStoreForRoutes();
   // Sprint 64 — Live Activity / context compilation: the previous
   // implementation called getGoogleTokenStore().listForOrg() TWICE per
@@ -5375,11 +5383,11 @@ async function buildRuntimeBridge(
   if (options?.rotationToken) {
     sessionId = `${sessionId}:recovery-${options.rotationToken}`;
   }
-  const existingEngineSession = await deps.engine.getSession(sessionId);
+  const existingEngineSession = await engine.getSession(sessionId);
   const engineSession = existingEngineSession
-    ?? await deps.engine.createSession({ sessionId });
-  if (deps.nativeBusinessTools && deps.engine.setNativeToolPolicy) {
-    await deps.engine.setNativeToolPolicy({
+    ?? await engine.createSession({ sessionId });
+  if (deps.nativeBusinessTools && engine.setNativeToolPolicy) {
+    await engine.setNativeToolPolicy({
       sessionId: engineSession.id,
       toolNames: nativeToolNames,
     });
@@ -5387,7 +5395,7 @@ async function buildRuntimeBridge(
   trace.engineSessionId = safeTraceHash(engineSession.id);
   trace.sessionFound = existingEngineSession !== null;
   return {
-    engine: deps.engine,
+    engine,
     sessionId: engineSession.id,
     userId: userId ?? null,
     context,
@@ -6466,7 +6474,11 @@ async function runCeoMessageTurn(
   // enter the department routing pipeline.
   {
     const founderBuildCommand = detectFounderBuildCommand(operationalMessage);
-    if (founderBuildCommand && deps.engine && userId) {
+    // Sprint ENGINE 02 Phase 2: use per-org engine if runtime resolver is available
+    const founderEngine = deps.createEngineForOrg
+      ? deps.createEngineForOrg(organizationId)
+      : deps.engine;
+    if (founderBuildCommand && founderEngine && userId) {
       // Check founder authorization — resolve user's organization role first
       let userRole: string | undefined;
       if (deps.organizations) {
@@ -6491,7 +6503,7 @@ async function runCeoMessageTurn(
 
       if (founderAuth) {
         // Founder is authorized — execute through privileged plane
-        const executor = new FounderBuildExecutor(deps.engine);
+        const executor = new FounderBuildExecutor(founderEngine);
         let result;
         try {
           result = await executor.execute(
